@@ -1,0 +1,56 @@
+name: Publicar codigo-fonte do MVP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.bootstrap/**'
+      - '.github/workflows/publicar-codigo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Obter repositorio
+        uses: actions/checkout@v4
+
+      - name: Verificar e extrair pacote do projeto
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/part* | base64 -d > /tmp/cr-jornada-source.tar.xz
+          echo "eaad6c8d4c4ef5b6dd54452c582401e8c3d0171f49cb3fd30f2b97f0838ad837  /tmp/cr-jornada-source.tar.xz" | sha256sum -c -
+          tar -tJf /tmp/cr-jornada-source.tar.xz
+          tar -xJf /tmp/cr-jornada-source.tar.xz
+          rm -rf .bootstrap
+
+      - name: Confirmar arquivos de projeto
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f package.json
+          test -f README.md
+          test -f src/index.js
+          test -f src/logic.js
+          test -f src/ui.js
+          test -f tests/integration.test.js
+          test -f tests/logic.test.js
+          test -f migrations/0001_initial.sql
+          node --test tests/*.test.js
+
+      - name: Salvar codigo-fonte no GitHub
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "feat: publicar codigo-fonte CR Jornada Afiliados MVP"
+            git push origin HEAD:main
+          fi
