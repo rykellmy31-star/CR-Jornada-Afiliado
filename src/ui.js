@@ -1,0 +1,111 @@
+export function renderPage() {
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
+  <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MERCADO LIVRE</small></div></div><div class="header-end"><span id="top-status" class="pill">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
+  <main>
+    <section id="login" class="login card"><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
+    <section id="dashboard" class="hidden">
+      <div class="intro"><div><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span><h1>Suas ofertas, no ritmo certo.</h1><p>Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.</p></div><div class="profile"><span>Perfil afiliado</span><b>rykellmy_007</b><span>Grupo @achadinhosml1101</span></div></div>
+      <div id="notice" class="feedback" role="status"></div>
+      <div class="metric-grid"><div class="metric card"><span>Prontas para publicar</span><strong id="count-ready">0</strong></div><div class="metric card"><span>Publicadas</span><strong id="count-published">0</strong></div><div class="metric card"><span>Em revisão</span><strong id="count-needs_review">0</strong></div><div class="metric card"><span>Total cadastrado</span><strong id="count-total">0</strong></div></div>
+      <div class="main-grid">
+        <section class="card settings"><div class="section-header"><div><h2>Automação</h2><p>O envio automático começa desligado por segurança.</p></div><div class="symbol">⚙</div></div>
+          <form id="settings-form">
+            <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este grupo público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
+            <label class="check-row"><input type="checkbox" id="telegram_enabled"><span><b>Habilitar publicação no Telegram</b><small>Exige token do BotFather configurado como segredo.</small></span></label>
+            <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Iniciar automação</b><small>Usará apenas os links oficiais previamente cadastrados.</small></span></label>
+            <div class="field-grid"><label>Intervalo entre publicações<select id="interval_minutes"><option value="15">15 minutos</option><option value="30">30 minutos</option><option value="60">60 minutos</option><option value="120">120 minutos</option></select></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
+            <p class="hint">Janela de publicação: horário de Bahia (UTC−3). O robô não publicará fora desse horário.</p>
+            <div class="actions"><button class="primary" type="submit">Salvar configurações</button><button class="outline" type="button" id="test-telegram">Testar Telegram</button></div>
+            <p id="token-state" class="hint"></p>
+          </form>
+        </section>
+        <section class="card add-offer"><div class="section-header"><div><h2>Adicionar oferta</h2><p>Somente links gerados na sua conta do Mercado Livre.</p></div><div class="symbol">＋</div></div>
+          <form id="offer-form"><label>Nome do produto<input name="title" required minlength="5" maxlength="180" placeholder="Ex.: Base Bauleto Gow 33 e 47 litros"></label><label>Link oficial do afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label><div class="field-grid"><label>Categoria<input name="category" placeholder="Ex.: Automotivo"></label><label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01" placeholder="79.90"></label><label>Preço anterior (opcional)<input name="old_price" type="number" min="0.01" step="0.01" placeholder="99.90"></label></div>
+          <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
+          <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Os preços são informados manualmente; o robô não afirma um preço antigo como se fosse verificado agora.</p></section>
+      </div>
+      <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
+      <section class="card history"><div class="section-header"><div><h2>Atividade recente</h2><p>Registros de tentativas, publicações e mudanças.</p></div></div><div id="log-list" class="logs">Ainda não há eventos.</div></section>
+      <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram: configurável • WhatsApp e geração automática de links: ainda não integrados.</footer>
+    </section>
+  </main></body></html>`;
+}
+
+export const CSS = `
+:root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history{margin-top:16px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
+@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
+`;
+
+export const CLIENT_JS = `
+'use strict';
+const $ = id => document.getElementById(id);
+const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const toDate = s => s ? new Date(s*1000).toLocaleString('pt-BR') : '—';
+function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
+async function call(path, opts={}) {
+  const init = {...opts, credentials: 'same-origin'};
+  if(opts.body) init.headers = {'content-type':'application/json'};
+  const r=await fetch(path,init);
+  const data=await r.json().catch(()=>({error:'Resposta inválida do servidor'}));
+  if(!r.ok) throw new Error(data.error || 'Falha na requisição');
+  return data;
+}
+function view(auth) { $('dashboard').classList.toggle('hidden', !auth); $('login').classList.toggle('hidden', auth); $('logout').classList.toggle('hidden', !auth); }
+function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'Publicado',needs_review:'Revisar'})[s]||s;}
+async function refresh(){
+  try{
+    const data=await call('/api/state');view(true);
+    const s=data.settings;
+    for(const k of ['channel_registered','telegram_enabled','automation_enabled']) $(k).checked=!!s[k];
+    for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) $(k).value=s[k];
+    $('top-status').textContent=s.automation_enabled?'Robô ligado':'Robô desligado';
+    $('token-state').textContent=data.telegram_token_configured?'✓ Segredo do BotFather configurado no servidor.':'⚠ Falta configurar TELEGRAM_BOT_TOKEN no servidor.';
+    const counts=Object.fromEntries(data.counts.map(x=>[x.status,x.total]));
+    for(const k of ['ready','published','needs_review']) $('count-'+k).textContent=counts[k]||0;
+    $('count-total').textContent=Object.values(counts).reduce((a,b)=>a+b,0);
+    $('offers-rows').innerHTML=data.offers.length?data.offers.map(o=>{
+      const action=o.status==='ready'?'<button class="mini" data-action="publish" data-id="'+o.id+'">Publicar</button>':o.status==='needs_review'?'<button class="mini" data-action="requeue" data-id="'+o.id+'">Reenfileirar</button>':'—';
+      return '<tr><td><a rel="noopener noreferrer" target="_blank" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+ (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td><span class="tag '+escape(o.status)+'">'+statusLabel(o.status)+'</span></td><td>'+toDate(o.created_at)+'</td><td>'+action+'</td></tr>';
+    }).join(''):'<tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr>';
+    $('log-list').innerHTML=data.logs.length?data.logs.map(l=>'<div><span><b>'+escape(l.event)+'</b> '+escape(l.detail||'')+'</span><time>'+toDate(l.created_at)+'</time></div>').join(''):'Ainda não há eventos.';
+  }catch(e){ if(e.message.includes('login')){view(false);$('top-status').textContent='Aguardando login';}else notice(e.message,true); }
+}
+for(let h=0;h<=24;h++){
+  const label=String(h).padStart(2,'0')+':00';
+  if(h<24) $('start_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
+  if(h>0) $('end_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
+}
+$('login-form').addEventListener('submit',async e=>{
+  e.preventDefault();notice('',false,'login-error');
+  try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await refresh();}
+  catch(err){notice(err.message,true,'login-error');}
+});
+$('logout').addEventListener('click',async()=>{try{await call('/api/logout',{method:'POST',body:'{}'})}catch{}view(false);});
+$('settings-form').addEventListener('submit',async e=>{
+  e.preventDefault();const body={};for(const k of ['channel_registered','telegram_enabled','automation_enabled']) body[k]=$(k).checked;
+  for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) body[k]=Number($(k).value);
+  try{await call('/api/settings',{method:'POST',body:JSON.stringify(body)});notice('Configurações salvas.');await refresh();}
+  catch(err){notice(err.message,true);}
+});
+$('offer-form').addEventListener('submit',async e=>{
+  e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.owner_confirmation=$('offer-form').elements.owner_confirmation.checked;
+  try{await call('/api/offers',{method:'POST',body:JSON.stringify(data)});e.target.reset();notice('Link oficial cadastrado na fila.');await refresh();}
+  catch(err){notice(err.message,true);}
+});
+$('test-telegram').addEventListener('click',async()=>{
+  if(!confirm('Enviar uma mensagem de TESTE ao grupo ACHADINHOS ML agora?'))return;
+  try{await call('/api/test-telegram',{method:'POST',body:'{}'});notice('Mensagem de teste enviada ao grupo.');await refresh();}
+  catch(err){notice(err.message,true);}
+});
+$('offers-rows').addEventListener('click',async e=>{
+  const btn=e.target.closest('button[data-action]');if(!btn)return;
+  const id=Number(btn.dataset.id);const type=btn.dataset.action;
+  const msg=type==='publish'?'Publicar este link de afiliado AGORA no Telegram?':'Revise no Telegram se a oferta não saiu antes de reenfileirá-la. Confirma?';
+  if(!confirm(msg))return;
+  try{await call('/api/offers/'+id+'/'+type,{method:'POST',body:'{}'});notice(type==='publish'?'Oferta publicada com sucesso.':'Oferta reenfileirada.');await refresh();}
+  catch(err){notice(err.message,true);await refresh();}
+});
+$('refresh').addEventListener('click',refresh);
+refresh();
+`;

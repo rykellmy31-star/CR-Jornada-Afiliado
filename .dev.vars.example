@@ -1,0 +1,4 @@
+# Copie para .dev.vars somente no seu computador, nunca publique este arquivo com segredos.
+ADMIN_PASSWORD=defina_uma_senha_forte_aqui
+SESSION_SECRET=gere_um_segredo_aleatorio_com_pelo_menos_32_bytes
+TELEGRAM_BOT_TOKEN=COLE_AQUI_SOMENTE_NO_SERVIDOR
