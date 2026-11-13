@@ -1,3 +1,4 @@
+import { couponDescription } from './coupons.js';
 export const ALLOWED_CHATS = ['@achadinhosml1101'];
 export const BRAZIL_TIMEZONE = 'America/Bahia';
 
@@ -79,6 +80,9 @@ export function composeOfferMessage(offer, now = Date.now()) {
       } else headline.push(`💰 Preço informado: ${formatBRL(offer.price_cents)}`);
     }
   }
+  const couponDay = localTimeParts(date).day;
+  const couponLines = couponDescription(offer, couponDay);
+  if (couponLines.length) headline.push('', ...couponLines);
   headline.push('', '✅ Confira o valor e a disponibilidade antes de comprar.', '🔗 Link de afiliado:');
   return headline.join('\n');
 }

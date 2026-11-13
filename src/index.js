@@ -1,9 +1,11 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
+import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload, ALLOWED_CHATS } from './logic.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
+const OFFER_WITH_COUPON = "SELECT o.*, c.kind AS coupon_kind, c.code AS coupon_code, c.discount_type AS coupon_discount_type, c.discount_value AS coupon_discount_value, c.min_cart_cents AS coupon_min_cart_cents, c.max_discount_cents AS coupon_max_discount_cents, c.start_day AS coupon_start_day, c.end_day AS coupon_end_day, c.source_url AS coupon_source_url, c.notes AS coupon_notes, c.owner_confirmed AS coupon_owner_confirmed FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id";
 const encoder = new TextEncoder();
 
 function json(value, status = 200, headers = {}) {
@@ -137,7 +139,8 @@ async function runScheduled(env) {
   ]);
   if (!shouldSend(settings, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
   if (!env.TELEGRAM_BOT_TOKEN) return;
-  const offer = await env.DB.prepare("SELECT * FROM offers WHERE status='ready' ORDER BY created_at ASC, id ASC LIMIT 1").first();
+  await ensureCouponTable(env);
+  const offer = await env.DB.prepare(OFFER_WITH_COUPON + " WHERE o.status='ready' ORDER BY o.created_at ASC, o.id ASC LIMIT 1").first();
   if (!offer) return;
   await sendOffer(env, offer, settings);
 }
@@ -164,9 +167,10 @@ async function router(request, env) {
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
   if (u.pathname === '/api/logout' && method === 'POST') return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
   if (u.pathname === '/api/state' && method === 'GET') {
+    await ensureCouponTable(env);
     const [settings, offers, counts, logs] = await Promise.all([
       readSettings(env),
-      env.DB.prepare('SELECT * FROM offers ORDER BY created_at DESC, id DESC LIMIT 100').all(),
+      env.DB.prepare(OFFER_WITH_COUPON + ' ORDER BY o.created_at DESC, o.id DESC LIMIT 100').all(),
       env.DB.prepare('SELECT status, COUNT(*) AS total FROM offers GROUP BY status').all(),
       env.DB.prepare('SELECT event,detail,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 20').all()
     ]);
@@ -186,6 +190,22 @@ async function router(request, env) {
       throw err;
     }
     return json({ ok: true }, 201);
+  }
+  if (u.pathname === '/api/coupons' && method === 'POST') {
+    let coupon;
+    try { coupon = normalizeCoupon(await getBody(request)); }
+    catch (error) { return fail(error.message, 400); }
+    await ensureCouponTable(env);
+    const offer = await env.DB.prepare('SELECT status FROM offers WHERE id=?').bind(coupon.offer_id).first();
+    if (!offer) return fail('Oferta não encontrada.', 404);
+    if (offer.status !== 'ready') return fail('Só é possível vincular cupom a ofertas ainda não publicadas.', 409);
+    const sql = "INSERT INTO offer_coupons (offer_id,kind,code,discount_type,discount_value,min_cart_cents,max_discount_cents,start_day,end_day,source_url,notes,owner_confirmed,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?) ON CONFLICT(offer_id) DO UPDATE SET kind=excluded.kind,code=excluded.code,discount_type=excluded.discount_type,discount_value=excluded.discount_value,min_cart_cents=excluded.min_cart_cents,max_discount_cents=excluded.max_discount_cents,start_day=excluded.start_day,end_day=excluded.end_day,source_url=excluded.source_url,notes=excluded.notes,owner_confirmed=1,updated_at=excluded.updated_at";
+    await env.DB.prepare(sql)
+      .bind(coupon.offer_id,coupon.kind,coupon.code,coupon.discount_type,coupon.discount_value,
+        coupon.min_cart_cents,coupon.max_discount_cents,coupon.start_day,coupon.end_day,
+        coupon.source_url,coupon.notes,Math.floor(Date.now()/1000)).run();
+    await log(env,'coupon_saved','Informações de cupom cadastradas; elegibilidade no checkout não verificada.',coupon.offer_id);
+    return json({ok:true},201);
   }
   if (u.pathname === '/api/settings' && method === 'POST') {
     const b = await getBody(request);
@@ -219,7 +239,8 @@ async function router(request, env) {
   }
   const publish = u.pathname.match(/^\/api\/offers\/(\d+)\/publish$/);
   if (publish && method === 'POST') {
-    const [settings, offer] = await Promise.all([readSettings(env), env.DB.prepare('SELECT * FROM offers WHERE id=?').bind(Number(publish[1])).first()]);
+    await ensureCouponTable(env);
+    const [settings, offer] = await Promise.all([readSettings(env), env.DB.prepare(OFFER_WITH_COUPON + ' WHERE o.id=?').bind(Number(publish[1])).first()]);
     if (!offer) return fail('Oferta não encontrada.', 404);
     if (offer.status !== 'ready') return fail('Oferta já enviada ou em revisão.', 409);
     const result = await sendOffer(env, offer, settings);

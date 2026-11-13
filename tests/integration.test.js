@@ -179,3 +179,41 @@ test('foto recusada explicitamente pelo Telegram: envia texto uma única vez',as
     assert.deepEqual(methods,['sendPhoto','sendMessage']);
   }finally{globalThis.fetch=nativeFetch;DB.close();}
 });
+
+test('cupom cadastrado entra automaticamente na oferta e deixa de aparecer depois de vencer',async()=>{
+  const DB=dbMock();const native=globalThis.fetch;const messages=[];
+  globalThis.fetch=async(url,init={})=>{
+    if(String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{headers:{'content-type':'text/html'}});
+    if(String(url).includes('/sendMessage')){
+      const data=JSON.parse(init.body);messages.push(data);
+      return new Response(JSON.stringify({ok:true,result:{message_id:200+messages.length}}),{status:200});
+    }
+    throw new Error('URL inesperada: '+url);
+  };
+  try{
+    const env={DB,ADMIN_PASSWORD:'senha_teste',SESSION_SECRET:'chave_segura_para_os_testes_123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+    const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    DB.prepare('UPDATE settings SET telegram_enabled=1,channel_registered=1 WHERE id=1').run();
+    DB.prepare('INSERT INTO offers (title,affiliate_url,category,created_at) VALUES(?,?,?,?)')
+      .bind('Produto teste','https://meli.la/COUPON01','Geral',Math.floor(Date.now()/1000)).run();
+    const yesterday=new Date(Date.now()-3*86400000).toISOString().slice(0,10);
+    const tomorrow=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
+    const c={offer_id:1,kind:'code',code:'MELI10',discount_type:'percent',discount_value:'10',min_cart:'10.00',max_discount:'20.00',start_day:yesterday,end_day:tomorrow,source_url:'https://www.mercadolivre.com.br/ofertas/cupons',owner_confirmation:true};
+    const saved=await worker.fetch(req('/api/coupons',{method:'POST',body:c,cookie}),env);
+    assert.equal(saved.status,201);
+    const state=await(await worker.fetch(req('/api/state',{cookie}),env)).json();
+    assert.equal(state.offers[0].coupon_code,'MELI10');
+    const pub=await worker.fetch(req('/api/offers/1/publish',{method:'POST',body:{},cookie}),env);
+    assert.equal(pub.status,200);
+    assert.match(messages[0].text,/MELI10/);
+    assert.equal(messages[0].reply_markup.inline_keyboard[0][0].url,'https://meli.la/COUPON01');
+    const after=await worker.fetch(req('/api/coupons',{method:'POST',body:c,cookie}),env);
+    assert.equal(after.status,409);
+    DB.prepare('INSERT INTO offers (title,affiliate_url,category,created_at) VALUES(?,?,?,?)')
+      .bind('Produto sem cupom vigente','https://meli.la/COUPON02','Geral',Math.floor(Date.now()/1000)).run();
+    assert.equal((await worker.fetch(req('/api/coupons',{method:'POST',body:{...c,offer_id:2,start_day:'2025-01-01',end_day:'2025-01-31'},cookie}),env)).status,201);
+    assert.equal((await worker.fetch(req('/api/offers/2/publish',{method:'POST',body:{},cookie}),env)).status,200);
+    assert.doesNotMatch(messages[1].text,/MELI10/);
+  }finally{globalThis.fetch=native;DB.close();}
+});
