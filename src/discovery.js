@@ -1,4 +1,4 @@
-// Radar de catálogo do Mercado Livre: somente API documentada com OAuth autorizado.
+// Radar: API oficial com OAuth, ou Google Alertas RSS criado pelo proprietário.
 // A API de catálogo NÃO gera links de afiliado e NÃO confirma preços ou promoções.
 const API = 'https://api.mercadolibre.com';
 const SEARCH_URL = API + '/products/search';
@@ -33,12 +33,14 @@ const CREATE_SETTINGS = "CREATE TABLE IF NOT EXISTS discovery_settings (id INTEG
 const CREATE_PRODUCTS = "CREATE TABLE IF NOT EXISTS discovered_products (product_id TEXT PRIMARY KEY, title TEXT NOT NULL, keyword TEXT NOT NULL, source_url TEXT NOT NULL, image_url TEXT, first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','dismissed')))";
 const CREATE_AUTH = "CREATE TABLE IF NOT EXISTS discovery_oauth (id INTEGER PRIMARY KEY CHECK(id=1), token_cipher TEXT NOT NULL, expires_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)";
 const CREATE_STATES = "CREATE TABLE IF NOT EXISTS discovery_oauth_states (state_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)";
+const CREATE_RSS = "CREATE TABLE IF NOT EXISTS discovery_rss (id INTEGER PRIMARY KEY CHECK(id=1), feed_url TEXT NOT NULL, updated_at INTEGER NOT NULL)";
 export async function ensureDiscoveryTables(env) {
   await env.DB.prepare(CREATE_SETTINGS).run();
   await env.DB.prepare("INSERT OR IGNORE INTO discovery_settings(id) VALUES (1)").run();
   await env.DB.prepare(CREATE_PRODUCTS).run();
   await env.DB.prepare(CREATE_AUTH).run();
   await env.DB.prepare(CREATE_STATES).run();
+  await env.DB.prepare(CREATE_RSS).run();
 }
 export function parseKeywords(input) {
   const parts=String(input||'').split(/[\n,;]/).map(x=>x.trim().replace(/\s+/g,' ')).filter(Boolean);
@@ -127,14 +129,113 @@ async function validAccessToken(env) {
   row=await env.DB.prepare('SELECT token_cipher FROM discovery_oauth WHERE id=1').first();
   return (await decryptTokens(env,row.token_cipher)).access_token;
 }
+
+export function validateGoogleAlertsFeed(value) {
+  if(typeof value!=='string'||value.length>600) throw new Error('Cole o link RSS do Google Alertas.');
+  let url;
+  try {url=new URL(value.trim());}catch {throw new Error('Link RSS inválido.');}
+  if(url.protocol!=='https:'||url.hostname!=='www.google.com'||url.username||url.password||url.port||url.search||url.hash
+    || !/^\/alerts\/feeds\/\d{5,25}\/\d{5,25}\/?$/.test(url.pathname)) {
+    throw new Error('Use somente o endereço https://www.google.com/alerts/feeds/... copiado do Google Alertas.');
+  }
+  return url.href;
+}
+function xmlEntities(input) {
+  return String(input).replace(/&(?:amp|lt|gt|quot|apos|#x([0-9a-f]+)|#(\d+));/gi,(match,hex,dec)=>{
+    if(hex||dec){const code=hex?parseInt(hex,16):Number(dec);return code>0&&code<0x110000?String.fromCodePoint(code):match;}
+    return ({'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&apos;':"'"}[match.toLowerCase()]||match);
+  });
+}
+function extractFeedLinks(raw) {
+  const entries = [];
+  for(const chunk of String(raw).match(/<(entry|item)\b[^>]*>[\s\S]*?<\/\1\s*>/gi)||[]) {
+    const titleMatch=chunk.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i);
+    const atomLink=chunk.match(/<link\b[^>]*\bhref\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*\/?>/i);
+    const rssLink=chunk.match(/<link\b[^>]*>([\s\S]*?)<\/link\s*>/i);
+    const rawLink=atomLink?.[1]||atomLink?.[2]||rssLink?.[1];
+    if(!titleMatch||!rawLink)continue;
+    const name=xmlEntities(xmlEntities(titleMatch[1])).replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim().slice(0,170);
+    if(name.length<5) continue;
+    entries.push({title:name,link:xmlEntities(rawLink)});
+    if(entries.length>=30)break;
+  }
+  return entries;
+}
+export function googleAlertProductUrl(input) {
+  let url;
+  try {url=new URL(input);}catch{return null;}
+  if(url.protocol!=='https:')return null;
+  if(['www.google.com','google.com'].includes(url.hostname)&&url.pathname==='/url'){
+    const original=url.searchParams.get('url')||url.searchParams.get('q');
+    if(!original)return null;
+    try {url=new URL(original);}catch{return null;}
+  }
+  if(url.protocol!=='https:'||url.username||url.password||url.port
+    ||!['www.mercadolivre.com.br','mercadolivre.com.br','produto.mercadolivre.com.br'].includes(url.hostname.toLowerCase())) return null;
+  if(!/(?:\/p\/MLB\d{5,}|MLB-?\d{6,})/i.test(url.pathname)) return null;
+  return url.origin+url.pathname;
+}
+export function parseGoogleAlertsEntries(xml) {
+  if(typeof xml!=='string'||xml.length>700000) throw new Error('Feed RSS muito grande.');
+  if(!/<(?:feed|rss)\b/i.test(xml))throw new Error('O endereço não retornou um feed RSS/Atom válido.');
+  const found=[];
+  const urls=new Set();
+  for(const entry of extractFeedLinks(xml)){
+    const source_url=googleAlertProductUrl(entry.link);
+    if(!source_url||urls.has(source_url))continue;
+    urls.add(source_url);
+    found.push({title:entry.title,source_url});
+  }
+  return found;
+}
+export async function setDiscoveryRss(env,body) {
+  await ensureDiscoveryTables(env);
+  if(body?.remove===true){
+    await env.DB.prepare('DELETE FROM discovery_rss WHERE id=1').run();
+    await env.DB.prepare('UPDATE discovery_settings SET enabled=0,last_run_at=NULL,last_error=NULL WHERE id=1').run();
+    return {ok:true,removed:true};
+  }
+  const url=validateGoogleAlertsFeed(body?.feed_url);
+  await env.DB.prepare('INSERT INTO discovery_rss(id,feed_url,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET feed_url=excluded.feed_url,updated_at=excluded.updated_at')
+    .bind(url,utcNow()).run();
+  // Se o RSS mudar, só retomar pesquisas após marcar a opção de automação.
+  await env.DB.prepare('UPDATE discovery_settings SET enabled=0,last_run_at=NULL,last_error=NULL WHERE id=1').run();
+  return {ok:true};
+}
+async function searchGoogleAlerts(env,feed,now) {
+  const response=await fetch(feed,{
+    method:'GET',
+    headers:{Accept:'application/atom+xml,application/rss+xml,application/xml,text/xml'},
+    redirect:'manual',
+    signal:AbortSignal.timeout(12000)
+  });
+  if(response.status>=300&&response.status<400)throw new Error('Feed Google Alertas redirecionado. Confirme se o alerta continua ativo.');
+  if(!response.ok)throw new Error('Google Alertas retornou HTTP '+response.status+'.');
+  const size=Number(response.headers.get('content-length')||0);
+  if(size>700000)throw new Error('Feed Google Alertas excedeu o tamanho permitido.');
+  const xml=await response.text();
+  const results=parseGoogleAlertsEntries(xml);
+  let added=0;
+  for(const p of results){
+    const id='RSS'+(await sha256(p.source_url)).slice(0,28);
+    const r=await env.DB.prepare("INSERT OR IGNORE INTO discovered_products(product_id,title,keyword,source_url,image_url,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?)")
+      .bind(id,p.title,'Google Alertas (RSS)',p.source_url,null,now,now).run();
+    if(r.meta?.changes===1) added++;
+    else await env.DB.prepare('UPDATE discovered_products SET last_seen_at=? WHERE product_id=?').bind(now,id).run();
+  }
+  return {keyword:'Google Alertas (RSS)',added};
+}
+
 export async function getDiscoveryState(env) {
   await ensureDiscoveryTables(env);
-  const [settings,auth,products]=await Promise.all([
+  const [settings,auth,products,rss]=await Promise.all([
     env.DB.prepare('SELECT * FROM discovery_settings WHERE id=1').first(),
     env.DB.prepare('SELECT expires_at FROM discovery_oauth WHERE id=1').first(),
-    env.DB.prepare("SELECT * FROM discovered_products WHERE status='new' ORDER BY first_seen_at DESC LIMIT 40").all()
+    env.DB.prepare("SELECT * FROM discovered_products WHERE status='new' ORDER BY first_seen_at DESC LIMIT 40").all(),
+    env.DB.prepare('SELECT feed_url FROM discovery_rss WHERE id=1').first()
   ]);
-  return {settings,app_configured:appReady(env),connected:!!auth,products:products.results};
+  return {settings,app_configured:appReady(env),connected:!!auth,rss_configured:!!rss,
+    rss_url:rss?.feed_url||null,source:rss?'google_alerts': 'mercadolivre_api',products:products.results};
 }
 export async function setDiscoveryConfig(env,body) {
   await ensureDiscoveryTables(env);
@@ -142,16 +243,19 @@ export async function setDiscoveryConfig(env,body) {
   const interval=Number(body.interval_minutes);
   if(![60,120,240,360].includes(interval)||typeof body.enabled!=='boolean') throw new Error('Configuração do Radar inválida.');
   if(body.enabled){
-    if(!appReady(env)) throw new Error('Configure as credenciais do aplicativo Mercado Livre na Cloudflare.');
-    const linked=await env.DB.prepare('SELECT id FROM discovery_oauth WHERE id=1').first();
-    if(!linked) throw new Error('Conecte o Mercado Livre pelo botão do Radar antes de ativar.');
+    const rss=await env.DB.prepare('SELECT id FROM discovery_rss WHERE id=1').first();
+    if(!rss){
+      if(!appReady(env)) throw new Error('Configure um feed Google Alertas RSS ou as credenciais do aplicativo Mercado Livre.');
+      const linked=await env.DB.prepare('SELECT id FROM discovery_oauth WHERE id=1').first();
+      if(!linked) throw new Error('Conecte o Mercado Livre pelo botão do Radar ou cadastre um Google Alertas RSS.');
+    }
   }
   await env.DB.prepare('UPDATE discovery_settings SET keywords=?,interval_minutes=?,enabled=?,last_error=NULL WHERE id=1').bind(keywords.join(', '),interval,Number(body.enabled)).run();
   return {ok:true};
 }
 export async function dismissDiscovery(env,id) {
   await ensureDiscoveryTables(env);
-  if(!/^MLB\d{4,18}$/.test(String(id))) throw new Error('Produto inválido.');
+  if(!/^(?:MLB\d{4,18}|RSS[a-f0-9]{28})$/.test(String(id))) throw new Error('Produto inválido.');
   const r=await env.DB.prepare("UPDATE discovered_products SET status='dismissed' WHERE product_id=?").bind(id).run();
   return {ok: r.meta?.changes===1};
 }
@@ -170,7 +274,13 @@ export async function searchCatalog(env,{force=false}={}) {
   const claim=await env.DB.prepare('UPDATE discovery_settings SET last_run_at=?,last_error=NULL WHERE id=1 AND (last_run_at IS NULL OR last_run_at<=?)').bind(now,now-minInterval).run();
   if(claim.meta?.changes!==1) return {skipped:'interval'};
   try{
-    if(!appReady(env)) throw new Error('Configure as credenciais de aplicativo do Mercado Livre.');
+    const rss=await env.DB.prepare('SELECT feed_url FROM discovery_rss WHERE id=1').first();
+    if(rss?.feed_url){
+      const result=await searchGoogleAlerts(env,rss.feed_url,now);
+      await env.DB.prepare('UPDATE discovery_settings SET last_error=NULL WHERE id=1').run();
+      return result;
+    }
+    if(!appReady(env)) throw new Error('Configure um feed Google Alertas RSS ou as credenciais de aplicativo do Mercado Livre.');
     const token=await validAccessToken(env);
     const keyword=keywords[(cfg.keyword_cursor||0)%keywords.length];
     const uri=new URL(SEARCH_URL);

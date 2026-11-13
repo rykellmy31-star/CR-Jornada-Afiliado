@@ -28,15 +28,24 @@ export function renderPage() {
           <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
       <section class="card radar-panel" id="radar">
-        <div class="section-header"><div><h2>🔎 Radar de Produtos • pesquisa automática</h2><p>Pesquisa produtos do catálogo pela API oficial do Mercado Livre, quando a conta e o aplicativo estiverem autorizados.</p></div><span class="tag" id="radar-badge">Desconectado</span></div>
+        <div class="section-header"><div><h2>🔎 Radar de Produtos • pesquisa automática</h2><p>Descobre produtos via Google Alertas (RSS), sem precisar criar aplicativo; opcionalmente aceita a API oficial.</p></div><span class="tag" id="radar-badge">Desconectado</span></div>
         <p class="hint"><b>Importante:</b> sugestões do catálogo não são ofertas com desconto confirmado. Nenhum resultado será publicado até você gerar e cadastrar o link oficial da sua conta de afiliado.</p>
-        <div class="radar-connection">
+        <div class="radar-connection" style="margin-bottom:13px">
+          <h2>Google Alertas RSS • sem aplicativo do Mercado Livre</h2>
+          <p class="hint">Crie seu alerta em <a href="https://www.google.com/alerts" target="_blank" rel="noopener noreferrer">Google Alertas</a>, selecione <b>Entregar para → Feed RSS</b> e cole abaixo o endereço copiado do ícone RSS. O sistema consultará o feed automaticamente; pode levar algum tempo até o Google encontrar novas páginas.</p>
+          <form id="radar-rss-form" class="radar-form">
+            <label>Endereço RSS do Google Alertas<input type="url" id="radar-rss-url" name="feed_url" placeholder="https://www.google.com/alerts/feeds/..." autocomplete="off"></label>
+            <div class="actions"><button type="submit" class="primary">Salvar feed RSS</button><button id="radar-rss-remove" class="outline" type="button">Remover feed</button></div>
+          </form>
+          <p class="hint" id="radar-rss-status">Feed RSS ainda não cadastrado.</p>
+        </div>
+        <details class="radar-connection"><summary><b>Alternativa avançada: API oficial do Mercado Livre (OAuth)</b></summary>
           <p id="radar-connection-status">Verificando conexão com o Mercado Livre...</p>
           <p class="hint">Cadastre na Cloudflare os Secrets <b>MELI_APP_ID</b>, <b>MELI_APP_SECRET</b> e <b>MELI_TOKEN_KEY</b> (32 bytes em Base64). No aplicativo do Mercado Livre, use este Redirect URI: <code id="radar-redirect-uri"></code>. Se a conta não tiver permissão para o catálogo, a API informará o bloqueio.</p>
           <div class="actions"><button class="outline" type="button" id="radar-connect">Conectar Mercado Livre (OAuth)</button><button class="outline" type="button" id="radar-disconnect">Desconectar</button></div>
-        </div>
+        </details>
         <form id="radar-form" class="radar-form">
-          <label>Palavras-chave que o robô vai pesquisar<textarea id="radar-keywords" rows="3" maxlength="1000" placeholder="fone bluetooth, ferramentas, air fryer"></textarea></label>
+          <label>Palavras-chave (usadas somente na API do Mercado Livre)<textarea id="radar-keywords" rows="3" maxlength="1000" placeholder="fone bluetooth, ferramentas, air fryer"></textarea></label>
           <div class="field-grid">
             <label>Intervalo de pesquisa<select id="radar-interval"><option value="60">A cada 1 hora</option><option value="120">A cada 2 horas</option><option value="240">A cada 4 horas</option><option value="360">A cada 6 horas</option></select></label>
             <label class="check-row"><input type="checkbox" id="radar-enabled"><span><b>Pesquisar automaticamente</b><small>Não publica produtos sem link de afiliado.</small></span></label>
@@ -105,15 +114,18 @@ async function refreshRadar() {
     $('radar-keywords').value=d.settings.keywords||'';
     $('radar-interval').value=String(d.settings.interval_minutes||120);
     $('radar-enabled').checked=!!d.settings.enabled;
-    $('radar-badge').textContent=d.settings.enabled?'Radar ligado':d.connected?'Conectado (pausado)':'Desconectado';
+    $('radar-badge').textContent=d.settings.enabled?'Radar ligado':d.rss_configured?'Feed RSS cadastrado (pausado)':d.connected?'Conectado (pausado)':'Desconectado';
     $('radar-connection-status').textContent=d.connected?'✅ Mercado Livre conectado via OAuth.':'Conexão OAuth pendente.';
+    $('radar-rss-url').value=d.rss_url||'';
+    $('radar-rss-status').textContent=d.rss_configured?'✅ Google Alertas RSS cadastrado. Ative Pesquisar automaticamente e salve, ou clique Pesquisar agora.':'Cadastre um feed RSS para pesquisar sem aplicativo do Mercado Livre.';
+    $('radar-rss-remove').disabled=!d.rss_configured;
     $('radar-connect').disabled=!d.app_configured;
     $('radar-disconnect').disabled=!d.connected;
-    $('radar-search-now').disabled=!d.connected;
+    $('radar-search-now').disabled=!(d.connected||d.rss_configured);
     if(d.settings.last_error)notice(d.settings.last_error,true,'radar-feedback');
     radarProducts=d.products||[];
     $('radar-results').innerHTML=radarProducts.length?radarProducts.map(p=>
-      '<div class="radar-result"><div><strong>'+escape(p.title)+'</strong><small>'+escape(p.keyword)+' • catálogo '+escape(p.product_id)+' • ainda sem link de afiliado</small></div>'+
+      '<div class="radar-result"><div><strong>'+escape(p.title)+'</strong><small>'+escape(p.keyword)+' • sugestão • ainda sem link de afiliado</small></div>'+
       '<div class="actions"><a target="_blank" rel="noopener noreferrer nofollow" href="'+escape(p.source_url)+'">Ver no Mercado Livre</a>'+
       '<button class="mini" data-radar="use" data-id="'+escape(p.product_id)+'">Criar oferta</button>'+
       '<button class="mini" data-radar="dismiss" data-id="'+escape(p.product_id)+'">Dispensar</button></div></div>'
@@ -170,6 +182,22 @@ $('offer-form').addEventListener('submit',async e=>{
   e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.owner_confirmation=$('offer-form').elements.owner_confirmation.checked;
   try{await call('/api/offers',{method:'POST',body:JSON.stringify(data)});e.target.reset();notice('Link oficial cadastrado na fila.');await refresh();}
   catch(err){notice(err.message,true);}
+});
+$('radar-rss-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  try{
+    await call('/api/discovery/rss',{method:'POST',body:JSON.stringify({feed_url:$('radar-rss-url').value})});
+    notice('Feed Google Alertas salvo! Ative Pesquisar automaticamente e salve. Você também pode clicar em Pesquisar agora.',false,'radar-feedback');
+    await refreshRadar();
+  }catch(error){notice(error.message,true,'radar-feedback');}
+});
+$('radar-rss-remove').addEventListener('click',async()=>{
+  if(!confirm('Remover feed Google Alertas e pausar pesquisas? As sugestões encontradas serão mantidas.'))return;
+  try{
+    await call('/api/discovery/rss',{method:'POST',body:JSON.stringify({remove:true})});
+    notice('Feed removido e Radar pausado.',false,'radar-feedback');
+    await refreshRadar();
+  }catch(error){notice(error.message,true,'radar-feedback');}
 });
 $('radar-redirect-uri').textContent=window.location.origin+'/api/discovery/callback';
 $('radar-connect').addEventListener('click',async()=>{

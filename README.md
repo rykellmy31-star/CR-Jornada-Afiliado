@@ -115,3 +115,19 @@ Em caso de erro de autorização ou permissão, o Radar será pausado sem interf
 O Radar cria somente as tabelas `discovery_settings`, `discovered_products`, `discovery_oauth` e `discovery_oauth_states` no D1 já existente. O histórico, os cupons, as ofertas, as senhas, o token do Telegram e o destino `@achadinhosmlcr` são preservados. OAuth tem state aleatório de uso único e expiração de 10 minutos; tokens ficam criptografados. A renovação de tokens ocorre automaticamente quando o Mercado Livre autoriza o aplicativo.
 
 Fontes: https://developers.mercadolivre.com.br/buscador-de-produtos ; https://developers.mercadolivre.com.br/autenticacao-e-autorizacao ; https://developers.mercadolivre.com.br/pt_br/termos-e-condicoes ; https://www.mercadolivre.com.br/l/afiliados-gere-seus-links
+
+
+## Radar sem aplicativo do Mercado Livre — Google Alertas (RSS)
+
+Existe agora uma segunda modalidade no **Radar de Produtos**, usando feeds RSS do [Google Alertas](https://www.google.com/alerts). Não exige conta de desenvolvedor, Client ID ou chaves do Mercado Livre. A alternativa OAuth original continua disponível opcionalmente.
+
+Para criar o feed RSS:
+1. Entre em https://www.google.com/alerts e faça login na sua conta Google.
+2. Crie um alerta com uma consulta como `site:mercadolivre.com.br/p/ "fone bluetooth"`. Também pode usar outras palavras ou termos OR, conforme o Google Alertas aceitar.
+3. Em "Mostrar opções", selecione Brasil, idioma português e "Entregar para" → Feed RSS. Se RSS estiver indisponível, verifique as configurações de resumo/horário de entrega e a frequência "Quando disponível".
+4. Crie o alerta e clique no ícone RSS ao lado do alerta para copiar a URL que começa com `https://www.google.com/alerts/feeds/`.
+5. No Radar, cole o endereço em **Google Alertas RSS**, salve, selecione a frequência e ative **Pesquisar automaticamente**. Teste em **Pesquisar agora**. O sistema só registra sugestões de páginas de produtos do Mercado Livre que o Google encontrar.
+
+O RSS não descobre ofertas em tempo real, não verifica cupons e preços, nem gera links de afiliado. Feeds novos podem estar vazios por algum tempo. As sugestões **nunca** entram na fila de publicações automaticamente; o link oficial comissionado precisa ser cadastrado separadamente. O sistema nunca transforma um link comum do produto em link de afiliado, evitando a falsa promessa de comissão.
+
+Segurança: a URL RSS deve corresponder ao formato de Google Alertas, consultas externas seguem apenas esse domínio e não seguem redirecionamentos, links extraídos devem apontar para produtos MLB em domínios permitidos, deduplicação por hash de URL, e limite de 30 resultados por feed. A alternativa OAuth permanece isolada. Sem novas variáveis secretas e sem execução manual de migração.

@@ -1,7 +1,7 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
-import { createOAuthUrl, completeOAuth, getDiscoveryState, setDiscoveryConfig, dismissDiscovery, disconnectDiscovery, searchCatalog } from './discovery.js';
+import { createOAuthUrl, completeOAuth, getDiscoveryState, setDiscoveryConfig, setDiscoveryRss, dismissDiscovery, disconnectDiscovery, searchCatalog } from './discovery.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 
 const COOKIE = 'crj_auth';
@@ -221,6 +221,10 @@ async function router(request, env) {
   if (u.pathname === '/api/discovery/config' && method === 'POST') {
     try { return json(await setDiscoveryConfig(env,await getBody(request))); }
     catch(error) { return fail(String(error.message||error)); }
+  }
+  if (u.pathname === '/api/discovery/rss' && method === 'POST') {
+    try { return json(await setDiscoveryRss(env,await getBody(request))); }
+    catch (error) { return fail(String(error.message||error)); }
   }
   if (u.pathname === '/api/discovery/connect' && method === 'POST') {
     try { return json({ url: await createOAuthUrl(env,u.origin) }); }
