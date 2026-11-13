@@ -10,7 +10,7 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 - Fila de ofertas (cada URL uma publicação), deduplicação, registro de histórico e estado `needs_review` quando há falha ambígua.
 - Configurações de janela 8h–21h (Bahia), intervalo padrão 30 minutos e até 12 posts por dia; tudo editável.
 - Cron Trigger a cada 5 minutos, respeitando intervalo, janela e limite diário. Publicação **desligada por padrão**.
-- Telegram Bot API: mensagem com declaração de publicidade, botão com o link oficial e opção de envio de teste.
+- Telegram Bot API: publicação com foto do produto quando metadados públicos e imagem compatível estão disponíveis, com legenda, aviso de publicidade e botão de compra. Quando a foto não está acessível, publica o texto com URL e prévia quando o Telegram conseguir gerá-la; não repete envio em falha ambígua. O teste de conexão continua sendo somente texto.
 - Preço manual opcional. Se informado há mais de 6 horas, não é anunciado como preço atual.
 
 ## O que não está implementado (não confundir com sistema em produção)
@@ -19,6 +19,7 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 - Geração automática de novos links de afiliado: depende de aprovação/método oficial do Mercado Livre; não inserir links comuns e supor que geram comissão.
 - WhatsApp: ainda não há disparos; o grupo de convite não é prova de elegibilidade de canal público.
 - Sincronização automática de preços e estoque. O painel somente usa preços digitados, com a proteção de exibição após 6h.
+- Foto garantida para todo link: a busca de imagem depende de metadados públicos do produto e da disponibilidade da imagem na CDN, sem autenticação, scraping de páginas privadas ou contorno de bloqueios.
 - Relatórios reais de comissões: estes são consultados na Central de Afiliados do Mercado Livre.
 
 ## Identificadores pré-configurados
@@ -69,3 +70,9 @@ Referências oficiais:
 - Telegram Bot API: https://core.telegram.org/bots/api
 - Cloudflare Cron Triggers: https://developers.cloudflare.com/workers/configuration/cron-triggers/
 - Cloudflare D1 Migrations: https://developers.cloudflare.com/d1/reference/migrations/
+
+## Imagens automáticas no Telegram
+
+O robô tenta obter a imagem divulgada nos metadados públicos (`og:image` ou `twitter:image`) da página correspondente ao próprio link de afiliado `meli.la` / `mercadolivre.com.br`. Redirecionamentos ficam restritos a domínios oficiais; as imagens aceitas têm origem na CDN oficial `http2.mlstatic.com`. O bot tenta o método `sendPhoto` com a legenda e mantém exatamente o link de afiliado no botão.
+
+Caso a página não exponha imagem pública, ou a foto seja recusada explicitamente pela API do Telegram, a oferta será enviada como texto contendo o link, permitindo a prévia automática quando disponível. Em falha ambígua de rede o registro fica em revisão para evitar duplicidade. **A alteração vale para as próximas ofertas**, não edita publicações antigas. Não há nova migração D1 nem segredos adicionais.

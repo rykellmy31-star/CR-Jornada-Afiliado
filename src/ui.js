@@ -23,7 +23,7 @@ export function renderPage() {
         <section class="card add-offer"><div class="section-header"><div><h2>Adicionar oferta</h2><p>Somente links gerados na sua conta do Mercado Livre.</p></div><div class="symbol">＋</div></div>
           <form id="offer-form"><label>Nome do produto<input name="title" required minlength="5" maxlength="180" placeholder="Ex.: Base Bauleto Gow 33 e 47 litros"></label><label>Link oficial do afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label><div class="field-grid"><label>Categoria<input name="category" placeholder="Ex.: Automotivo"></label><label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01" placeholder="79.90"></label><label>Preço anterior (opcional)<input name="old_price" type="number" min="0.01" step="0.01" placeholder="99.90"></label></div>
           <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
-          <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Os preços são informados manualmente; o robô não afirma um preço antigo como se fosse verificado agora.</p></section>
+          <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
       <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
       <section class="card history"><div class="section-header"><div><h2>Atividade recente</h2><p>Registros de tentativas, publicações e mudanças.</p></div></div><div id="log-list" class="logs">Ainda não há eventos.</div></section>
@@ -123,7 +123,7 @@ $('offers-rows').addEventListener('click',async e=>{
   const id=Number(btn.dataset.id);const type=btn.dataset.action;
   const msg=type==='publish'?'Publicar este link de afiliado AGORA no Telegram?':'Revise no Telegram se a oferta não saiu antes de reenfileirá-la. Confirma?';
   if(!confirm(msg))return;
-  try{await call('/api/offers/'+id+'/'+type,{method:'POST',body:'{}'});notice(type==='publish'?'Oferta publicada com sucesso.':'Oferta reenfileirada.');await refresh();}
+  try{const result=await call('/api/offers/'+id+'/'+type,{method:'POST',body:'{}'});notice(type==='publish'?(result.format==='photo'?'Oferta publicada com FOTO no Telegram.':'Oferta publicada em texto: foto indisponível ou não aceita pelo Telegram.'):'Oferta reenfileirada.');await refresh();}
   catch(err){notice(err.message,true);await refresh();}
 });
 $('refresh').addEventListener('click',refresh);

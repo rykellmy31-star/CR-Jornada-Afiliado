@@ -33,6 +33,7 @@ test('fluxo completo: login → cadastro → habilitação → simulação Teleg
   let calls=0;let lastPayload;
   const nativeFetch=globalThis.fetch;
   globalThis.fetch=async (url,init)=>{
+    if (String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{headers:{'content-type':'text/html'}});
     calls++;
     assert.match(String(url),/^https:\/\/api\.telegram\.org\/botTOKEN_SIMULADO\/sendMessage$/);
     lastPayload=JSON.parse(init.body);
@@ -64,6 +65,7 @@ test('fluxo completo: login → cadastro → habilitação → simulação Teleg
     const pub=await worker.fetch(req('/api/offers/1/publish',{method:'POST',body:{},cookie}),env);
     assert.equal(pub.status,200);
     assert.equal(lastPayload.chat_id,'@achadinhosml1101');
+    assert.ok(lastPayload.text.includes(offer.affiliate_url));
     assert.equal(lastPayload.reply_markup.inline_keyboard[0][0].url,offer.affiliate_url);
     assert.equal(calls,2); // um teste + uma oferta
     assert.equal((await worker.fetch(req('/api/offers/1/publish',{method:'POST',body:{},cookie}),env)).status,409);
@@ -81,7 +83,7 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   const DB=dbMock();
   const nativeFetch=globalThis.fetch;
   let calls=0;
-  globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({ok:true,result:{message_id:900+calls}}),{status:200});};
+  globalThis.fetch=async(url)=>{if(String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{status:200,headers:{'content-type':'text/html'}}); calls++;return new Response(JSON.stringify({ok:true,result:{message_id:900+calls}}),{status:200});};
   try{
     DB.prepare("UPDATE settings SET automation_enabled=1, telegram_enabled=1, channel_registered=1, max_daily=1, interval_minutes=15, start_hour=0, end_hour=24 WHERE id=1").run();
     for(let i=0;i<2;i++) DB.prepare("INSERT INTO offers (title, affiliate_url, category,created_at) VALUES(?,?,?,?)")
@@ -112,5 +114,68 @@ test('em erro da API, não repete oferta incerta sem revisão humana',async()=>{
     assert.equal(sent.status,409);
     const state=await (await worker.fetch(req('/api/state',{cookie}),env)).json();
     assert.equal(state.offers[0].status,'needs_review');
+  }finally{globalThis.fetch=nativeFetch;DB.close();}
+});
+
+test('oferta com foto: resolve metadados, envia sendPhoto e mantém botão do afiliado',async()=>{
+  const DB=dbMock();
+  const nativeFetch=globalThis.fetch;
+  const observed=[];
+  globalThis.fetch=async (url,init={})=>{
+    const address=String(url);observed.push({url:address,method:init.method||'GET'});
+    if(address==='https://meli.la/2bsHW5y') return new Response('',{status:302,headers:{location:'https://www.mercadolivre.com.br/p/MLB123'}});
+    if(address==='https://www.mercadolivre.com.br/p/MLB123') return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">',{headers:{'content-type':'text/html'}});
+    if(address==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg') return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'10000'}});
+    if(address.endsWith('/sendPhoto')){
+      const body=JSON.parse(init.body);
+      assert.equal(body.photo,'https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg');
+      assert.match(body.caption,/Publicidade/);
+      assert.equal(body.reply_markup.inline_keyboard[0][0].url,'https://meli.la/2bsHW5y');
+      return new Response(JSON.stringify({ok:true,result:{message_id:42}}),{status:200});
+    }
+    throw new Error('URL inesperada: '+address);
+  };
+  try{
+    DB.prepare('UPDATE settings SET telegram_enabled=1,channel_registered=1 WHERE id=1').run();
+    DB.prepare('INSERT INTO offers (title,affiliate_url,category,created_at) VALUES(?,?,?,?)')
+      .bind('Produto com foto','https://meli.la/2bsHW5y','Geral',Math.floor(Date.now()/1000)).run();
+    const env={DB,ADMIN_PASSWORD:'senha_teste',SESSION_SECRET:'chave_segura_para_os_testes_123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+    const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    const pub=await worker.fetch(req('/api/offers/1/publish',{method:'POST',body:{},cookie}),env);
+    assert.equal(pub.status,200);
+    assert.equal((await pub.json()).format,'photo');
+    assert.equal(DB.prepare('SELECT telegram_message_id AS m FROM offers WHERE id=1').first().m,42);
+    assert.ok(!observed.some(x=>x.url.endsWith('/sendMessage')));
+  }finally{globalThis.fetch=nativeFetch;DB.close();}
+});
+
+test('foto recusada explicitamente pelo Telegram: envia texto uma única vez',async()=>{
+  const DB=dbMock(); const nativeFetch=globalThis.fetch; const methods=[];
+  globalThis.fetch=async (url,init={})=>{
+    const address=String(url);
+    if(address==='https://meli.la/2bsHW5y') return new Response('<meta name="twitter:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg">',{headers:{'content-type':'text/html'}});
+    if(address.startsWith('https://http2.mlstatic.com/')) return new Response(null,{status:200,headers:{'content-type':'image/jpeg'}});
+    if(address.includes('/sendPhoto')){
+      methods.push('sendPhoto');
+      return new Response(JSON.stringify({ok:false,description:'Bad Request: failed to get HTTP URL content'}),{status:400});
+    }
+    if(address.includes('/sendMessage')){
+      methods.push('sendMessage');
+      return new Response(JSON.stringify({ok:true,result:{message_id:7}}),{status:200});
+    }
+    throw new Error('Unexpected');
+  };
+  try{
+    DB.prepare('UPDATE settings SET telegram_enabled=1,channel_registered=1 WHERE id=1').run();
+    DB.prepare('INSERT INTO offers (title,affiliate_url,category,created_at) VALUES(?,?,?,?)')
+      .bind('Produto com foto','https://meli.la/2bsHW5y','Geral',Math.floor(Date.now()/1000)).run();
+    const env={DB,ADMIN_PASSWORD:'senha_teste',SESSION_SECRET:'chave_segura_para_os_testes_123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+    const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    const pub=await worker.fetch(req('/api/offers/1/publish',{method:'POST',body:{},cookie}),env);
+    assert.equal(pub.status,200);
+    assert.equal((await pub.json()).format,'text_photo_rejected');
+    assert.deepEqual(methods,['sendPhoto','sendMessage']);
   }finally{globalThis.fetch=nativeFetch;DB.close();}
 });

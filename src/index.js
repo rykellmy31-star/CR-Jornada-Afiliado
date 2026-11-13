@@ -1,4 +1,5 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
+import { findProductImage } from './images.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload, ALLOWED_CHATS } from './logic.js';
 
 const COOKIE = 'crj_auth';
@@ -59,32 +60,63 @@ function requireTelegram(env) {
 function validateChannel(s) {
   if (!ALLOWED_CHATS.includes(s.telegram_chat_id)) throw new Error('Grupo Telegram não autorizado nesta instalação.');
 }
-async function telegramSend(env, chat, payload) {
+async function telegramSend(env, chat, payload, endpoint = 'sendMessage') {
   requireTelegram(env);
-  const result = await fetch('https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/sendMessage', {
+  const result = await fetch('https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/' + endpoint, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chat_id: chat, ...payload }),
     signal: AbortSignal.timeout(15000)
   });
   const data = await result.json().catch(() => ({}));
   if (!result.ok || !data.ok) {
-    const description = typeof data.description === 'string' ? data.description.slice(0, 180) : `Telegram HTTP ${result.status}`;
-    throw new Error(description);
+    const description = typeof data.description === 'string' ? data.description.slice(0, 180) : 'Telegram HTTP ' + result.status;
+    const error = new Error(description);
+    error.telegramStatus = result.status;
+    throw error;
   }
   return data.result;
 }
+
+async function sendOfferWithImage(env, chat, offer) {
+  const payload = telegramPayload(offer, chat);
+  let imageUrl = null;
+  try {
+    imageUrl = await findProductImage(offer.affiliate_url);
+  } catch (error) {
+    // Metadados indisponíveis não devem impedir a publicação do link validado.
+    console.warn('Imagem indisponível para a oferta:', offer.id, String(error?.message || error).slice(0, 100));
+  }
+  if (imageUrl) {
+    try {
+      const message = await telegramSend(env, chat, {
+        photo: imageUrl, caption: payload.text.slice(0, 1024), reply_markup: payload.reply_markup
+      }, 'sendPhoto');
+      return { message, format: 'photo' };
+    } catch (error) {
+      // Só cai para texto após recusa EXPLÍCITA da foto (400); falha de rede é ambígua.
+      if (error.telegramStatus !== 400 || !/photo|image|file|http url|url content|wrong type|format/i.test(error.message)) throw error;
+      console.warn('Telegram recusou a imagem; enviando oferta em texto:', offer.id);
+    }
+  }
+  // Quando não há foto, URL visível permite que o Telegram gere uma prévia quando disponível.
+  const message = await telegramSend(env, chat, {
+    ...payload, text: payload.text + '\n' + offer.affiliate_url
+  });
+  return { message, format: imageUrl ? 'text_photo_rejected' : 'text_no_image' };
+}
+
 async function sendOffer(env, offer, settings) {
   validateChannel(settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
   try {
-    const message = await telegramSend(env, settings.telegram_chat_id, telegramPayload(offer, settings.telegram_chat_id));
+    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer);
     const timestamp = Math.floor(Date.now() / 1000);
     const localDay = localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE offers SET status='published', published_at=?, published_day=?, telegram_message_id=? WHERE id=? AND status='sending'")
       .bind(timestamp, localDay, message.message_id, offer.id).run();
-    await log(env, 'published', `Telegram ${message.message_id}`, offer.id);
-    return { status: 'published', message_id: message.message_id };
+    await log(env, 'published', `Telegram ${message.message_id} • ${format}`, offer.id);
+    return { status: 'published', message_id: message.message_id, format };
   } catch (error) {
     // Falhas ambíguas não são repetidas automaticamente para evitar publicação duplicada.
     await env.DB.prepare("UPDATE offers SET status='needs_review', last_error=? WHERE id=? AND status='sending'")
