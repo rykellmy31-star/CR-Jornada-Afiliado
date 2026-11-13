@@ -120,3 +120,8 @@ O endpoint para consultar grupos utiliza `GET /group/fetchAllGroups/{instance}?g
 O QR Code só pode ser solicitado após login no painel administrativo. O endpoint de criação utiliza a chave global `EVOLUTION_API_KEY` guardada no Secret do Worker, que **nunca é devolvida ao navegador**. Só podem ser criadas instâncias com o nome fixo `cr-jornada-afiliados`; antes de criar, a API consulta as existentes e falha de forma segura se não puder confirmar o resultado. As outras instâncias da VPS não sofrem alteração. Criar ou conectar não ativa o disparo de mensagens, não escolhe grupos e não altera o Telegram.
 
 A API de instâncias utilizada é a Evolution API v2: `GET /instance/fetchInstances`, `POST /instance/create`, `GET /instance/connect/cr-jornada-afiliados` e `GET /instance/connectionState/cr-jornada-afiliados`. A leitura de QR é local ao WhatsApp; a API devolve base64 de imagem, não é usada nenhuma API externa de geração de QR.
+
+
+### Falha de autenticação ao gerar QR Code
+
+Se aparecer HTTP 401/403 ao consultar `/instance/fetchInstances`, isso não significa que o QR esteja quebrado: o Worker reconheceu que existe um Secret, mas a Evolution API recusou a credencial fornecida. Em **Cloudflare → Workers & Pages → cr-jornada-afiliados → Settings → Variables and Secrets**, confira se `EVOLUTION_API_KEY` contém a **API Key Global** usada na tela de login do Evolution Manager, correspondente a `AUTHENTICATION_API_KEY` do servidor. Não use a API key individual de uma instância. A URL é `https://evolution.crjornada.com` sem `/manager/`. Salve o Secret e clique em **Tentar conectar novamente**. Nunca envie a chave em prints, chats ou repositórios. O indicador de chave presente não comprova a validade.

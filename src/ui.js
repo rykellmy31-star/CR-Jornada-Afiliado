@@ -127,6 +127,8 @@ async function refreshWhatsAppConnection(showErrors=false){
   }catch(error){
     if(showErrors)notice('Conexão WhatsApp: '+error.message,true,'wa-feedback');
     $('wa-connection-state').textContent='Não foi possível consultar a conexão. '+error.message;
+    $('wa-auto-connect').textContent='Tentar conectar novamente';
+    $('wa-auto-connect').disabled=false;
     return null;
   }
 }
@@ -144,7 +146,7 @@ async function refreshWhatsApp(){
     $('wa-registered').checked=!!d.config.public_registered;
     $('wa-enabled').checked=!!d.config.enabled;
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
-    $('whatsapp-server-status').textContent=d.server_configured?'✅ Segredos Evolution configurados no servidor.':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
+    $('whatsapp-server-status').textContent=d.server_configured?'✅ Endereço e chave Evolution presentes no servidor (autenticação ainda não confirmada).':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
     if(d.server_configured)await refreshWhatsAppConnection();
     else $('wa-connection-state').textContent='⚠ Falta cadastrar o Secret EVOLUTION_API_KEY na Cloudflare.';
     $('wa-test').disabled=!d.config.public_registered||!d.server_configured;
@@ -222,7 +224,13 @@ $('wa-auto-connect').addEventListener('click',async()=>{
     }
     await refreshWhatsApp();
   }catch(error){notice(error.message,true,'wa-feedback');}
-  finally{const state=await refreshWhatsAppConnection();if(state?.state!=='open')b.disabled=false;}
+  finally{
+    const state=await refreshWhatsAppConnection();
+    if(state?.state!=='open'){
+      b.disabled=false;
+      if(!state)b.textContent='Tentar conectar novamente';
+    }
+  }
 });
 setInterval(()=>{
   if(!$('dashboard').classList.contains('hidden')&&!$('wa-qr-wrap').classList.contains('hidden'))

@@ -266,3 +266,21 @@ test('rota de QR Code só funciona com sessão administrativa e origem válida',
     assert.equal((await allowed.json()).state,'open');
   }finally{globalThis.fetch=native;DB.close();}
 });
+
+test('erro de autenticação menciona a chave global sem expô-la',async()=>{
+  const DB=dbMock(),env=envFor(DB);
+  try{
+    globalThis.fetch=async(url,opts={})=>{
+      assert.equal(String(url),BASE+'/instance/fetchInstances');
+      assert.equal(opts.headers.apikey,env.EVOLUTION_API_KEY);
+      return Response.json({message:'Unauthorized'},{status:401});
+    };
+    await assert.rejects(connectAffiliateWhatsApp(env),error=>{
+      assert.match(error.message,/HTTP 401/);
+      assert.match(error.message,/fetchInstances/);
+      assert.match(error.message,/API Key GLOBAL/);
+      assert.doesNotMatch(error.message,/TEST_KEY_NEVER_REAL/);
+      return true;
+    });
+  }finally{globalThis.fetch=native;DB.close();}
+});

@@ -48,14 +48,15 @@ export function evolutionOrigin(value) {
     throw new Error('Configure EVOLUTION_API_URL com o endereço público HTTPS do seu servidor, sem porta/caminho.');
   return u.origin;
 }
-function configured(env) { return !!env.EVOLUTION_API_URL && !!env.EVOLUTION_API_KEY; }
+function configured(env) { return !!env.EVOLUTION_API_URL && typeof env.EVOLUTION_API_KEY==='string' && !!env.EVOLUTION_API_KEY.trim(); }
+function globalApiKey(env) { return String(env.EVOLUTION_API_KEY || '').trim(); }
 async function evoFetch(env,instance,path,options={}) {
   if (!configured(env)) throw new Error('Configure o Secret EVOLUTION_API_KEY na Cloudflare (EVOLUTION_API_URL já está definido no Worker).');
   const origin=evolutionOrigin(env.EVOLUTION_API_URL);
   const url=origin+path+'/'+encodeURIComponent(validateInstance(instance))+
     (path==='/group/fetchAllGroups'?'?getParticipants=false':'');
   const response=await fetch(url,{
-    ...options,redirect:'manual',headers:{apikey:env.EVOLUTION_API_KEY,accept:'application/json',...(options.body?{'content-type':'application/json'}:{})},
+    ...options,redirect:'manual',headers:{apikey:globalApiKey(env),accept:'application/json',...(options.body?{'content-type':'application/json'}:{})},
     signal:AbortSignal.timeout(14000)
   });
   if(!response.ok) {
@@ -74,14 +75,14 @@ async function evolutionAdmin(env,path,{method='GET',body}={}) {
   const origin=evolutionOrigin(env.EVOLUTION_API_URL);
   const response=await fetch(origin+path,{
     method,redirect:'manual',
-    headers:{apikey:env.EVOLUTION_API_KEY,accept:'application/json',...(body?{'content-type':'application/json'}:{})},
+    headers:{apikey:globalApiKey(env),accept:'application/json',...(body?{'content-type':'application/json'}:{})},
     ...(body?{body:JSON.stringify(body)}:{}),
     signal:AbortSignal.timeout(18000)
   });
   if(!response.ok){
     const error=new Error(response.status===401||response.status===403
-      ?'Evolution API recusou a chave global. Confira o Secret EVOLUTION_API_KEY.'
-      :'A Evolution API respondeu HTTP '+response.status+' ao conectar a instância.');
+      ?'Evolution respondeu HTTP '+response.status+' em '+path+'. Verifique se EVOLUTION_API_KEY é a API Key GLOBAL usada no Evolution Manager (não a chave da instância).'
+      :'A Evolution API respondeu HTTP '+response.status+' em '+path+'.');
     error.status=response.status;
     throw error;
   }
