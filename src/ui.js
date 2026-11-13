@@ -31,7 +31,7 @@ export function renderPage() {
         <div class="section-header"><div><h2>🟢 WhatsApp • Evolution API</h2><p>Compartilhe no seu grupo as ofertas já publicadas no Telegram, sem recadastrar os links.</p></div><span id="whatsapp-badge" class="tag">Desligado</span></div>
         <p class="hint">Use a Evolution API instalada na sua própria VPS. O WhatsApp não oficial pode sofrer bloqueios; não permite disparos privados ou importação de contatos. O grupo deve ser público, aberto e cadastrado como mídia na Central de Afiliados.</p>
         <p class="hint" id="whatsapp-server-status">Verificando configuração do servidor...</p>
-        <form id="whatsapp-form" class="radar-form">
+        <form id="whatsapp-form" class="whatsapp-form">
           <label>Nome da instância Evolution API<input id="wa-instance" maxlength="80" placeholder="Ex.: afiliados-crjornada" autocomplete="off" required></label>
           <div class="field-grid">
             <label>Grupo conectado à instância<select id="wa-group" required><option value="">Clique em Buscar meus grupos</option></select></label>
@@ -44,7 +44,7 @@ export function renderPage() {
           <p class="feedback" id="wa-feedback" role="status" aria-live="polite"></p>
         </form>
         <div class="section-header" style="margin-top:14px"><div><h2>Últimos envios no WhatsApp</h2></div></div>
-        <div id="wa-deliveries" class="radar-results">Ainda não há envios.</div>
+        <div id="wa-deliveries" class="whatsapp-results">Ainda não há envios.</div>
       </section>
       <section class="card coupon-panel">
         <div class="section-header"><div><h2>🎟️ Cupons vinculados às ofertas</h2><p>O robô inclui o cupom na publicação automaticamente quando estiver dentro da validade informada.</p></div></div>

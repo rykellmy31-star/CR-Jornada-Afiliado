@@ -15,9 +15,9 @@ test('Radar retirado do painel e do JavaScript sem afetar ofertas e cupons', () 
   }
 });
 
-test('Agendador mantém apenas publicação e dispensa pesquisa externa', async () => {
+test('Agendador mantém publicação Telegram e WhatsApp, sem Radar externo', async () => {
   const jobs=[];
   await worker.scheduled({}, {DB:null}, {waitUntil:job=>jobs.push(job)});
-  assert.equal(jobs.length,1);
+  assert.equal(jobs.length,2);
   await Promise.all(jobs);
 });
