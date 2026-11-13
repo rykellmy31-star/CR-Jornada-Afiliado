@@ -15,8 +15,8 @@ export function renderPage() {
             <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este canal público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
             <label class="check-row"><input type="checkbox" id="telegram_enabled"><span><b>Habilitar publicação no Telegram</b><small>Exige token do BotFather configurado como segredo.</small></span></label>
             <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Iniciar automação</b><small>Usará apenas os links oficiais previamente cadastrados.</small></span></label>
-            <div class="field-grid"><label>Intervalo entre publicações<select id="interval_minutes"><option value="15">15 minutos</option><option value="30">30 minutos</option><option value="60">60 minutos</option><option value="120">120 minutos</option></select></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
-            <p class="hint">Janela de publicação: horário de Bahia (UTC−3). O robô não publicará fora desse horário.</p>
+            <div class="field-grid"><label>Intervalo entre publicações no Telegram (minutos)<input id="interval_minutes" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
+            <p class="hint">Digite qualquer intervalo inteiro entre 1 e 1440 minutos. Janela de publicação no horário da Bahia (UTC−3).</p>
             <div class="actions"><button class="primary" type="submit">Salvar configurações</button><button class="outline" type="button" id="test-telegram">Testar Telegram</button></div>
             <p id="token-state" class="hint"></p>
             <p id="telegram-test-feedback" class="feedback" role="status" aria-live="polite"></p>
@@ -47,18 +47,10 @@ export function renderPage() {
             <div class="actions" style="align-items:end"><button type="button" class="outline" id="wa-groups">Buscar meus grupos</button></div>
           </div>
           <p class="hint">O link de convite do grupo não é seu ID técnico. O botão consulta apenas os grupos que o número conectado na Evolution já participa.</p>
-          <label>Intervalo entre publicações no WhatsApp
-            <select id="wa-interval" required>
-              <option value="15">15 minutos</option>
-              <option value="30">30 minutos</option>
-              <option value="60">1 hora</option>
-              <option value="120">2 horas</option>
-              <option value="180">3 horas</option>
-              <option value="240">4 horas</option>
-              <option value="360">6 horas</option>
-            </select>
+          <label>Intervalo entre publicações no WhatsApp (minutos)
+            <input id="wa-interval" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required>
           </label>
-          <p class="hint">Esse intervalo é independente do Telegram. No WhatsApp, no máximo uma oferta será enviada por intervalo, depois de publicada no Telegram.</p>
+          <p class="hint">Digite os minutos que preferir (de 1 a 1440). O WhatsApp tem intervalo próprio e só compartilha ofertas após a publicação no Telegram. Intervalos muito curtos aumentam o risco de restrições no WhatsApp.</p>
           <label class="check-row"><input type="checkbox" id="wa-registered"><span><b>Confirmo que é um grupo público e aberto</b><small>Também confirmo que cadastrei esse grupo na Central de Afiliados do Mercado Livre e tenho permissão para publicar.</small></span></label>
           <label class="check-row"><input type="checkbox" id="wa-enabled"><span><b>Ativar publicações no WhatsApp</b><small>Espelha somente novas ofertas publicadas no Telegram após a ativação. Uma oferta por ciclo, sem reenvios automáticos quando houver dúvida.</small></span></label>
           <div class="actions"><button class="primary" type="submit">Salvar WhatsApp</button><button class="outline" id="wa-test" type="button">Enviar teste ao grupo</button></div>

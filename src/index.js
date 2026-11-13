@@ -266,9 +266,8 @@ async function router(request, env) {
   }
   if (u.pathname === '/api/settings' && method === 'POST') {
     const b = await getBody(request);
-    const allowedIntervals = [15, 30, 60, 120];
     const interval = Number(b.interval_minutes), limit = Number(b.max_daily), start = Number(b.start_hour), end = Number(b.end_hour);
-    if (!allowedIntervals.includes(interval) || !Number.isInteger(limit) || limit < 1 || limit > 48 ||
+    if (b.interval_minutes === '' || !Number.isInteger(interval) || interval < 1 || interval > 1440 || !Number.isInteger(limit) || limit < 1 || limit > 48 ||
         !Number.isInteger(start) || start < 0 || start > 23 || !Number.isInteger(end) || end < 1 || end > 24 || start >= end) {
       return fail('Configuração inválida.');
     }

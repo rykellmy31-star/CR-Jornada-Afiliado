@@ -29,7 +29,16 @@ const CREATE_SCHEDULE = `CREATE TABLE IF NOT EXISTS whatsapp_schedule (
   interval_minutes INTEGER NOT NULL DEFAULT 60 CHECK (interval_minutes IN (15,30,60,120,180,240,360)),
   last_attempt_at INTEGER NOT NULL DEFAULT 0
 )`;
-const WHATSAPP_INTERVALS = new Set([15,30,60,120,180,240,360]);
+// Nova tabela aditiva: a anterior tem CHECK com opções fixas e fica preservada.
+const CREATE_CUSTOM_SCHEDULE = `CREATE TABLE IF NOT EXISTS whatsapp_schedule_custom (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  interval_minutes INTEGER NOT NULL DEFAULT 60 CHECK (interval_minutes BETWEEN 1 AND 1440),
+  last_attempt_at INTEGER NOT NULL DEFAULT 0
+)`;
+const CUSTOM_SCHEDULE_TABLE = 'whatsapp_schedule_custom';
+export function validWhatsAppInterval(value) {
+  return typeof value==='number' && Number.isInteger(value) && value>=1 && value<=1440;
+}
 const INSTANCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const GROUP_RE = /^[0-9]{6,30}(?:-[0-9]{6,20})?@g\.us$/;
 const nowSec = () => Math.floor(Date.now()/1000);
@@ -175,13 +184,17 @@ export async function ensureWhatsAppTables(env) {
   await env.DB.prepare(CREATE_DELIVERIES).run();
   await env.DB.prepare(CREATE_SCHEDULE).run();
   await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_schedule(id) VALUES(1)').run();
+  await env.DB.prepare(CREATE_CUSTOM_SCHEDULE).run();
+  // Migração segura preserva a preferência e o relógio de disparos anteriores.
+  // INSERT OR IGNORE nunca sobrescreve uma configuração já personalizada.
+  await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_schedule_custom(id,interval_minutes,last_attempt_at) SELECT id,interval_minutes,last_attempt_at FROM whatsapp_schedule WHERE id=1').run();
 }
 export async function getWhatsAppState(env) {
   await ensureWhatsAppTables(env);
   const [config,deliveries,schedule]=await Promise.all([
     env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first(),
     env.DB.prepare("SELECT d.offer_id,d.status,d.last_error,d.updated_at,o.title FROM whatsapp_deliveries d JOIN offers o ON o.id=d.offer_id ORDER BY d.updated_at DESC LIMIT 12").all(),
-    env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule WHERE id=1').first()
+    env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first()
   ]);
   return {config,schedule,server_configured:configured(env),deliveries:deliveries.results};
 }
@@ -199,11 +212,12 @@ export async function updateWhatsAppSettings(env,body) {
     throw new Error('Seleções de WhatsApp inválidas.');
   const [prev,previousSchedule]=await Promise.all([
     env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first(),
-    env.DB.prepare('SELECT interval_minutes FROM whatsapp_schedule WHERE id=1').first()
+    env.DB.prepare('SELECT interval_minutes FROM whatsapp_schedule_custom WHERE id=1').first()
   ]);
   // Requisições antigas sem interval_minutes preservam o intervalo salvo.
   const interval=body.interval_minutes===undefined ? previousSchedule.interval_minutes : Number(body.interval_minutes);
-  if(!WHATSAPP_INTERVALS.has(interval)||!Number.isInteger(interval))
+  if(!validWhatsAppInterval(interval)||body.interval_minutes==='')
+
     throw new Error('Intervalo do WhatsApp inválido. Escolha uma opção disponível.');
   const name=validateInstance(body.instance_name);
   const jid=validateGroupJid(body.group_jid);
@@ -221,9 +235,9 @@ export async function updateWhatsAppSettings(env,body) {
     .bind(+enabled,name,jid,+registered,(changed||(!prev.enabled&&enabled))?timestamp:prev.started_at,timestamp).run();
   // O relógio do WhatsApp não altera o intervalo do Telegram.
   if(changed||(!prev.enabled&&enabled))
-    await env.DB.prepare('UPDATE whatsapp_schedule SET interval_minutes=?,last_attempt_at=0 WHERE id=1').bind(interval).run();
+    await env.DB.prepare('UPDATE whatsapp_schedule_custom SET interval_minutes=?,last_attempt_at=0 WHERE id=1').bind(interval).run();
   else
-    await env.DB.prepare('UPDATE whatsapp_schedule SET interval_minutes=? WHERE id=1').bind(interval).run();
+    await env.DB.prepare('UPDATE whatsapp_schedule_custom SET interval_minutes=? WHERE id=1').bind(interval).run();
   return {ok:true,enabled,group_changed:changed,interval_minutes:interval};
 }
 export async function testWhatsApp(env) {
@@ -270,13 +284,13 @@ export async function runWhatsAppScheduled(env){
     WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
     ORDER BY o.published_at ASC,o.id ASC LIMIT 1`).bind(cfg.group_jid,cfg.started_at).first();
   if(!offer)return {skipped:'empty'};
-  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule WHERE id=1').first();
+  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
   const timestamp=nowSec();
   const minGap=schedule.interval_minutes*60;
   if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
     return {skipped:'interval'};
   // Reserva atomicamente o próximo envio, inclusive entre execuções concorrentes.
-  const slot=await env.DB.prepare('UPDATE whatsapp_schedule SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
+  const slot=await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
     .bind(timestamp,timestamp-minGap).run();
   if(slot.meta?.changes!==1)return {skipped:'interval'};
   const claim=await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_deliveries(offer_id,group_jid,status,created_at,updated_at) VALUES(?,?,'sending',?,?)")
