@@ -17,6 +17,7 @@ export function renderPage() {
             <p class="hint">Janela de publicação: horário de Bahia (UTC−3). O robô não publicará fora desse horário.</p>
             <div class="actions"><button class="primary" type="submit">Salvar configurações</button><button class="outline" type="button" id="test-telegram">Testar Telegram</button></div>
             <p id="token-state" class="hint"></p>
+            <p id="telegram-test-feedback" class="feedback" role="status" aria-live="polite"></p>
           </form>
         </section>
         <section class="card add-offer"><div class="section-header"><div><h2>Adicionar oferta</h2><p>Somente links gerados na sua conta do Mercado Livre.</p></div><div class="symbol">＋</div></div>
@@ -95,8 +96,27 @@ $('offer-form').addEventListener('submit',async e=>{
 });
 $('test-telegram').addEventListener('click',async()=>{
   if(!confirm('Enviar uma mensagem de TESTE ao grupo ACHADINHOS ML agora?'))return;
-  try{await call('/api/test-telegram',{method:'POST',body:'{}'});notice('Mensagem de teste enviada ao grupo.');await refresh();}
-  catch(err){notice(err.message,true);}
+  const btn=$('test-telegram');
+  btn.disabled=true;
+  btn.textContent='Testando conexão...';
+  notice('Verificando envio para @achadinhosml1101...',false,'telegram-test-feedback');
+  try{
+    const result=await call('/api/test-telegram',{method:'POST',body:'{}'});
+    notice('✅ Mensagem enviada ao grupo! ID do Telegram: '+result.message_id,false,'telegram-test-feedback');
+  }catch(err){
+    const msg=String(err.message||'Falha desconhecida');
+    const lower=msg.toLowerCase();
+    let help='';
+    if(lower.includes('unauthorized')||lower.includes('401')) help=' Confira o TELEGRAM_BOT_TOKEN salvo como Secret na Cloudflare.';
+    else if(lower.includes('chat not found')||lower.includes('not found')) help=' Confira se @achadinhosml1101 é o grupo correto e se o bot está nele.';
+    else if(lower.includes('bot is not a member')||lower.includes('not enough rights')||lower.includes('forbidden')) help=' Confira se @Crjornadabot está como administrador e pode publicar.';
+    else if(lower.includes('canal')||lower.includes('grupo público')) help=' Marque Canal registrado e permitido, salve e tente novamente, somente se isso for verdadeiro.';
+    else if(lower.includes('configure o segredo')) help=' Adicione TELEGRAM_BOT_TOKEN como Secret de produção no Worker.';
+    notice('❌ Teste não enviado: '+msg+help,true,'telegram-test-feedback');
+  }finally{
+    btn.disabled=false;
+    btn.textContent='Testar Telegram';
+  }
 });
 $('offers-rows').addEventListener('click',async e=>{
   const btn=e.target.closest('button[data-action]');if(!btn)return;
