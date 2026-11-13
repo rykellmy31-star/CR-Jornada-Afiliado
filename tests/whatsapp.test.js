@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import worker from '../src/index.js';
 import {
   evolutionOrigin,validateGroupJid,validateInstance,ensureWhatsAppTables,
-  listWhatsAppGroups,updateWhatsAppSettings,getWhatsAppState,runWhatsAppScheduled
+  listWhatsAppGroups,updateWhatsAppSettings,getWhatsAppState,runWhatsAppScheduled,
+  connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,AFFILIATE_INSTANCE_NAME
 } from '../src/whatsapp.js';
 
 function dbMock(){
@@ -151,5 +152,117 @@ test('API de WhatsApp exige sessão administrativa para consultar grupos e alter
     const state=await worker.fetch(new Request('https://afiliados.example.test/api/whatsapp/state',{headers:{cookie}}),env);
     assert.equal(state.status,200);
     assert.equal((await state.json()).config.enabled,0);
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('conexão automática cria somente a instância exclusiva, gera QR e mantém envios desligados',async()=>{
+  const DB=dbMock(),env=envFor(DB),calls=[];
+  let exists=false;
+  try{
+    globalThis.fetch=async(url,opts={})=>{
+      const address=String(url);calls.push({address,method:opts.method||'GET',body:opts.body});
+      if(address===BASE+'/instance/fetchInstances')
+        return Response.json(exists?[{name:'outra-instancia',connectionStatus:'open'},{name:AFFILIATE_INSTANCE_NAME,connectionStatus:'connecting'}]:[{name:'outra-instancia',connectionStatus:'open'}]);
+      if(address===BASE+'/instance/create'){
+        assert.equal(opts.method,'POST');
+        assert.deepEqual(JSON.parse(opts.body),{instanceName:AFFILIATE_INSTANCE_NAME,integration:'WHATSAPP-BAILEYS',qrcode:true});
+        exists=true;
+        return Response.json({instance:{instanceName:AFFILIATE_INSTANCE_NAME,status:'connecting'},hash:{apikey:'INSTANCE_PRIVATE_KEY'},qrcode:{base64:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=='}},{status:201});
+      }
+      if(address===BASE+'/instance/connectionState/'+AFFILIATE_INSTANCE_NAME)
+        return Response.json({instance:{instanceName:AFFILIATE_INSTANCE_NAME,state:'connecting'}});
+      if(address===BASE+'/instance/connect/'+AFFILIATE_INSTANCE_NAME)
+        return Response.json({base64:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=='});
+      throw new Error('URL inesperada: '+address);
+    };
+    const before=await getAffiliateWhatsAppConnection(env);
+    assert.equal(before.state,'not_created');
+    const result=await connectAffiliateWhatsApp(env);
+    assert.equal(result.instance_name,AFFILIATE_INSTANCE_NAME);
+    assert.equal(result.state,'connecting');
+    assert.equal(result.qr_image,'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==');
+    assert.equal(JSON.stringify(result).includes('INSTANCE_PRIVATE_KEY'),false);
+    const settings=(await getWhatsAppState(env)).config;
+    assert.equal(settings.instance_name,AFFILIATE_INSTANCE_NAME);
+    assert.equal(settings.enabled,0);
+    assert.equal(settings.public_registered,0);
+    const second=await connectAffiliateWhatsApp(env);
+    assert.ok(second.qr_image.startsWith('data:image/png;base64,'));
+    assert.equal(calls.filter(c=>c.address===BASE+'/instance/create').length,1);
+    assert.ok(calls.every(c=>!c.address.includes('/instance/delete')&&!c.address.includes('/instance/logout')));
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('instância já conectada é reutilizada sem gerar QR nem criar outra',async()=>{
+  const DB=dbMock(),env=envFor(DB),calls=[];
+  try{
+    globalThis.fetch=async(url)=>{
+      const s=String(url);calls.push(s);
+      if(s===BASE+'/instance/fetchInstances')return Response.json([{name:AFFILIATE_INSTANCE_NAME,connectionStatus:'open'}]);
+      if(s===BASE+'/instance/connectionState/'+AFFILIATE_INSTANCE_NAME)return Response.json({instance:{state:'open'}});
+      throw new Error('Não deveria chamar '+s);
+    };
+    const out=await connectAffiliateWhatsApp(env);
+    assert.equal(out.state,'open');
+    assert.equal(out.qr_image,null);
+    assert.deepEqual(calls,[BASE+'/instance/fetchInstances',BASE+'/instance/connectionState/'+AFFILIATE_INSTANCE_NAME]);
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('não cria instância se a listagem for desconhecida ou se não houver chave global',async()=>{
+  const DB=dbMock(),env=envFor(DB);
+  try{
+    const noKey={...env,EVOLUTION_API_KEY:undefined};
+    await assert.rejects(connectAffiliateWhatsApp(noKey),/EVOLUTION_API_KEY/);
+    assert.equal((await getAffiliateWhatsAppConnection(noKey)).state,'unconfigured');
+    let created=false;
+    globalThis.fetch=async(url)=>{
+      if(String(url).includes('fetchInstances'))return Response.json({unexpected:'shape'});
+      if(String(url).includes('create'))created=true;
+      throw new Error('Acesso inesperado');
+    };
+    await assert.rejects(connectAffiliateWhatsApp(env),/confirmar as instâncias existentes/);
+    assert.equal(created,false);
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('conversor QR consulta connect quando a criação devolve apenas código; nunca expõe a API Key',async()=>{
+  const DB=dbMock(),env=envFor(DB),calls=[];
+  try{
+    globalThis.fetch=async(url,opts={})=>{
+      const s=String(url);calls.push(s);
+      if(s===BASE+'/instance/fetchInstances')return Response.json([]);
+      if(s===BASE+'/instance/create')return Response.json({instance:{instanceName:AFFILIATE_INSTANCE_NAME},qrcode:{code:'2@PRIVATE,SECRET'}});
+      if(s===BASE+'/instance/connectionState/'+AFFILIATE_INSTANCE_NAME)return Response.json({instance:{state:'connecting'}});
+      if(s===BASE+'/instance/connect/'+AFFILIATE_INSTANCE_NAME)return Response.json({code:'2@PRIVATE,SECRET',base64:'iVBORw0KGgoAAAANSUhEUg=='});
+      throw new Error('URL inesperada: '+s);
+    };
+    const result=await connectAffiliateWhatsApp(env);
+    assert.equal(result.qr_image,'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==');
+    assert.equal(JSON.stringify(result).includes('PRIVATE'),false);
+    assert.equal(JSON.stringify(result).includes(env.EVOLUTION_API_KEY),false);
+    assert.ok(calls.includes(BASE+'/instance/connect/'+AFFILIATE_INSTANCE_NAME));
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('rota de QR Code só funciona com sessão administrativa e origem válida',async()=>{
+  const DB=dbMock(),env=envFor(DB);
+  try{
+    const url='https://afiliados.example.test/api/whatsapp/auto-connect';
+    const headers={'content-type':'application/json',origin:'https://afiliados.example.test'};
+    assert.equal((await worker.fetch(new Request(url,{method:'POST',headers,body:'{}'}),env)).status,401);
+    const login=await worker.fetch(new Request('https://afiliados.example.test/api/login',{method:'POST',headers,body:JSON.stringify({password:env.ADMIN_PASSWORD})}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    const bad=await worker.fetch(new Request(url,{method:'POST',headers:{...headers,origin:'https://malicioso.example.test',cookie},body:'{}'}),env);
+    assert.equal(bad.status,403);
+    globalThis.fetch=async(url)=>{
+      const s=String(url);
+      if(s===BASE+'/instance/fetchInstances')return Response.json([{name:AFFILIATE_INSTANCE_NAME}]);
+      if(s===BASE+'/instance/connectionState/'+AFFILIATE_INSTANCE_NAME)return Response.json({instance:{state:'open'}});
+      throw new Error('Chamada inesperada: '+s);
+    };
+    const allowed=await worker.fetch(new Request(url,{method:'POST',headers:{...headers,cookie},body:'{}'}),env);
+    assert.equal(allowed.status,200);
+    assert.equal((await allowed.json()).state,'open');
   }finally{globalThis.fetch=native;DB.close();}
 });

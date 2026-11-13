@@ -66,6 +66,102 @@ async function evoFetch(env,instance,path,options={}) {
   if(!data||data.error)throw new Error('Resposta inválida da Evolution API.');
   return data;
 }
+// Identidade fixa e isolada: nunca cria, desconecta ou altera outras instâncias.
+export const AFFILIATE_INSTANCE_NAME = 'cr-jornada-afiliados';
+
+async function evolutionAdmin(env,path,{method='GET',body}={}) {
+  if (!configured(env)) throw new Error('Configure o Secret EVOLUTION_API_KEY na Cloudflare antes de conectar.');
+  const origin=evolutionOrigin(env.EVOLUTION_API_URL);
+  const response=await fetch(origin+path,{
+    method,redirect:'manual',
+    headers:{apikey:env.EVOLUTION_API_KEY,accept:'application/json',...(body?{'content-type':'application/json'}:{})},
+    ...(body?{body:JSON.stringify(body)}:{}),
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!response.ok){
+    const error=new Error(response.status===401||response.status===403
+      ?'Evolution API recusou a chave global. Confira o Secret EVOLUTION_API_KEY.'
+      :'A Evolution API respondeu HTTP '+response.status+' ao conectar a instância.');
+    error.status=response.status;
+    throw error;
+  }
+  const data=await response.json().catch(()=>null);
+  if (!data || typeof data!=='object'||data.error)
+    throw new Error('Resposta inválida da Evolution API.');
+  return data;
+}
+function listedInstances(payload){
+  // Falha fechada para respostas desconhecidas: jamais criar instância duplicada
+  // só porque uma versão da API mudou a estrutura de listagem.
+  if(Array.isArray(payload))return payload;
+  if(Array.isArray(payload?.instances))return payload.instances;
+  if(Array.isArray(payload?.data))return payload.data;
+  throw new Error('Não foi possível confirmar as instâncias existentes na Evolution API.');
+}
+async function ownInstance(env){
+  const data=await evolutionAdmin(env,'/instance/fetchInstances');
+  return listedInstances(data).find(item=>
+    (item?.name||item?.instanceName||item?.instance?.instanceName||item?.instance?.name)===AFFILIATE_INSTANCE_NAME
+  )||null;
+}
+function validQrImage(response) {
+  const sources=[response?.qrcode?.base64,response?.qrCode?.base64,response?.base64,
+    response?.qrcode?.image,response?.qrCode?.image];
+  for(const src of sources) {
+    if(typeof src!=='string'||src.length>300000)continue;
+    const full=src.startsWith('data:')?src:'data:image/png;base64,'+src;
+    if(/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(full))
+      return full;
+  }
+  return null;
+}
+async function connectionStatus(env){
+  const data=await evolutionAdmin(env,'/instance/connectionState/'+AFFILIATE_INSTANCE_NAME);
+  const state=data?.instance?.state||data?.state||data?.instance?.connectionStatus;
+  if(!['open','close','connecting','refused'].includes(state))
+    throw new Error('Estado de conexão não reconhecido pela Evolution API.');
+  return state;
+}
+export async function getAffiliateWhatsAppConnection(env){
+  if(!configured(env))return {configured:false,instance_name:AFFILIATE_INSTANCE_NAME,exists:false,state:'unconfigured'};
+  const instance=await ownInstance(env);
+  if(!instance)return {configured:true,instance_name:AFFILIATE_INSTANCE_NAME,exists:false,state:'not_created'};
+  const state=await connectionStatus(env);
+  return {configured:true,instance_name:AFFILIATE_INSTANCE_NAME,exists:true,state};
+}
+export async function connectAffiliateWhatsApp(env){
+  if(!configured(env))throw new Error('Configure o Secret EVOLUTION_API_KEY na Cloudflare antes de gerar o QR Code.');
+  await ensureWhatsAppTables(env);
+  let instance=await ownInstance(env);
+  let created=null;
+  if(!instance){
+    try{
+      created=await evolutionAdmin(env,'/instance/create',{
+        method:'POST',body:{instanceName:AFFILIATE_INSTANCE_NAME,integration:'WHATSAPP-BAILEYS',qrcode:true}
+      });
+    }catch(error){
+      // Duas sessões podem clicar ao mesmo tempo: só recupera o conflito
+      // após confirmar que a instância criada tem o nome esperado.
+      if(error.status!==409&&error.status!==400)throw error;
+      instance=await ownInstance(env);
+      if(!instance)throw error;
+    }
+  }
+  // Liga o cadastro do painel à instância exclusiva. NUNCA ativa envios aqui.
+  // Alteração de instância descarta apenas o vínculo de grupo no painel.
+  await env.DB.prepare("UPDATE whatsapp_settings SET instance_name=?,group_jid='',enabled=0,public_registered=0,started_at=0,last_error=NULL,updated_at=? WHERE id=1 AND instance_name<>?")
+    .bind(AFFILIATE_INSTANCE_NAME,nowSec(),AFFILIATE_INSTANCE_NAME).run();
+
+  const state=await connectionStatus(env);
+  if(state==='open')return {instance_name:AFFILIATE_INSTANCE_NAME,exists:true,state,qr_image:null};
+  let qr=validQrImage(created);
+  if(!qr){
+    const connected=await evolutionAdmin(env,'/instance/connect/'+AFFILIATE_INSTANCE_NAME);
+    qr=validQrImage(connected);
+  }
+  return {instance_name:AFFILIATE_INSTANCE_NAME,exists:true,state,qr_image:qr};
+}
+
 export async function ensureWhatsAppTables(env) {
   await env.DB.prepare(CREATE_CONFIG).run();
   await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_settings(id) VALUES(1)').run();

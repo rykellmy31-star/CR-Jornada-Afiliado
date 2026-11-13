@@ -2,7 +2,7 @@ import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
-import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery } from './whatsapp.js';
+import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp } from './whatsapp.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -206,6 +206,14 @@ async function router(request, env) {
   }
   if (u.pathname === '/api/whatsapp/state' && method === 'GET') {
     return json(await getWhatsAppState(env));
+  }
+  if (u.pathname === '/api/whatsapp/connection' && method === 'GET') {
+    try { return json(await getAffiliateWhatsAppConnection(env)); }
+    catch(error){return fail(String(error.message||error),503);}
+  }
+  if (u.pathname === '/api/whatsapp/auto-connect' && method === 'POST') {
+    try { return json(await connectAffiliateWhatsApp(env)); }
+    catch(error){return fail(String(error.message||error),503);}
   }
   if (u.pathname === '/api/whatsapp/groups' && method === 'GET') {
     try {
