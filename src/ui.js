@@ -32,7 +32,7 @@ export function renderPage() {
         <p class="hint">Use a Evolution API instalada na sua própria VPS. O WhatsApp não oficial pode sofrer bloqueios; não permite disparos privados ou importação de contatos. O grupo deve ser público, aberto e cadastrado como mídia na Central de Afiliados.</p>
         <p class="hint" id="whatsapp-server-status">Verificando configuração do servidor...</p>
         <form id="whatsapp-form" class="whatsapp-form">
-          <label>Nome da instância Evolution API<input id="wa-instance" maxlength="80" placeholder="Ex.: afiliados-crjornada" autocomplete="off" required></label>
+          <label>Nome da instância Evolution API<input id="wa-instance" maxlength="80" placeholder="cr-jornada-afiliados" autocomplete="off" required></label>
           <div class="field-grid">
             <label>Grupo conectado à instância<select id="wa-group" required><option value="">Clique em Buscar meus grupos</option></select></label>
             <div class="actions" style="align-items:end"><button type="button" class="outline" id="wa-groups">Buscar meus grupos</button></div>
@@ -100,7 +100,7 @@ function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'P
 async function refreshWhatsApp(){
   try{
     const d=await call('/api/whatsapp/state');
-    $('wa-instance').value=d.config.instance_name||'';
+    $('wa-instance').value=d.config.instance_name||'cr-jornada-afiliados';
     const jid=d.config.group_jid||'';
     const list=$('wa-group');
     if(jid&&!Array.from(list.options).some(o=>o.value===jid)){
@@ -110,7 +110,7 @@ async function refreshWhatsApp(){
     $('wa-registered').checked=!!d.config.public_registered;
     $('wa-enabled').checked=!!d.config.enabled;
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
-    $('whatsapp-server-status').textContent=d.server_configured?'✅ Segredos Evolution configurados no servidor.':'⚠ Configure EVOLUTION_API_URL e EVOLUTION_API_KEY nos Secrets da Cloudflare.';
+    $('whatsapp-server-status').textContent=d.server_configured?'✅ Segredos Evolution configurados no servidor.':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
     $('wa-test').disabled=!d.config.public_registered||!d.server_configured;
     if(d.config.last_error)notice(d.config.last_error,true,'wa-feedback');
     $('wa-deliveries').innerHTML=d.deliveries.length?d.deliveries.map(x=>

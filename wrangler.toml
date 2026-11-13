@@ -3,6 +3,9 @@ main = "src/index.js"
 compatibility_date = "2026-11-01"
 workers_dev = true
 
+[vars]
+EVOLUTION_API_URL = "https://evolution.crjornada.com"
+
 [triggers]
 crons = ["*/5 * * * *"]
 

@@ -34,7 +34,7 @@ function mockFetch(handlers){
   const calls=[];
   globalThis.fetch=async(url,options={})=>{
     const s=String(url);calls.push({url:s,options});
-    if(s===BASE+'/group/fetchAllGroups/'+INSTANCE) return new Response(JSON.stringify(groupsResponse),{status:200,headers:{'content-type':'application/json'}});
+    if(s===BASE+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false') return new Response(JSON.stringify(groupsResponse),{status:200,headers:{'content-type':'application/json'}});
     if(handlers) return handlers(s,options);
     throw new Error('Requisição inesperada: '+s);
   };
@@ -61,6 +61,7 @@ test('WhatsApp fica desligado por padrão e lista somente grupos da instância',
     const found=await listWhatsAppGroups(env,INSTANCE);
     assert.deepEqual(found,[{id:GROUP,name:'Achadinhos Mercado Livre'}]);
     assert.equal(calls.length,1);
+    assert.equal(calls[0].url,BASE+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false');
     assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'disabled'});
   }finally{globalThis.fetch=native;DB.close();}
 });

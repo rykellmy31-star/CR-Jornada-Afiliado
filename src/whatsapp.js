@@ -50,9 +50,10 @@ export function evolutionOrigin(value) {
 }
 function configured(env) { return !!env.EVOLUTION_API_URL && !!env.EVOLUTION_API_KEY; }
 async function evoFetch(env,instance,path,options={}) {
-  if (!configured(env)) throw new Error('Configure os Secrets EVOLUTION_API_URL e EVOLUTION_API_KEY na Cloudflare.');
+  if (!configured(env)) throw new Error('Configure o Secret EVOLUTION_API_KEY na Cloudflare (EVOLUTION_API_URL já está definido no Worker).');
   const origin=evolutionOrigin(env.EVOLUTION_API_URL);
-  const url=origin+path+'/'+encodeURIComponent(validateInstance(instance));
+  const url=origin+path+'/'+encodeURIComponent(validateInstance(instance))+
+    (path==='/group/fetchAllGroups'?'?getParticipants=false':'');
   const response=await fetch(url,{
     ...options,redirect:'manual',headers:{apikey:env.EVOLUTION_API_KEY,accept:'application/json',...(options.body?{'content-type':'application/json'}:{})},
     signal:AbortSignal.timeout(14000)
