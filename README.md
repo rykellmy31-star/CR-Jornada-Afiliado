@@ -15,8 +15,8 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 
 ## O que não está implementado (não confundir com sistema em produção)
 
-- Busca autônoma de novos produtos no Mercado Livre: **não existe fonte autorizada integrada nesta versão**.
-- Geração automática de novos links de afiliado: depende de aprovação/método oficial do Mercado Livre; não inserir links comuns e supor que geram comissão.
+- Busca automática de produtos do catálogo: **Radar preparado via API oficial /products/search e OAuth**, a ser autorizado pelo proprietário na Cloudflare. Os resultados são sugestões, não ofertas verificadas.
+- Geração automática de novos links de afiliado: **não disponível**; depende de método autorizado pelo Mercado Livre. Produtos pesquisados jamais são publicados como links afiliados até cadastro da URL oficial.
 - WhatsApp: ainda não há disparos; o grupo de convite não é prova de elegibilidade de canal público.
 - Sincronização automática de preços e estoque. O painel somente usa preços digitados, com a proteção de exibição após 6h.
 - Foto garantida para todo link: a busca de imagem depende de metadados públicos do produto e da disponibilidade da imagem na CDN, sem autenticação, scraping de páginas privadas ou contorno de bloqueios.
@@ -93,3 +93,25 @@ Abra **Automação** no painel e cole o link público do novo canal em **Canal p
 ## Canal oficial configurado em 13/11/2026
 
 Endereço público informado: https://t.me/achadinhosmlcr (canal **ACHADINHOS ML (CR)**). A primeira consulta ao banco D1 feita pela nova versão migra **somente** o destino armazenado `@achadinhosml1101` para `@achadinhosmlcr` e desliga publicação/automação, exigindo nova confirmação do canal na Central de Afiliados do Mercado Livre. Não são apagados produtos, filas, cupons ou histórico. O token do BotFather e a base D1 não precisam ser recriados. A integração deve ser testada no painel após adicionar @Crjornadabot como administrador do canal, com permissão de publicar. Se o destino no banco já for diferente, a migração não o sobrescreve.
+
+
+## Radar automático de produtos do catálogo
+
+O Radar pesquisa periodicamente palavras-chave no catálogo oficial via API documentada; organiza os resultados e evita duplicações. Não faz scraping, não calcula descontos e nunca publica sugestões como se já fossem links de afiliado. Para transformar uma sugestão em anúncio, abra o produto, gere o link oficial na Central do Afiliado e cadastre na fila.
+
+### Conectar o Mercado Livre (OAuth)
+
+1. Crie um aplicativo autorizado no DevCenter do Mercado Livre com leitura e offline_access, quando disponíveis. A API de catálogo é voltada a vendedores e pode ser negada à conta de afiliado.
+2. Configure no aplicativo a URL Redirect URI mostrada no painel Radar; termina em `/api/discovery/callback` e precisa corresponder exatamente ao endereço do Worker.
+3. Na Cloudflare, salve três Secrets: `MELI_APP_ID` (APP ID), `MELI_APP_SECRET` (Secret Key) e `MELI_TOKEN_KEY` (32 bytes aleatórios em Base64).
+4. No painel, clique em "Conectar Mercado Livre (OAuth)" e autorize no site oficial. Os tokens de acesso e renovação são guardados criptografados com AES-GCM no D1. Guarde sua chave MELI_TOKEN_KEY.
+5. Defina até 12 palavras-chave, intervalo de 1 a 6 horas e ative "Pesquisar automaticamente".
+6. Abra "Produtos encontrados", consulte o produto e gere o link de afiliado. Clique em "Criar oferta" para preencher título/categoria e então informe o link oficial. Os resultados do catálogo não são considerados promoções de preço verificado.
+
+Em caso de erro de autorização ou permissão, o Radar será pausado sem interferir nas publicações existentes do Telegram.
+
+### Isolamento e segurança
+
+O Radar cria somente as tabelas `discovery_settings`, `discovered_products`, `discovery_oauth` e `discovery_oauth_states` no D1 já existente. O histórico, os cupons, as ofertas, as senhas, o token do Telegram e o destino `@achadinhosmlcr` são preservados. OAuth tem state aleatório de uso único e expiração de 10 minutos; tokens ficam criptografados. A renovação de tokens ocorre automaticamente quando o Mercado Livre autoriza o aplicativo.
+
+Fontes: https://developers.mercadolivre.com.br/buscador-de-produtos ; https://developers.mercadolivre.com.br/autenticacao-e-autorizacao ; https://developers.mercadolivre.com.br/pt_br/termos-e-condicoes ; https://www.mercadolivre.com.br/l/afiliados-gere-seus-links

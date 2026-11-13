@@ -78,7 +78,7 @@ test('fluxo completo: login → cadastro → habilitação → simulação Teleg
 });
 test('agendador não envia nada quando desligado',async()=>{
   const DB=dbMock();
-  try{await worker.scheduled({}, {DB}, {waitUntil:p=>p});}finally{DB.close();}
+  try{const tasks=[];await worker.scheduled({}, {DB}, {waitUntil:p=>tasks.push(p)});await Promise.all(tasks);}finally{DB.close();}
 });
 test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   const DB=dbMock();
