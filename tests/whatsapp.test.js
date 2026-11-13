@@ -284,3 +284,64 @@ test('erro de autenticação menciona a chave global sem expô-la',async()=>{
     });
   }finally{globalThis.fetch=native;DB.close();}
 });
+
+
+test('intervalo exclusivo do WhatsApp controla os envios sem mudar o Telegram',async()=>{
+  const DB=dbMock(),env=envFor(DB),calls=[];
+  try{
+    mockFetch((url,opts)=>{
+      if(url.startsWith('https://meli.la/'))
+        return new Response('<html></html>',{headers:{'content-type':'text/html'}});
+      if(url===BASE+'/message/sendText/'+INSTANCE){
+        const msg=JSON.parse(opts.body);
+        assert.equal(msg.number,GROUP);
+        calls.push(msg);
+        return Response.json({key:{id:'MSG_'+calls.length}});
+      }
+      throw new Error('Unexpected URL '+url);
+    });
+    DB.prepare('UPDATE settings SET interval_minutes=15 WHERE id=1').run();
+    await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:120});
+    const active=await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:120});
+    assert.equal(active.interval_minutes,120);
+    assert.equal((await getWhatsAppState(env)).schedule.interval_minutes,120);
+    const now=Math.floor(Date.now()/1000);
+    for (let i=0;i<2;i++)
+      DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+        .bind('Produto de teste '+i+' para WhatsApp', 'https://meli.la/2bsHW5'+(i?'z':'y'),'Geral',now,'published',now+2+i).run();
+    assert.equal((await runWhatsAppScheduled(env)).status,'sent');
+    assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'interval'});
+    assert.equal(calls.length,1);
+    assert.ok((await getWhatsAppState(env)).schedule.last_attempt_at>0);
+    DB.prepare('UPDATE whatsapp_schedule SET last_attempt_at=? WHERE id=1').bind(now-121*60).run();
+    assert.equal((await runWhatsAppScheduled(env)).status,'sent');
+    assert.equal(calls.length,2);
+    assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').get().interval_minutes,15);
+    assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM whatsapp_deliveries WHERE status='sent'").get().total,2);
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('intervalo inválido é rejeitado sem alterar a configuração existente',async()=>{
+  const DB=dbMock(),env=envFor(DB);
+  try{
+    const state=await getWhatsAppState(env);
+    assert.equal(state.schedule.interval_minutes,60);
+    for(const interval_minutes of [5,10,999,0,-1,31,2.5])
+      await assert.rejects(updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes}),/Intervalo do WhatsApp inválido/);
+    assert.equal((await getWhatsAppState(env)).schedule.interval_minutes,60);
+    assert.equal((await getWhatsAppState(env)).config.enabled,0);
+  }finally{DB.close();}
+});
+
+test('intervalo persiste após salvar e reinicializar tabelas, sem recriar o banco',async()=>{
+  const DB=dbMock(),env=envFor(DB);
+  try{
+    await getWhatsAppState(env);
+    await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:240});
+    await ensureWhatsAppTables(env);
+    assert.equal((await getWhatsAppState(env)).schedule.interval_minutes,240);
+    // Requisição de painel antigo sem intervalo não apaga a preferência nova.
+    await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false});
+    assert.equal((await getWhatsAppState(env)).schedule.interval_minutes,240);
+  }finally{DB.close();}
+});

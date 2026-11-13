@@ -47,6 +47,18 @@ export function renderPage() {
             <div class="actions" style="align-items:end"><button type="button" class="outline" id="wa-groups">Buscar meus grupos</button></div>
           </div>
           <p class="hint">O link de convite do grupo não é seu ID técnico. O botão consulta apenas os grupos que o número conectado na Evolution já participa.</p>
+          <label>Intervalo entre publicações no WhatsApp
+            <select id="wa-interval" required>
+              <option value="15">15 minutos</option>
+              <option value="30">30 minutos</option>
+              <option value="60">1 hora</option>
+              <option value="120">2 horas</option>
+              <option value="180">3 horas</option>
+              <option value="240">4 horas</option>
+              <option value="360">6 horas</option>
+            </select>
+          </label>
+          <p class="hint">Esse intervalo é independente do Telegram. No WhatsApp, no máximo uma oferta será enviada por intervalo, depois de publicada no Telegram.</p>
           <label class="check-row"><input type="checkbox" id="wa-registered"><span><b>Confirmo que é um grupo público e aberto</b><small>Também confirmo que cadastrei esse grupo na Central de Afiliados do Mercado Livre e tenho permissão para publicar.</small></span></label>
           <label class="check-row"><input type="checkbox" id="wa-enabled"><span><b>Ativar publicações no WhatsApp</b><small>Espelha somente novas ofertas publicadas no Telegram após a ativação. Uma oferta por ciclo, sem reenvios automáticos quando houver dúvida.</small></span></label>
           <div class="actions"><button class="primary" type="submit">Salvar WhatsApp</button><button class="outline" id="wa-test" type="button">Enviar teste ao grupo</button></div>
@@ -145,6 +157,7 @@ async function refreshWhatsApp(){
     list.value=jid;
     $('wa-registered').checked=!!d.config.public_registered;
     $('wa-enabled').checked=!!d.config.enabled;
+    $('wa-interval').value=String(d.schedule?.interval_minutes||60);
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
     $('whatsapp-server-status').textContent=d.server_configured?'✅ Endereço e chave Evolution presentes no servidor (autenticação ainda não confirmada).':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
     if(d.server_configured)await refreshWhatsAppConnection();
@@ -253,7 +266,8 @@ $('whatsapp-form').addEventListener('submit',async e=>{
   try{
     const data=await call('/api/whatsapp/settings',{method:'POST',body:JSON.stringify({
       instance_name:$('wa-instance').value,group_jid:$('wa-group').value,
-      public_registered:$('wa-registered').checked,enabled:$('wa-enabled').checked
+      public_registered:$('wa-registered').checked,enabled:$('wa-enabled').checked,
+      interval_minutes:Number($('wa-interval').value)
     })});
     await refreshWhatsApp();
     notice(data.group_changed?'Grupo salvo. Por segurança, confirme e ative novamente antes de publicar.':'Configurações do WhatsApp salvas.',false,'wa-feedback');

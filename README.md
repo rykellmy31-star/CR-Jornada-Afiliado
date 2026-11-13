@@ -125,3 +125,10 @@ A API de instâncias utilizada é a Evolution API v2: `GET /instance/fetchInstan
 ### Falha de autenticação ao gerar QR Code
 
 Se aparecer HTTP 401/403 ao consultar `/instance/fetchInstances`, isso não significa que o QR esteja quebrado: o Worker reconheceu que existe um Secret, mas a Evolution API recusou a credencial fornecida. Em **Cloudflare → Workers & Pages → cr-jornada-afiliados → Settings → Variables and Secrets**, confira se `EVOLUTION_API_KEY` contém a **API Key Global** usada na tela de login do Evolution Manager, correspondente a `AUTHENTICATION_API_KEY` do servidor. Não use a API key individual de uma instância. A URL é `https://evolution.crjornada.com` sem `/manager/`. Salve o Secret e clique em **Tentar conectar novamente**. Nunca envie a chave em prints, chats ou repositórios. O indicador de chave presente não comprova a validade.
+
+
+### Intervalos independentes de Telegram e WhatsApp
+
+O WhatsApp tem um seletor **Intervalo entre publicações no WhatsApp** com opções de 15, 30, 60, 120, 180, 240 e 360 minutos (padrão: 60 minutos). O Telegram mantém seu intervalo configurado separadamente. A Cloudflare verifica ambos os serviços a cada cinco minutos, mas respeita o intervalo de cada plataforma, contando a partir da última tentativa de envio. A reserva do intervalo no WhatsApp é atômica para evitar disparos simultâneos em ciclos concorrentes. Ele continua compartilhando somente novas ofertas já publicadas no Telegram após a ativação; sem oferta elegível, não envia nada. Falha ambígua continua exigindo revisão manual.
+
+O agendamento é salvo de forma independente na nova tabela `whatsapp_schedule`, criada com `CREATE TABLE IF NOT EXISTS` no banco D1 existente. Nenhuma tabela é apagada, e os dados de ofertas, cupons, WhatsApp, Telegram e instâncias existentes permanecem preservados. Alterar apenas o intervalo do WhatsApp não muda configurações do Telegram.
