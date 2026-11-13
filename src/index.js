@@ -3,6 +3,7 @@ import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp } from './whatsapp.js';
+import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled } from './multichannel.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -204,6 +205,33 @@ async function router(request, env) {
     ]);
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
+  // Todos os endpoints multicanal exigem a mesma sessão administrativa e origem.
+  if(u.pathname==='/api/channels'&&method==='GET')
+    return json({channels:await listTelegramChannels(env)});
+  if(u.pathname==='/api/channels'&&method==='POST')
+    return json(await createTelegramChannel(env,await getBody(request)),201);
+  const channelStateMatch=u.pathname.match(/^\/api\/channels\/(\d+)\/state$/);
+  if(channelStateMatch&&method==='GET')
+    return json(await channelState(env,channelStateMatch[1]));
+  const channelSettingsMatch=u.pathname.match(/^\/api\/channels\/(\d+)\/settings$/);
+  if(channelSettingsMatch&&method==='POST')
+    return json(await updateTelegramChannel(env,channelSettingsMatch[1],await getBody(request)));
+  const channelTestMatch=u.pathname.match(/^\/api\/channels\/(\d+)\/test$/);
+  if(channelTestMatch&&method==='POST')
+    return json(await testTelegramChannel(env,channelTestMatch[1]));
+  const channelAddOfferMatch=u.pathname.match(/^\/api\/channels\/(\d+)\/offers$/);
+  if(channelAddOfferMatch&&method==='POST')
+    return json(await addChannelOffer(env,channelAddOfferMatch[1],await getBody(request)),201);
+  const channelCouponMatch=u.pathname.match(/^\/api\/channels\/(\d+)\/coupons$/);
+  if(channelCouponMatch&&method==='POST')
+    return json(await saveChannelCoupon(env,channelCouponMatch[1],await getBody(request)),201);
+  const channelOfferAction=u.pathname.match(/^\/api\/channels\/(\d+)\/offers\/(\d+)\/(publish|requeue)$/);
+  if(channelOfferAction&&method==='POST'){
+    const result=channelOfferAction[3]==='publish'
+      ?await publishChannelOffer(env,channelOfferAction[1],channelOfferAction[2])
+      :await requeueChannelOffer(env,channelOfferAction[1],channelOfferAction[2]);
+    return json(result,result.status==='needs_review'?409:200);
+  }
   if (u.pathname === '/api/whatsapp/state' && method === 'GET') {
     return json(await getWhatsAppState(env));
   }
@@ -238,6 +266,10 @@ async function router(request, env) {
     try { data = normalizeOffer(await getBody(request)); }
     catch (error) { return fail(error.message, 400); }
     const now = Math.floor(Date.now() / 1000);
+    // O mesmo link não entra em canais diferentes sem decisão explícita.
+    await ensureMultiChannelTables(env);
+    const other=await env.DB.prepare('SELECT channel_id FROM channel_offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
+    if(other)return fail('Este link já pertence a outro canal. Use ofertas diferentes em cada canal.',409);
     try {
       const result = await env.DB.prepare('INSERT INTO offers (title,affiliate_url,category,price_cents,old_price_cents,created_at) VALUES (?,?,?,?,?,?)')
         .bind(data.title, data.affiliate_url, data.category, data.price_cents, data.old_price_cents, now).run();
@@ -327,6 +359,7 @@ export default {
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(runScheduled(env).catch(error => console.error('Publicador:', error?.message)));
     ctx.waitUntil(runWhatsAppScheduled(env).catch(error => console.error('WhatsApp:', error?.message)));
+    ctx.waitUntil(runMultiChannelScheduled(env).catch(error => console.error('Canais extras:', error?.message)));
   }
 };
 export { runScheduled, router };

@@ -6,12 +6,61 @@ export function renderPage() {
     <section id="dashboard" class="hidden">
       <div class="intro"><div><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span><h1>Suas ofertas, no ritmo certo.</h1><p>Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.</p></div><div class="profile"><span>Perfil afiliado</span><b>rykellmy_007</b><span id="channel-label">Destino Telegram: @achadinhosmlcr</span></div></div>
       <div id="notice" class="feedback" role="status"></div>
+      <section class="card channels-panel" id="channels-panel">
+        <div class="section-header"><div><h2>📣 Central multicanal do Telegram</h2>
+          <p>Gerencie vários canais com filas, categorias, bots, horários e históricos separados. Seu canal atual está preservado como canal principal.</p></div>
+          <button id="channel-create-toggle" class="outline" type="button">+ Adicionar canal</button>
+        </div>
+        <label>Canal que deseja administrar
+          <select id="channel-select" aria-label="Selecione um canal do Telegram"><option value="1">Canal principal</option></select>
+        </label>
+        <div id="channel-creation" class="channel-create hidden">
+          <h2>Adicionar canal do Telegram</h2>
+          <p class="hint">Cria um canal independente, desligado por padrão. O bot precisa ser administrador com permissão de publicar.</p>
+          <form id="channel-create-form">
+            <div class="field-grid">
+              <label>Nome para identificar<input name="name" required maxlength="80" placeholder="Ex.: Achadinhos Eletrônicos"></label>
+              <label>Canal público<input name="telegram_chat_id" required placeholder="https://t.me/seucanal"></label>
+              <label>Categoria do canal<input name="category" required maxlength="60" value="Geral" placeholder="Ex.: Eletrônicos"></label>
+              <label>Qual bot usar?
+                <select name="bot_mode" id="new-channel-bot-mode">
+                  <option value="shared">Usar bot principal</option>
+                  <option value="dedicated">Bot exclusivo deste canal</option>
+                </select>
+              </label>
+            </div>
+            <label id="new-channel-bot-wrap" class="hidden">Token do bot exclusivo (BotFather)
+              <input name="bot_token" type="password" autocomplete="new-password" placeholder="Cole o token do novo bot, se já tiver">
+            </label>
+            <p class="hint">Não envie tokens pelo chat. Tokens exclusivos são criptografados no banco e nunca exibidos de volta. O canal novo não compartilha ofertas com os outros.</p>
+            <div class="actions"><button class="primary" type="submit">Criar canal desativado</button><button class="outline" id="channel-create-cancel" type="button">Cancelar</button></div>
+            <p id="channel-create-feedback" class="feedback" role="status"></p>
+          </form>
+        </div>
+      </section>
       <div class="metric-grid"><div class="metric card"><span>Prontas para publicar</span><strong id="count-ready">0</strong></div><div class="metric card"><span>Publicadas</span><strong id="count-published">0</strong></div><div class="metric card"><span>Em revisão</span><strong id="count-needs_review">0</strong></div><div class="metric card"><span>Total cadastrado</span><strong id="count-total">0</strong></div></div>
       <div class="main-grid">
         <section class="card settings"><div class="section-header"><div><h2>Automação</h2><p>O envio automático começa desligado por segurança.</p></div><div class="symbol">⚙</div></div>
           <form id="settings-form">
+            <div id="channel-extra-settings" class="channel-extra-settings hidden">
+              <h2>Configurações exclusivas deste canal</h2>
+              <div class="field-grid">
+                <label>Nome do canal<input id="channel-name" maxlength="80" placeholder="Nome no painel"></label>
+                <label>Categoria das ofertas<input id="channel-category" maxlength="60" placeholder="Ex.: Eletrônicos"></label>
+                <label>Bot responsável
+                  <select id="channel-bot-mode">
+                    <option value="shared">Usar bot principal</option>
+                    <option value="dedicated">Bot exclusivo</option>
+                  </select>
+                </label>
+                <label id="channel-bot-token-wrap" class="hidden">Novo token do BotFather
+                  <input id="channel-bot-token" type="password" autocomplete="new-password" placeholder="Vazio mantém o token salvo">
+                </label>
+              </div>
+              <p class="hint">Se alterar o bot ou destino, a automação será pausada para nova autorização. Tokens exclusivos ficam criptografados, sem aparecer na tela.</p>
+            </div>
             <label>Canal público do Telegram<input type="text" id="telegram_chat_id" name="telegram_chat_id" placeholder="https://t.me/seucanal" required autocomplete="off"></label>
-            <p class="hint">Cole o link público do NOVO canal. O bot @Crjornadabot precisa ser administrador com permissão para publicar. Ao trocar de destino, a automação será pausada até nova confirmação.</p>
+            <p class="hint">Cole o link público do canal. O bot selecionado deve ser administrador com permissão para publicar. Ao trocar de destino, a automação será pausada até nova confirmação.</p>
             <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este canal público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
             <label class="check-row"><input type="checkbox" id="telegram_enabled"><span><b>Habilitar publicação no Telegram</b><small>Exige token do BotFather configurado como segredo.</small></span></label>
             <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Iniciar automação</b><small>Usará apenas os links oficiais previamente cadastrados.</small></span></label>
@@ -22,13 +71,13 @@ export function renderPage() {
             <p id="telegram-test-feedback" class="feedback" role="status" aria-live="polite"></p>
           </form>
         </section>
-        <section class="card add-offer"><div class="section-header"><div><h2>Adicionar oferta</h2><p>Somente links gerados na sua conta do Mercado Livre.</p></div><div class="symbol">＋</div></div>
+        <section class="card add-offer"><div class="section-header"><div><h2>Adicionar oferta</h2><p>Somente links gerados na sua conta do Mercado Livre. A oferta entra exclusivamente na fila do canal selecionado.</p></div><div class="symbol">＋</div></div>
           <form id="offer-form"><label>Nome do produto<input name="title" required minlength="5" maxlength="180" placeholder="Ex.: Base Bauleto Gow 33 e 47 litros"></label><label>Link oficial do afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label><div class="field-grid"><label>Categoria<input name="category" placeholder="Ex.: Automotivo"></label><label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01" placeholder="79.90"></label><label>Preço anterior (opcional)<input name="old_price" type="number" min="0.01" step="0.01" placeholder="99.90"></label></div>
           <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
           <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
       <section class="card whatsapp-panel" id="whatsapp">
-        <div class="section-header"><div><h2>🟢 WhatsApp • Evolution API</h2><p>Compartilhe no seu grupo as ofertas já publicadas no Telegram, sem recadastrar os links.</p></div><span id="whatsapp-badge" class="tag">Desligado</span></div>
+        <div class="section-header"><div><h2>🟢 WhatsApp • Evolution API</h2><p>Compartilhe no seu grupo as ofertas já publicadas no canal principal do Telegram, sem recadastrar os links.</p></div><span id="whatsapp-badge" class="tag">Desligado</span></div>
         <p class="hint">Use a Evolution API instalada na sua própria VPS. O WhatsApp não oficial pode sofrer bloqueios; não permite disparos privados ou importação de contatos. O grupo deve ser público, aberto e cadastrado como mídia na Central de Afiliados.</p>
         <p class="hint" id="whatsapp-server-status">Verificando configuração do servidor...</p>
         <form id="whatsapp-form" class="whatsapp-form">
@@ -83,15 +132,15 @@ export function renderPage() {
       </section>
       <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
       <section class="card history"><div class="section-header"><div><h2>Atividade recente</h2><p>Registros de tentativas, publicações e mudanças.</p></div></div><div id="log-list" class="logs">Ainda não há eventos.</div></section>
-      <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram: configurável • WhatsApp e geração automática de links: ainda não integrados.</footer>
+      <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram multicanal • WhatsApp com Evolution API • Busca e links automáticos aguardam integração oficial.</footer>
     </section>
   </main></body></html>`;
 }
 
 export const CSS = `
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
-@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
+*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.channels-panel{padding:22px;margin-bottom:16px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
+@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 `;
 
 export const CLIENT_JS = `
@@ -99,6 +148,7 @@ export const CLIENT_JS = `
 const $ = id => document.getElementById(id);
 const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const toDate = s => s ? new Date(s*1000).toLocaleString('pt-BR') : '—';
+let currentChannelId=1;
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 async function call(path, opts={}) {
   const init = {...opts, credentials: 'same-origin'};
@@ -165,14 +215,42 @@ async function refreshWhatsApp(){
 }
 async function refresh(){
   try{
-    const data=await call('/api/state');view(true);
+    const channelList=await call('/api/channels');
+    const channels=channelList.channels||[];
+    if(!channels.some(c=>c.id===currentChannelId))currentChannelId=1;
+    const options=$('channel-select');
+    options.innerHTML=channels.map(c=>'<option value="'+Number(c.id)+'">'+escape(c.name)+' • '+escape(c.telegram_chat_id)+(c.id===1?' (atual)':'')+'</option>').join('');
+    options.value=String(currentChannelId);
+    const data=await call(currentChannelId===1?'/api/state':'/api/channels/'+currentChannelId+'/state');
+    view(true);
     const s=data.settings;
     $('telegram_chat_id').value=s.telegram_chat_id||'';
+    const isExtra=currentChannelId!==1;
+    $('channel-extra-settings').classList.toggle('hidden',!isExtra);
+    if(isExtra){
+      $('channel-name').value=s.name||'';
+      $('channel-category').value=s.category||'Geral';
+      $('channel-bot-mode').value=s.bot_mode||'shared';
+      $('channel-bot-token-wrap').classList.toggle('hidden',s.bot_mode!=='dedicated');
+      $('channel-bot-token').value='';
+    }
+    const categoryInput=$('offer-form').elements.category;
+    if(isExtra&&s.category!=='Geral'){
+      categoryInput.value=s.category;
+      categoryInput.readOnly=true;
+    }else{
+      categoryInput.readOnly=false;
+      if(categoryInput.value&&isExtra)categoryInput.value='';
+    }
     $('channel-label').textContent='Destino Telegram: '+(s.telegram_chat_id||'não configurado');
     for(const k of ['channel_registered','telegram_enabled','automation_enabled']) $(k).checked=!!s[k];
     for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) $(k).value=s[k];
     $('top-status').textContent=s.automation_enabled?'Robô ligado':'Robô desligado';
-    $('token-state').textContent=data.telegram_token_configured?'✓ Segredo do BotFather configurado no servidor.':'⚠ Falta configurar TELEGRAM_BOT_TOKEN no servidor.';
+    $('token-state').textContent=currentChannelId===1
+      ?(data.telegram_token_configured?'✓ Bot principal configurado no servidor.':'⚠ Falta configurar TELEGRAM_BOT_TOKEN no servidor.')
+      :(s.bot_mode==='shared'
+        ?(data.telegram_token_configured?'✓ Usando o bot principal.':'⚠ O bot principal ainda não tem token.')
+        :(data.telegram_token_configured?'✓ Token exclusivo criptografado e disponível.':'⚠ Cadastre o token exclusivo do BotFather.'));
     const counts=Object.fromEntries(data.counts.map(x=>[x.status,x.total]));
     for(const k of ['ready','published','needs_review']) $('count-'+k).textContent=counts[k]||0;
     $('count-total').textContent=Object.values(counts).reduce((a,b)=>a+b,0);
@@ -195,6 +273,37 @@ for(let h=0;h<=24;h++){
   if(h<24) $('start_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
   if(h>0) $('end_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
 }
+$('channel-select').addEventListener('change',async()=>{
+  currentChannelId=Number($('channel-select').value)||1;
+  notice('');
+  await refresh();
+});
+$('channel-create-toggle').addEventListener('click',()=>{
+  $('channel-creation').classList.toggle('hidden');
+});
+$('channel-create-cancel').addEventListener('click',()=>{
+  $('channel-creation').classList.add('hidden');
+});
+$('new-channel-bot-mode').addEventListener('change',()=>{
+  $('new-channel-bot-wrap').classList.toggle('hidden',$('new-channel-bot-mode').value!=='dedicated');
+});
+$('channel-bot-mode').addEventListener('change',()=>{
+  $('channel-bot-token-wrap').classList.toggle('hidden',$('channel-bot-mode').value!=='dedicated');
+});
+$('channel-create-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const body=Object.fromEntries(new FormData(e.target));
+  if(body.bot_mode!=='dedicated')delete body.bot_token;
+  try{
+    const result=await call('/api/channels',{method:'POST',body:JSON.stringify(body)});
+    currentChannelId=result.id;
+    e.target.reset();
+    $('new-channel-bot-wrap').classList.add('hidden');
+    $('channel-creation').classList.add('hidden');
+    await refresh();
+    notice('Canal criado e selecionado! Adicione seu bot, confirme o cadastro público e habilite as publicações quando estiver pronto.');
+  }catch(error){notice(error.message,true,'channel-create-feedback');}
+});
 $('login-form').addEventListener('submit',async e=>{
   e.preventDefault();notice('',false,'login-error');
   try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await refresh();}
@@ -204,12 +313,22 @@ $('logout').addEventListener('click',async()=>{try{await call('/api/logout',{met
 $('settings-form').addEventListener('submit',async e=>{
   e.preventDefault();const body={telegram_chat_id:$('telegram_chat_id').value};for(const k of ['channel_registered','telegram_enabled','automation_enabled']) body[k]=$(k).checked;
   for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) body[k]=Number($(k).value);
-  try{const saved=await call('/api/settings',{method:'POST',body:JSON.stringify(body)});notice(saved.channel_changed?'Novo canal salvo e validado. Publicações pausadas: confirme o cadastro do canal no Mercado Livre, marque Canal registrado e permitido, habilite Telegram e salve novamente.':'Configurações salvas.');await refresh();}
+  if(currentChannelId!==1){
+    body.name=$('channel-name').value;
+    body.category=$('channel-category').value;
+    body.bot_mode=$('channel-bot-mode').value;
+    if($('channel-bot-token').value.trim())body.bot_token=$('channel-bot-token').value.trim();
+  }
+  try{const saved=await call(currentChannelId===1?'/api/settings':'/api/channels/'+currentChannelId+'/settings',{method:'POST',body:JSON.stringify(body)});notice(saved.channel_changed?'Novo canal salvo e validado. Publicações pausadas: confirme o cadastro do canal no Mercado Livre, marque Canal registrado e permitido, habilite Telegram e salve novamente.':'Configurações salvas.');await refresh();}
   catch(err){notice(err.message,true);}
 });
 $('offer-form').addEventListener('submit',async e=>{
   e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.owner_confirmation=$('offer-form').elements.owner_confirmation.checked;
-  try{await call('/api/offers',{method:'POST',body:JSON.stringify(data)});e.target.reset();notice('Link oficial cadastrado na fila.');await refresh();}
+  try{
+    const endpoint=currentChannelId===1?'/api/offers':'/api/channels/'+currentChannelId+'/offers';
+    await call(endpoint,{method:'POST',body:JSON.stringify(data)});
+    e.target.reset();notice('Oferta cadastrada somente na fila do canal selecionado.');await refresh();
+  }
   catch(err){notice(err.message,true);}
 });
 $('wa-auto-connect').addEventListener('click',async()=>{
@@ -297,7 +416,7 @@ $('coupon-form').addEventListener('submit',async e=>{
   const body=Object.fromEntries(new FormData(e.target));
   body.owner_confirmation=e.target.elements.owner_confirmation.checked;
   try{
-    await call('/api/coupons',{method:'POST',body:JSON.stringify(body)});
+    await call(currentChannelId===1?'/api/coupons':'/api/channels/'+currentChannelId+'/coupons',{method:'POST',body:JSON.stringify(body)});
     notice('Cupom salvo. A validade será verificada automaticamente antes da publicação; a elegibilidade deve ser conferida no carrinho.',false,'coupon-feedback');
     await refresh();
   }catch(error){notice(error.message,true,'coupon-feedback');}
@@ -309,7 +428,7 @@ $('test-telegram').addEventListener('click',async()=>{
   btn.textContent='Testando conexão...';
   notice('Verificando envio para '+$('telegram_chat_id').value+'...',false,'telegram-test-feedback');
   try{
-    const result=await call('/api/test-telegram',{method:'POST',body:'{}'});
+    const result=await call(currentChannelId===1?'/api/test-telegram':'/api/channels/'+currentChannelId+'/test',{method:'POST',body:'{}'});
     notice('✅ Mensagem enviada ao canal! ID do Telegram: '+result.message_id,false,'telegram-test-feedback');
   }catch(err){
     const msg=String(err.message||'Falha desconhecida');
@@ -331,7 +450,7 @@ $('offers-rows').addEventListener('click',async e=>{
   const id=Number(btn.dataset.id);const type=btn.dataset.action;
   const msg=type==='publish'?'Publicar este link de afiliado AGORA no canal Telegram configurado?':'Revise no canal se a oferta não saiu antes de reenfileirá-la. Confirma?';
   if(!confirm(msg))return;
-  try{const result=await call('/api/offers/'+id+'/'+type,{method:'POST',body:'{}'});notice(type==='publish'?(result.format==='photo'?'Oferta publicada com FOTO no Telegram.':'Oferta publicada em texto: foto indisponível ou não aceita pelo Telegram.'):'Oferta reenfileirada.');await refresh();}
+  try{const endpoint=currentChannelId===1?'/api/offers/'+id+'/'+type:'/api/channels/'+currentChannelId+'/offers/'+id+'/'+type;const result=await call(endpoint,{method:'POST',body:'{}'});notice(type==='publish'?(result.format==='photo'?'Oferta publicada com FOTO no Telegram.':'Oferta publicada em texto: foto indisponível ou não aceita pelo Telegram.'):'Oferta reenfileirada.');await refresh();}
   catch(err){notice(err.message,true);await refresh();}
 });
 $('refresh').addEventListener('click',refresh);
