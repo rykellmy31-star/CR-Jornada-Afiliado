@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS settings (
   automation_enabled INTEGER NOT NULL DEFAULT 0,
   telegram_enabled INTEGER NOT NULL DEFAULT 0,
   channel_registered INTEGER NOT NULL DEFAULT 0,
-  telegram_chat_id TEXT NOT NULL DEFAULT '@achadinhosml1101',
+  telegram_chat_id TEXT NOT NULL DEFAULT '@achadinhosmlcr',
   interval_minutes INTEGER NOT NULL DEFAULT 30,
   max_daily INTEGER NOT NULL DEFAULT 12,
   start_hour INTEGER NOT NULL DEFAULT 8,

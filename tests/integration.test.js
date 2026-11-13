@@ -59,13 +59,13 @@ test('fluxo completo: login → cadastro → habilitação → simulação Teleg
     const state=await (await worker.fetch(req('/api/state',{cookie}),env)).json();
     assert.equal(state.offers.length,1);
     assert.equal(state.settings.automation_enabled,0);
-    const settings={telegram_chat_id:'@achadinhosml1101',channel_registered:true,telegram_enabled:true,automation_enabled:false,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
+    const settings={telegram_chat_id:'@achadinhosmlcr',channel_registered:true,telegram_enabled:true,automation_enabled:false,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
     assert.equal((await worker.fetch(req('/api/settings',{method:'POST',body:settings,cookie}),env)).status,200);
     const testMsg=await worker.fetch(req('/api/test-telegram',{method:'POST',body:{},cookie}),env);
     assert.equal(testMsg.status,200);
     const pub=await worker.fetch(req('/api/offers/1/publish',{method:'POST',body:{},cookie}),env);
     assert.equal(pub.status,200);
-    assert.equal(lastPayload.chat_id,'@achadinhosml1101');
+    assert.equal(lastPayload.chat_id,'@achadinhosmlcr');
     assert.ok(lastPayload.text.includes(offer.affiliate_url));
     assert.equal(lastPayload.reply_markup.inline_keyboard[0][0].url,offer.affiliate_url);
     assert.equal(calls,2); // um teste + uma oferta
@@ -222,6 +222,31 @@ test('cupom cadastrado entra automaticamente na oferta e deixa de aparecer depoi
   }finally{globalThis.fetch=native;DB.close();}
 });
 
+test('migra grupo antigo para novo canal preservando ofertas e desliga envios',async()=>{
+  const DB=dbMock();
+  try{
+    DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosml1101',automation_enabled=1,telegram_enabled=1,channel_registered=1 WHERE id=1").run();
+    DB.prepare("INSERT INTO offers (title,affiliate_url,category,created_at) VALUES (?,?,?,?)")
+      .bind('Oferta antiga preservada','https://meli.la/OLDTEST001','Geral',Math.floor(Date.now()/1000)).run();
+    const env={DB,ADMIN_PASSWORD:'senha_super_forte_123',SESSION_SECRET:'segredo_de_32_caracteres_para_teste',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+    const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    const response=await worker.fetch(req('/api/state',{cookie}),env);
+    assert.equal(response.status,200);
+    const state=await response.json();
+    assert.equal(state.settings.telegram_chat_id,'@achadinhosmlcr');
+    assert.equal(state.settings.automation_enabled,0);
+    assert.equal(state.settings.telegram_enabled,0);
+    assert.equal(state.settings.channel_registered,0);
+    assert.equal(state.offers.length,1);
+    assert.equal(state.offers[0].title,'Oferta antiga preservada');
+    const before=DB.prepare("SELECT COUNT(*) AS total FROM logs WHERE event='channel_migrated'").first().total;
+    assert.equal(before,1);
+    await worker.fetch(req('/api/state',{cookie}),env);
+    assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM logs WHERE event='channel_migrated'").first().total,1);
+  }finally{DB.close();}
+});
+
 test('troca de canal público pausa a automação, limpa confirmação anterior e valida o destino', async()=>{
   const DB=dbMock();const native=globalThis.fetch;
   let checkedChat='';
@@ -269,6 +294,6 @@ test('rejeita grupo do Telegram ao tentar configurar novo canal', async()=>{
     const response=await worker.fetch(req('/api/settings',{method:'POST',body,cookie}),env);
     assert.equal(response.status,400);
     assert.match((await response.json()).error,/não um canal/);
-    assert.equal(DB.prepare('SELECT telegram_chat_id AS destination FROM settings WHERE id=1').first().destination,'@achadinhosml1101');
+    assert.equal(DB.prepare('SELECT telegram_chat_id AS destination FROM settings WHERE id=1').first().destination,'@achadinhosmlcr');
   }finally{globalThis.fetch=native;DB.close();}
 });

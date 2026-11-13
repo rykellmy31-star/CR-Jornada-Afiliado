@@ -52,7 +52,13 @@ async function log(env, event, detail = '', offerId = null) {
   await env.DB.prepare('INSERT INTO logs (offer_id,event,detail,created_at) VALUES (?,?,?,?)')
     .bind(offerId, event, String(detail).slice(0, 400), Math.floor(Date.now() / 1000)).run();
 }
-async function readSettings(env) { return env.DB.prepare('SELECT * FROM settings WHERE id=1').first(); }
+async function readSettings(env) {
+  // Migração única e segura do grupo antigo para o novo canal informado pelo proprietário.
+  // Não altera outros canais configurados nem reativa disparos sem nova confirmação.
+  const updated = await env.DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr', automation_enabled=0, telegram_enabled=0, channel_registered=0, updated_at=unixepoch() WHERE id=1 AND telegram_chat_id='@achadinhosml1101'").run();
+  if (updated.meta?.changes === 1) await log(env, 'channel_migrated', 'Destino alterado para @achadinhosmlcr; envios pausados para validação.');
+  return env.DB.prepare('SELECT * FROM settings WHERE id=1').first();
+}
 function requireConfigured(env) {
   if (!env.DB || !env.ADMIN_PASSWORD || !env.SESSION_SECRET) throw Object.assign(new Error('Configure DB, ADMIN_PASSWORD e SESSION_SECRET na Cloudflare.'), { status: 503 });
 }

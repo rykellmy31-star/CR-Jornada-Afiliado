@@ -35,7 +35,7 @@ test('respeita botão de pausa, limites e intervalo',()=>{
 });
 test('mensagem contém aviso de publicidade e URL fica no botão, sem inventar preço atual',()=>{
   const offer={title:'Base Bauleto GOW 33 litros',affiliate_url:'https://meli.la/2bsHW5y',price_cents:5490,old_price_cents:7990,created_at:1000};
-  const payload=telegramPayload(offer,'@achadinhosml1101',Date.parse('2026-11-12T15:00:00Z'));
+  const payload=telegramPayload(offer,'@achadinhosmlcr',Date.parse('2026-11-12T15:00:00Z'));
   assert.match(payload.text,/Publicidade/);
   assert.doesNotMatch(payload.text,/54,90/); // Preço informado há muito tempo não é tratado como atual
   assert.equal(payload.reply_markup.inline_keyboard[0][0].url,'https://meli.la/2bsHW5y');
