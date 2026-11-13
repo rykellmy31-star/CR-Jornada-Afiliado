@@ -261,11 +261,6 @@ export async function runWhatsAppScheduled(env){
   await ensureWhatsAppTables(env);
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
-  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule WHERE id=1').first();
-  const timestamp=nowSec();
-  const minGap=schedule.interval_minutes*60;
-  if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
-    return {skipped:'interval'};
   await ensureCouponTable(env);
   const offer=await env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
     c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,
@@ -275,6 +270,11 @@ export async function runWhatsAppScheduled(env){
     WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
     ORDER BY o.published_at ASC,o.id ASC LIMIT 1`).bind(cfg.group_jid,cfg.started_at).first();
   if(!offer)return {skipped:'empty'};
+  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule WHERE id=1').first();
+  const timestamp=nowSec();
+  const minGap=schedule.interval_minutes*60;
+  if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
+    return {skipped:'interval'};
   // Reserva atomicamente o próximo envio, inclusive entre execuções concorrentes.
   const slot=await env.DB.prepare('UPDATE whatsapp_schedule SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
     .bind(timestamp,timestamp-minGap).run();

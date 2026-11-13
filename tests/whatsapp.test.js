@@ -316,8 +316,8 @@ test('intervalo exclusivo do WhatsApp controla os envios sem mudar o Telegram',a
     DB.prepare('UPDATE whatsapp_schedule SET last_attempt_at=? WHERE id=1').bind(now-121*60).run();
     assert.equal((await runWhatsAppScheduled(env)).status,'sent');
     assert.equal(calls.length,2);
-    assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').get().interval_minutes,15);
-    assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM whatsapp_deliveries WHERE status='sent'").get().total,2);
+    assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').first().interval_minutes,15);
+    assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM whatsapp_deliveries WHERE status='sent'").first().total,2);
   }finally{globalThis.fetch=native;DB.close();}
 });
 
