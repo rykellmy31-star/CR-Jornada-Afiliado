@@ -15,7 +15,7 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 
 ## O que não está implementado (não confundir com sistema em produção)
 
-- Busca automática de produtos do catálogo: **Radar preparado via API oficial /products/search e OAuth**, a ser autorizado pelo proprietário na Cloudflare. Os resultados são sugestões, não ofertas verificadas.
+- Busca automática de produtos: removida a pedido do proprietário; o robô continua publicando somente ofertas cadastradas com links oficiais de afiliado.
 - Geração automática de novos links de afiliado: **não disponível**; depende de método autorizado pelo Mercado Livre. Produtos pesquisados jamais são publicados como links afiliados até cadastro da URL oficial.
 - WhatsApp: ainda não há disparos; o grupo de convite não é prova de elegibilidade de canal público.
 - Sincronização automática de preços e estoque. O painel somente usa preços digitados, com a proteção de exibição após 6h.
@@ -95,39 +95,8 @@ Abra **Automação** no painel e cole o link público do novo canal em **Canal p
 Endereço público informado: https://t.me/achadinhosmlcr (canal **ACHADINHOS ML (CR)**). A primeira consulta ao banco D1 feita pela nova versão migra **somente** o destino armazenado `@achadinhosml1101` para `@achadinhosmlcr` e desliga publicação/automação, exigindo nova confirmação do canal na Central de Afiliados do Mercado Livre. Não são apagados produtos, filas, cupons ou histórico. O token do BotFather e a base D1 não precisam ser recriados. A integração deve ser testada no painel após adicionar @Crjornadabot como administrador do canal, com permissão de publicar. Se o destino no banco já for diferente, a migração não o sobrescreve.
 
 
-## Radar automático de produtos do catálogo
+## Remoção do Radar de Produtos (13/11/2026)
 
-O Radar pesquisa periodicamente palavras-chave no catálogo oficial via API documentada; organiza os resultados e evita duplicações. Não faz scraping, não calcula descontos e nunca publica sugestões como se já fossem links de afiliado. Para transformar uma sugestão em anúncio, abra o produto, gere o link oficial na Central do Afiliado e cadastre na fila.
+O Radar de Produtos e suas modalidades Google Alertas (RSS) e API de catálogo foram retirados do painel, da API e do agendamento automático. Os dados antigos do Radar permanecem nas tabelas históricas do D1, sem consultas ou escrita pela versão atual. **Não apague as tabelas, a fila de ofertas, os cupons nem os dados do Telegram.** O Cron de 5 minutos foi mantido exclusivamente para as publicações da fila previamente autorizadas.
 
-### Conectar o Mercado Livre (OAuth)
-
-1. Crie um aplicativo autorizado no DevCenter do Mercado Livre com leitura e offline_access, quando disponíveis. A API de catálogo é voltada a vendedores e pode ser negada à conta de afiliado.
-2. Configure no aplicativo a URL Redirect URI mostrada no painel Radar; termina em `/api/discovery/callback` e precisa corresponder exatamente ao endereço do Worker.
-3. Na Cloudflare, salve três Secrets: `MELI_APP_ID` (APP ID), `MELI_APP_SECRET` (Secret Key) e `MELI_TOKEN_KEY` (32 bytes aleatórios em Base64).
-4. No painel, clique em "Conectar Mercado Livre (OAuth)" e autorize no site oficial. Os tokens de acesso e renovação são guardados criptografados com AES-GCM no D1. Guarde sua chave MELI_TOKEN_KEY.
-5. Defina até 12 palavras-chave, intervalo de 1 a 6 horas e ative "Pesquisar automaticamente".
-6. Abra "Produtos encontrados", consulte o produto e gere o link de afiliado. Clique em "Criar oferta" para preencher título/categoria e então informe o link oficial. Os resultados do catálogo não são considerados promoções de preço verificado.
-
-Em caso de erro de autorização ou permissão, o Radar será pausado sem interferir nas publicações existentes do Telegram.
-
-### Isolamento e segurança
-
-O Radar cria somente as tabelas `discovery_settings`, `discovered_products`, `discovery_oauth` e `discovery_oauth_states` no D1 já existente. O histórico, os cupons, as ofertas, as senhas, o token do Telegram e o destino `@achadinhosmlcr` são preservados. OAuth tem state aleatório de uso único e expiração de 10 minutos; tokens ficam criptografados. A renovação de tokens ocorre automaticamente quando o Mercado Livre autoriza o aplicativo.
-
-Fontes: https://developers.mercadolivre.com.br/buscador-de-produtos ; https://developers.mercadolivre.com.br/autenticacao-e-autorizacao ; https://developers.mercadolivre.com.br/pt_br/termos-e-condicoes ; https://www.mercadolivre.com.br/l/afiliados-gere-seus-links
-
-
-## Radar sem aplicativo do Mercado Livre — Google Alertas (RSS)
-
-Existe agora uma segunda modalidade no **Radar de Produtos**, usando feeds RSS do [Google Alertas](https://www.google.com/alerts). Não exige conta de desenvolvedor, Client ID ou chaves do Mercado Livre. A alternativa OAuth original continua disponível opcionalmente.
-
-Para criar o feed RSS:
-1. Entre em https://www.google.com/alerts e faça login na sua conta Google.
-2. Crie um alerta com uma consulta como `site:mercadolivre.com.br/p/ "fone bluetooth"`. Também pode usar outras palavras ou termos OR, conforme o Google Alertas aceitar.
-3. Em "Mostrar opções", selecione Brasil, idioma português e "Entregar para" → Feed RSS. Se RSS estiver indisponível, verifique as configurações de resumo/horário de entrega e a frequência "Quando disponível".
-4. Crie o alerta e clique no ícone RSS ao lado do alerta para copiar a URL que começa com `https://www.google.com/alerts/feeds/`.
-5. No Radar, cole o endereço em **Google Alertas RSS**, salve, selecione a frequência e ative **Pesquisar automaticamente**. Teste em **Pesquisar agora**. O sistema só registra sugestões de páginas de produtos do Mercado Livre que o Google encontrar.
-
-O RSS não descobre ofertas em tempo real, não verifica cupons e preços, nem gera links de afiliado. Feeds novos podem estar vazios por algum tempo. As sugestões **nunca** entram na fila de publicações automaticamente; o link oficial comissionado precisa ser cadastrado separadamente. O sistema nunca transforma um link comum do produto em link de afiliado, evitando a falsa promessa de comissão.
-
-Segurança: a URL RSS deve corresponder ao formato de Google Alertas, consultas externas seguem apenas esse domínio e não seguem redirecionamentos, links extraídos devem apontar para produtos MLB em domínios permitidos, deduplicação por hash de URL, e limite de 30 resultados por feed. A alternativa OAuth permanece isolada. Sem novas variáveis secretas e sem execução manual de migração.
+Quando a aplicação oficial do Mercado Livre estiver disponível, uma nova integração poderá ser desenvolvida separadamente, sem reativar o Radar antigo.

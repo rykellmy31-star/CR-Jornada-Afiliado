@@ -1,7 +1,6 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
-import { createOAuthUrl, completeOAuth, getDiscoveryState, setDiscoveryConfig, setDiscoveryRss, dismissDiscovery, disconnectDiscovery, searchCatalog } from './discovery.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 
 const COOKIE = 'crj_auth';
@@ -181,17 +180,6 @@ async function router(request, env) {
   if (method === 'GET' && u.pathname === '/styles.css') return new Response(CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' } });
   if (!u.pathname.startsWith('/api/')) return fail('Não encontrado.', 404);
   requireConfigured(env);
-  // O callback OAuth é público, protegido pelo state aleatório de uso único,
-  // pois o cookie SameSite=Strict não acompanha retorno do Mercado Livre.
-  if (method==='GET' && u.pathname==='/api/discovery/callback') {
-    try {
-      if (u.searchParams.get('error')) throw new Error('Autorização recusada pelo Mercado Livre.');
-      await completeOAuth(env, u.origin, u.searchParams.get('code'), u.searchParams.get('state'));
-      return new Response(null,{status:302,headers:{location:'/?meli=connected','cache-control':'no-store'}});
-    } catch (error) {
-      return new Response('Não foi possível conectar o Mercado Livre. Confira o aplicativo e tente novamente.',{status:400,headers:{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'}});
-    }
-  }
   if (method !== 'GET' && method !== 'HEAD') {
     if (request.headers.get('origin') !== u.origin) return fail('Origem não autorizada.', 403);
     if (!request.headers.get('content-type')?.startsWith('application/json')) return fail('Envie JSON.', 415);
@@ -214,35 +202,6 @@ async function router(request, env) {
       env.DB.prepare('SELECT event,detail,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 20').all()
     ]);
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
-  }
-  if (u.pathname === '/api/discovery/state' && method === 'GET') {
-    return json(await getDiscoveryState(env));
-  }
-  if (u.pathname === '/api/discovery/config' && method === 'POST') {
-    try { return json(await setDiscoveryConfig(env,await getBody(request))); }
-    catch(error) { return fail(String(error.message||error)); }
-  }
-  if (u.pathname === '/api/discovery/rss' && method === 'POST') {
-    try { return json(await setDiscoveryRss(env,await getBody(request))); }
-    catch (error) { return fail(String(error.message||error)); }
-  }
-  if (u.pathname === '/api/discovery/connect' && method === 'POST') {
-    try { return json({ url: await createOAuthUrl(env,u.origin) }); }
-    catch(error) { return fail(String(error.message||error)); }
-  }
-  if (u.pathname === '/api/discovery/search' && method === 'POST') {
-    const result=await searchCatalog(env,{force:true});
-    return result.error ? fail(result.error,503) : json(result);
-  }
-  if (u.pathname === '/api/discovery/dismiss' && method === 'POST') {
-    try {
-      const body=await getBody(request);
-      return json(await dismissDiscovery(env,body.product_id));
-    }catch(error){return fail(String(error.message||error));}
-  }
-  if (u.pathname === '/api/discovery/disconnect' && method === 'POST') {
-    await disconnectDiscovery(env);
-    return json({ok:true});
   }
   if (u.pathname === '/api/offers' && method === 'POST') {
     let data;
@@ -338,7 +297,6 @@ export default {
   },
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(runScheduled(env).catch(error => console.error('Publicador:', error?.message)));
-    ctx.waitUntil(searchCatalog(env).catch(error => console.error('Radar:', error?.message)));
   }
 };
 export { runScheduled, router };
