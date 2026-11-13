@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import {
   ensureDiscoveryTables, parseKeywords, normalizeCatalogResult, createOAuthUrl,
-  completeOAuth, getDiscoveryState, setDiscoveryConfig, dismissDiscovery, searchCatalog, disconnectDiscovery
+  completeOAuth, getDiscoveryState, setDiscoveryConfig, setDiscoveryRss, validateGoogleAlertsFeed, parseGoogleAlertsEntries, googleAlertProductUrl, dismissDiscovery, searchCatalog, disconnectDiscovery
 } from '../src/discovery.js';
 
 function dbMock() {
@@ -128,5 +128,59 @@ test('permissão negada pela API pausa pesquisas sem publicar produto',async()=>
   const state=await getDiscoveryState(env);
   assert.equal(state.settings.enabled,0);
   assert.equal(state.products.length,0);
+ }finally{globalThis.fetch=oldFetch;db.close();}
+});
+
+
+test('Google Alertas RSS aceita apenas endereço oficial e extrai links reais',()=>{
+ const feed='https://www.google.com/alerts/feeds/1234567890/9876543210';
+ assert.equal(validateGoogleAlertsFeed(feed),feed);
+ for(const invalid of [
+  'https://evil.com/alerts/feeds/1234567890/9876543210',
+  'https://www.google.com.evil.com/alerts/feeds/1234567890/9876543210',
+  'http://www.google.com/alerts/feeds/1234567890/9876543210',
+  'https://www.google.com/url?q=https://www.mercadolivre.com.br/p/MLB123456',
+  'https://www.google.com/alerts/feeds/1234567890/9876543210?debug=1'
+ ])assert.throws(()=>validateGoogleAlertsFeed(invalid));
+ assert.equal(googleAlertProductUrl('https://www.mercadolivre.com.br/p/MLB123456789'), 'https://www.mercadolivre.com.br/p/MLB123456789');
+ assert.equal(googleAlertProductUrl('https://evil.com/p/MLB123456789'),null);
+ const xml='<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Fone &amp; Bluetooth original</title><link href="https://www.google.com/url?url=https%3A%2F%2Fwww.mercadolivre.com.br%2Fp%2FMLB123456789&amp;ct=ga"/></entry><entry><title>Outro produto</title><link href="https://example.org/p/MLB12345"/></entry></feed>';
+ const parsed=parseGoogleAlertsEntries(xml);
+ assert.equal(parsed.length,1);
+ assert.equal(parsed[0].title,'Fone & Bluetooth original');
+ assert.equal(parsed[0].source_url,'https://www.mercadolivre.com.br/p/MLB123456789');
+});
+
+test('RSS automático funciona sem OAuth e nunca cadastra link de afiliado sem autorização',async()=>{
+ const db=dbMock(), env={DB:db};
+ const oldFetch=globalThis.fetch, requests=[];
+ globalThis.fetch=async (url, options={})=>{
+  requests.push(String(url));
+  assert.equal(options.redirect,'manual');
+  return new Response(
+    '<?xml version="1.0" ?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Fone de ouvido Bluetooth sem fio</title><link href="https://www.mercadolivre.com.br/p/MLB99887766"/></entry><entry><title>Fone de ouvido Bluetooth sem fio</title><link href="https://www.mercadolivre.com.br/p/MLB99887766"/></entry></feed>',
+    {status:200,headers:{'content-type':'application/atom+xml'}}
+  );
+ };
+ try {
+  const url='https://www.google.com/alerts/feeds/1234567890/9876543210';
+  await setDiscoveryRss(env,{feed_url:url});
+  const before=await getDiscoveryState(env);
+  assert.equal(before.rss_configured,true);
+  assert.equal(before.settings.enabled,0);
+  assert.equal(before.source,'google_alerts');
+  await setDiscoveryConfig(env,{enabled:true,keywords:'fone bluetooth',interval_minutes:60});
+  assert.equal((await searchCatalog(env)).added,1);
+  assert.deepEqual(await searchCatalog(env),{skipped:'interval'});
+  assert.equal(requests.length,1);
+  const state=await getDiscoveryState(env);
+  assert.equal(state.products.length,1);
+  assert.match(state.products[0].product_id,/^RSS[a-f0-9]{28}$/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+  await dismissDiscovery(env,state.products[0].product_id);
+  assert.equal((await getDiscoveryState(env)).products.length,0);
+  await setDiscoveryRss(env,{remove:true});
+  assert.equal((await getDiscoveryState(env)).rss_configured,false);
+  assert.equal((await getDiscoveryState(env)).settings.enabled,0);
  }finally{globalThis.fetch=oldFetch;db.close();}
 });
