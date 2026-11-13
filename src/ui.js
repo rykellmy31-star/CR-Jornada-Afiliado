@@ -27,6 +27,26 @@ export function renderPage() {
           <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
           <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
+      <section class="card radar-panel" id="radar">
+        <div class="section-header"><div><h2>🔎 Radar de Produtos • pesquisa automática</h2><p>Pesquisa produtos do catálogo pela API oficial do Mercado Livre, quando a conta e o aplicativo estiverem autorizados.</p></div><span class="tag" id="radar-badge">Desconectado</span></div>
+        <p class="hint"><b>Importante:</b> sugestões do catálogo não são ofertas com desconto confirmado. Nenhum resultado será publicado até você gerar e cadastrar o link oficial da sua conta de afiliado.</p>
+        <div class="radar-connection">
+          <p id="radar-connection-status">Verificando conexão com o Mercado Livre...</p>
+          <p class="hint">Cadastre na Cloudflare os Secrets <b>MELI_APP_ID</b>, <b>MELI_APP_SECRET</b> e <b>MELI_TOKEN_KEY</b> (32 bytes em Base64). No aplicativo do Mercado Livre, use este Redirect URI: <code id="radar-redirect-uri"></code>. Se a conta não tiver permissão para o catálogo, a API informará o bloqueio.</p>
+          <div class="actions"><button class="outline" type="button" id="radar-connect">Conectar Mercado Livre (OAuth)</button><button class="outline" type="button" id="radar-disconnect">Desconectar</button></div>
+        </div>
+        <form id="radar-form" class="radar-form">
+          <label>Palavras-chave que o robô vai pesquisar<textarea id="radar-keywords" rows="3" maxlength="1000" placeholder="fone bluetooth, ferramentas, air fryer"></textarea></label>
+          <div class="field-grid">
+            <label>Intervalo de pesquisa<select id="radar-interval"><option value="60">A cada 1 hora</option><option value="120">A cada 2 horas</option><option value="240">A cada 4 horas</option><option value="360">A cada 6 horas</option></select></label>
+            <label class="check-row"><input type="checkbox" id="radar-enabled"><span><b>Pesquisar automaticamente</b><small>Não publica produtos sem link de afiliado.</small></span></label>
+          </div>
+          <div class="actions"><button class="primary" type="submit">Salvar Radar</button><button class="outline" id="radar-search-now" type="button">Pesquisar agora</button></div>
+          <p id="radar-feedback" class="feedback" role="status" aria-live="polite"></p>
+        </form>
+        <div class="section-header" style="margin-top:22px"><div><h2>Produtos encontrados</h2><p>Abra o produto, gere seu link oficial no Mercado Livre e vincule à fila de ofertas.</p></div></div>
+        <div id="radar-results" class="radar-results">Nenhum produto encontrado ainda.</div>
+      </section>
       <section class="card coupon-panel">
         <div class="section-header"><div><h2>🎟️ Cupons vinculados às ofertas</h2><p>O robô inclui o cupom na publicação automaticamente quando estiver dentro da validade informada.</p></div></div>
         <p class="hint">Este painel não pesquisa contas de compradores e não testa cupons no checkout. Cadastre apenas cupons e condições que você conferiu na fonte oficial.</p>
@@ -58,14 +78,15 @@ export function renderPage() {
 
 export const CSS = `
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel{margin-top:16px}.coupon-panel{padding:22px}.coupon-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
-@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
+*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.radar-panel{margin-top:16px}.coupon-panel,.radar-panel{padding:22px}.radar-form{display:flex;flex-direction:column;gap:13px;margin-top:15px}.radar-connection{background:#f2f7fb;border:1px solid #e5edf5;border-radius:12px;padding:14px}.radar-connection code{overflow-wrap:anywhere}.radar-results{display:grid;gap:9px}.radar-result{border:1px solid #e8edf5;border-radius:12px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:12px}.radar-result strong{display:block;font-size:13px}.radar-result small{display:block;font-size:11px;margin-top:6px;color:#718099}.radar-result .actions{flex-shrink:0}.radar-result a{color:#0e867f;font-size:12px;text-decoration:none;font-weight:700}textarea{width:100%;font:inherit;padding:12px;border:1px solid #d9e1ef;border-radius:9px;resize:vertical;min-height:70px}.coupon-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
+@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.radar-panel{padding:17px}.radar-result{flex-direction:column;align-items:stretch}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 `;
 
 export const CLIENT_JS = `
 'use strict';
 const $ = id => document.getElementById(id);
 const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let radarProducts=[];
 const toDate = s => s ? new Date(s*1000).toLocaleString('pt-BR') : '—';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 async function call(path, opts={}) {
@@ -78,6 +99,29 @@ async function call(path, opts={}) {
 }
 function view(auth) { $('dashboard').classList.toggle('hidden', !auth); $('login').classList.toggle('hidden', auth); $('logout').classList.toggle('hidden', !auth); }
 function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'Publicado',needs_review:'Revisar'})[s]||s;}
+async function refreshRadar() {
+  try {
+    const d=await call('/api/discovery/state');
+    $('radar-keywords').value=d.settings.keywords||'';
+    $('radar-interval').value=String(d.settings.interval_minutes||120);
+    $('radar-enabled').checked=!!d.settings.enabled;
+    $('radar-badge').textContent=d.settings.enabled?'Radar ligado':d.connected?'Conectado (pausado)':'Desconectado';
+    $('radar-connection-status').textContent=d.connected?'✅ Mercado Livre conectado via OAuth.':'Conexão OAuth pendente.';
+    $('radar-connect').disabled=!d.app_configured;
+    $('radar-disconnect').disabled=!d.connected;
+    $('radar-search-now').disabled=!d.connected;
+    if(d.settings.last_error)notice(d.settings.last_error,true,'radar-feedback');
+    radarProducts=d.products||[];
+    $('radar-results').innerHTML=radarProducts.length?radarProducts.map(p=>
+      '<div class="radar-result"><div><strong>'+escape(p.title)+'</strong><small>'+escape(p.keyword)+' • catálogo '+escape(p.product_id)+' • ainda sem link de afiliado</small></div>'+
+      '<div class="actions"><a target="_blank" rel="noopener noreferrer nofollow" href="'+escape(p.source_url)+'">Ver no Mercado Livre</a>'+
+      '<button class="mini" data-radar="use" data-id="'+escape(p.product_id)+'">Criar oferta</button>'+
+      '<button class="mini" data-radar="dismiss" data-id="'+escape(p.product_id)+'">Dispensar</button></div></div>'
+    ).join(''):'<p class="hint">Ainda não há sugestões. Conecte uma conta autorizada e faça a primeira pesquisa.</p>';
+  } catch(error) {
+    notice('Radar: '+error.message,true,'radar-feedback');
+  }
+}
 async function refresh(){
   try{
     const data=await call('/api/state');view(true);
@@ -102,6 +146,7 @@ async function refresh(){
       return '<tr><td><a rel="noopener noreferrer" target="_blank" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+(o.coupon_kind?'<small>🎟️ Cupom informado: '+escape(o.coupon_code||'ativação no app')+' • até '+escape(o.coupon_end_day)+' (sujeito às condições)</small>':'')+ (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td><span class="tag '+escape(o.status)+'">'+statusLabel(o.status)+'</span></td><td>'+toDate(o.created_at)+'</td><td>'+action+'</td></tr>';
     }).join(''):'<tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr>';
     $('log-list').innerHTML=data.logs.length?data.logs.map(l=>'<div><span><b>'+escape(l.event)+'</b> '+escape(l.detail||'')+'</span><time>'+toDate(l.created_at)+'</time></div>').join(''):'Ainda não há eventos.';
+    await refreshRadar();
   }catch(e){ if(e.message.includes('login')){view(false);$('top-status').textContent='Aguardando login';}else notice(e.message,true); }
 }
 for(let h=0;h<=24;h++){
@@ -125,6 +170,52 @@ $('offer-form').addEventListener('submit',async e=>{
   e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.owner_confirmation=$('offer-form').elements.owner_confirmation.checked;
   try{await call('/api/offers',{method:'POST',body:JSON.stringify(data)});e.target.reset();notice('Link oficial cadastrado na fila.');await refresh();}
   catch(err){notice(err.message,true);}
+});
+$('radar-redirect-uri').textContent=window.location.origin+'/api/discovery/callback';
+$('radar-connect').addEventListener('click',async()=>{
+  try {
+    const result=await call('/api/discovery/connect',{method:'POST',body:'{}'});
+    if(!result.url.startsWith('https://auth.mercadolivre.com.br/authorization?')) throw new Error('Endereço de autorização inesperado.');
+    window.location.assign(result.url);
+  }catch(error){notice(error.message,true,'radar-feedback');}
+});
+$('radar-disconnect').addEventListener('click',async()=>{
+  if(!confirm('Desconectar o aplicativo Mercado Livre e pausar o Radar?'))return;
+  try{await call('/api/discovery/disconnect',{method:'POST',body:'{}'});notice('Conexão removida. O Radar foi pausado.',false,'radar-feedback');await refreshRadar();}
+  catch(error){notice(error.message,true,'radar-feedback');}
+});
+$('radar-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  try{
+    const body={enabled:$('radar-enabled').checked,keywords:$('radar-keywords').value,interval_minutes:Number($('radar-interval').value)};
+    await call('/api/discovery/config',{method:'POST',body:JSON.stringify(body)});
+    notice('Configurações de pesquisa salvas.',false,'radar-feedback');
+    await refreshRadar();
+  }catch(error){notice(error.message,true,'radar-feedback');}
+});
+$('radar-search-now').addEventListener('click',async()=>{
+  const b=$('radar-search-now');b.disabled=true;b.textContent='Pesquisando...';
+  try{
+    const found=await call('/api/discovery/search',{method:'POST',body:'{}'});
+    const msg=found.skipped==='interval'?'Aguarde 1 minuto entre pesquisas manuais.':'Busca concluída por '+found.keyword+': '+found.added+' novos produtos.';
+    notice(msg,false,'radar-feedback');
+    await refreshRadar();
+  }catch(error){notice(error.message,true,'radar-feedback');}
+  finally{b.disabled=false;b.textContent='Pesquisar agora';}
+});
+$('radar-results').addEventListener('click',async(event)=>{
+  const b=event.target.closest('button[data-radar]');if(!b)return;
+  const item=radarProducts.find(p=>p.product_id===b.dataset.id);if(!item)return;
+  if(b.dataset.radar==='use'){
+    $('offer-form').elements.title.value=item.title;
+    $('offer-form').elements.category.value=item.keyword;
+    $('offer-form').elements.affiliate_url.value='';
+    document.querySelector('.add-offer').scrollIntoView({behavior:'smooth'});
+    notice('Produto selecionado. Gere seu link OFICIAL de afiliado no Mercado Livre e cole no campo da oferta antes de cadastrar.',false);
+  }else if(b.dataset.radar==='dismiss'){
+    try{await call('/api/discovery/dismiss',{method:'POST',body:JSON.stringify({product_id:item.product_id})});await refreshRadar();}
+    catch(error){notice(error.message,true,'radar-feedback');}
+  }
 });
 $('coupon-kind').addEventListener('change',()=>{
   const isCode=$('coupon-kind').value==='code';
