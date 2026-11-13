@@ -17,7 +17,7 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 
 - Busca automática de produtos: removida a pedido do proprietário; o robô continua publicando somente ofertas cadastradas com links oficiais de afiliado.
 - Geração automática de novos links de afiliado: **não disponível**; depende de método autorizado pelo Mercado Livre. Produtos pesquisados jamais são publicados como links afiliados até cadastro da URL oficial.
-- WhatsApp: ainda não há disparos; o grupo de convite não é prova de elegibilidade de canal público.
+- WhatsApp: integração opcional Evolution API v2 para espelhar novas ofertas já publicadas no Telegram em um grupo público cadastrado na Central de Afiliados. Desligada por padrão e depende de credenciais autorizadas.
 - Sincronização automática de preços e estoque. O painel somente usa preços digitados, com a proteção de exibição após 6h.
 - Foto garantida para todo link: a busca de imagem depende de metadados públicos do produto e da disponibilidade da imagem na CDN, sem autenticação, scraping de páginas privadas ou contorno de bloqueios.
 - Relatórios reais de comissões: estes são consultados na Central de Afiliados do Mercado Livre.
@@ -100,3 +100,14 @@ Endereço público informado: https://t.me/achadinhosmlcr (canal **ACHADINHOS ML
 O Radar de Produtos e suas modalidades Google Alertas (RSS) e API de catálogo foram retirados do painel, da API e do agendamento automático. Os dados antigos do Radar permanecem nas tabelas históricas do D1, sem consultas ou escrita pela versão atual. **Não apague as tabelas, a fila de ofertas, os cupons nem os dados do Telegram.** O Cron de 5 minutos foi mantido exclusivamente para as publicações da fila previamente autorizadas.
 
 Quando a aplicação oficial do Mercado Livre estiver disponível, uma nova integração poderá ser desenvolvida separadamente, sem reativar o Radar antigo.
+
+
+## WhatsApp com sua Evolution API (opcional)
+
+O painel tem agora a área **WhatsApp • Evolution API**, independente do Telegram. Configure os Secrets do Worker `EVOLUTION_API_URL` (base HTTPS da VPS, sem caminho ou porta) e `EVOLUTION_API_KEY` (chave de sua instalação Evolution API v2). Esses segredos não devem ser enviados pelo chat nem colocados no repositório.
+
+No painel, informe o **nome da instância já conectada**, clique **Buscar meus grupos**, escolha seu grupo público aberto e cadastrado como mídia na Central do Mercado Livre, salve e depois confirme a autorização e ative. Mudanças de instância ou grupo exigem reconfirmação e não disparam posts antigos. O link de convite `chat.whatsapp.com/...` não substitui o ID do grupo (`@g.us`). Botão **Enviar teste ao grupo** exige clique e confirmação explícita. A configuração é criada automaticamente em tabelas separadas `whatsapp_settings` e `whatsapp_deliveries` sem mudar os demais dados.
+
+Após ativar, uma execução agendada a cada 5 minutos copia **somente novas ofertas publicadas no Telegram após a ativação**, uma por ciclo, com legenda de publicidade, link original do afiliado, cupons elegíveis e foto oficial do produto quando disponível. Nada é enviado a contatos privados. O envio pelo WhatsApp tem controle próprio de deduplicação. Falha ou resposta ambígua fica em **Revisar** e exige verificação do grupo e ação manual antes de nova tentativa. O envio do Telegram é independente.
+
+**Cuidados:** Evolution API via WhatsApp Web é não oficial e pode causar restrições na conta. O Mercado Livre proíbe divulgação para grupos fechados e mídias não declaradas; a confirmação do usuário não garante comissões. Não use para disparos em massa, listas privadas nem grupos sem consentimento. Fontes: https://www.mercadolivre.com.br/l/afiliados-onde-compartilhar-links e https://docs.evoapicloud.com/api-reference/group-controller/fetch-all-groups.

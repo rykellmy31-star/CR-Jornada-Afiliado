@@ -2,6 +2,7 @@ import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
+import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery } from './whatsapp.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -203,6 +204,27 @@ async function router(request, env) {
     ]);
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
+  if (u.pathname === '/api/whatsapp/state' && method === 'GET') {
+    return json(await getWhatsAppState(env));
+  }
+  if (u.pathname === '/api/whatsapp/groups' && method === 'GET') {
+    try {
+      const instance=u.searchParams.get('instance');
+      return json({groups:await listWhatsAppGroups(env,instance)});
+    }catch(error){return fail(String(error.message||error));}
+  }
+  if (u.pathname === '/api/whatsapp/settings' && method === 'POST') {
+    try{return json(await updateWhatsAppSettings(env,await getBody(request)));}
+    catch(error){return fail(String(error.message||error));}
+  }
+  if (u.pathname === '/api/whatsapp/test' && method === 'POST') {
+    try{return json(await testWhatsApp(env));}
+    catch(error){return fail(String(error.message||error));}
+  }
+  if (u.pathname === '/api/whatsapp/retry' && method === 'POST') {
+    try{return json(await retryWhatsAppDelivery(env,(await getBody(request)).offer_id));}
+    catch(error){return fail(String(error.message||error));}
+  }
   if (u.pathname === '/api/offers' && method === 'POST') {
     let data;
     try { data = normalizeOffer(await getBody(request)); }
@@ -297,6 +319,7 @@ export default {
   },
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(runScheduled(env).catch(error => console.error('Publicador:', error?.message)));
+    ctx.waitUntil(runWhatsAppScheduled(env).catch(error => console.error('WhatsApp:', error?.message)));
   }
 };
 export { runScheduled, router };
