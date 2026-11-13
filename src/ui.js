@@ -4,13 +4,15 @@ export function renderPage() {
   <main>
     <section id="login" class="login card"><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
     <section id="dashboard" class="hidden">
-      <div class="intro"><div><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span><h1>Suas ofertas, no ritmo certo.</h1><p>Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.</p></div><div class="profile"><span>Perfil afiliado</span><b>rykellmy_007</b><span>Grupo @achadinhosml1101</span></div></div>
+      <div class="intro"><div><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span><h1>Suas ofertas, no ritmo certo.</h1><p>Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.</p></div><div class="profile"><span>Perfil afiliado</span><b>rykellmy_007</b><span id="channel-label">Destino Telegram: configurar canal</span></div></div>
       <div id="notice" class="feedback" role="status"></div>
       <div class="metric-grid"><div class="metric card"><span>Prontas para publicar</span><strong id="count-ready">0</strong></div><div class="metric card"><span>Publicadas</span><strong id="count-published">0</strong></div><div class="metric card"><span>Em revisão</span><strong id="count-needs_review">0</strong></div><div class="metric card"><span>Total cadastrado</span><strong id="count-total">0</strong></div></div>
       <div class="main-grid">
         <section class="card settings"><div class="section-header"><div><h2>Automação</h2><p>O envio automático começa desligado por segurança.</p></div><div class="symbol">⚙</div></div>
           <form id="settings-form">
-            <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este grupo público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
+            <label>Canal público do Telegram<input type="text" id="telegram_chat_id" name="telegram_chat_id" placeholder="https://t.me/seucanal" required autocomplete="off"></label>
+            <p class="hint">Cole o link público do NOVO canal. O bot @Crjornadabot precisa ser administrador com permissão para publicar. Ao trocar de destino, a automação será pausada até nova confirmação.</p>
+            <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este canal público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
             <label class="check-row"><input type="checkbox" id="telegram_enabled"><span><b>Habilitar publicação no Telegram</b><small>Exige token do BotFather configurado como segredo.</small></span></label>
             <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Iniciar automação</b><small>Usará apenas os links oficiais previamente cadastrados.</small></span></label>
             <div class="field-grid"><label>Intervalo entre publicações<select id="interval_minutes"><option value="15">15 minutos</option><option value="30">30 minutos</option><option value="60">60 minutos</option><option value="120">120 minutos</option></select></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
@@ -80,6 +82,8 @@ async function refresh(){
   try{
     const data=await call('/api/state');view(true);
     const s=data.settings;
+    $('telegram_chat_id').value=s.telegram_chat_id||'';
+    $('channel-label').textContent='Destino Telegram: '+(s.telegram_chat_id||'não configurado');
     for(const k of ['channel_registered','telegram_enabled','automation_enabled']) $(k).checked=!!s[k];
     for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) $(k).value=s[k];
     $('top-status').textContent=s.automation_enabled?'Robô ligado':'Robô desligado';
@@ -112,9 +116,9 @@ $('login-form').addEventListener('submit',async e=>{
 });
 $('logout').addEventListener('click',async()=>{try{await call('/api/logout',{method:'POST',body:'{}'})}catch{}view(false);});
 $('settings-form').addEventListener('submit',async e=>{
-  e.preventDefault();const body={};for(const k of ['channel_registered','telegram_enabled','automation_enabled']) body[k]=$(k).checked;
+  e.preventDefault();const body={telegram_chat_id:$('telegram_chat_id').value};for(const k of ['channel_registered','telegram_enabled','automation_enabled']) body[k]=$(k).checked;
   for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) body[k]=Number($(k).value);
-  try{await call('/api/settings',{method:'POST',body:JSON.stringify(body)});notice('Configurações salvas.');await refresh();}
+  try{const saved=await call('/api/settings',{method:'POST',body:JSON.stringify(body)});notice(saved.channel_changed?'Novo canal salvo e validado. Publicações pausadas: confirme o cadastro do canal no Mercado Livre, marque Canal registrado e permitido, habilite Telegram e salve novamente.':'Configurações salvas.');await refresh();}
   catch(err){notice(err.message,true);}
 });
 $('offer-form').addEventListener('submit',async e=>{
@@ -145,22 +149,22 @@ $('coupon-form').addEventListener('submit',async e=>{
   }catch(error){notice(error.message,true,'coupon-feedback');}
 });
 $('test-telegram').addEventListener('click',async()=>{
-  if(!confirm('Enviar uma mensagem de TESTE ao grupo ACHADINHOS ML agora?'))return;
+  if(!confirm('Enviar uma mensagem de TESTE ao canal Telegram configurado agora?'))return;
   const btn=$('test-telegram');
   btn.disabled=true;
   btn.textContent='Testando conexão...';
-  notice('Verificando envio para @achadinhosml1101...',false,'telegram-test-feedback');
+  notice('Verificando envio para '+$('telegram_chat_id').value+'...',false,'telegram-test-feedback');
   try{
     const result=await call('/api/test-telegram',{method:'POST',body:'{}'});
-    notice('✅ Mensagem enviada ao grupo! ID do Telegram: '+result.message_id,false,'telegram-test-feedback');
+    notice('✅ Mensagem enviada ao canal! ID do Telegram: '+result.message_id,false,'telegram-test-feedback');
   }catch(err){
     const msg=String(err.message||'Falha desconhecida');
     const lower=msg.toLowerCase();
     let help='';
     if(lower.includes('unauthorized')||lower.includes('401')) help=' Confira o TELEGRAM_BOT_TOKEN salvo como Secret na Cloudflare.';
-    else if(lower.includes('chat not found')||lower.includes('not found')) help=' Confira se @achadinhosml1101 é o grupo correto e se o bot está nele.';
-    else if(lower.includes('bot is not a member')||lower.includes('not enough rights')||lower.includes('forbidden')) help=' Confira se @Crjornadabot está como administrador e pode publicar.';
-    else if(lower.includes('canal')||lower.includes('grupo público')) help=' Marque Canal registrado e permitido, salve e tente novamente, somente se isso for verdadeiro.';
+    else if(lower.includes('chat not found')||lower.includes('not found')) help=' Confira o endereço do novo canal e se @Crjornadabot é administrador.';
+    else if(lower.includes('bot is not a member')||lower.includes('not enough rights')||lower.includes('forbidden')) help=' Confira se @Crjornadabot tem permissão de publicar no canal.';
+    else if(lower.includes('canal')||lower.includes('grupo público')) help=' Confirme o canal público cadastrado na sua Central de Afiliados, salve e tente novamente.';
     else if(lower.includes('configure o segredo')) help=' Adicione TELEGRAM_BOT_TOKEN como Secret de produção no Worker.';
     notice('❌ Teste não enviado: '+msg+help,true,'telegram-test-feedback');
   }finally{
@@ -171,7 +175,7 @@ $('test-telegram').addEventListener('click',async()=>{
 $('offers-rows').addEventListener('click',async e=>{
   const btn=e.target.closest('button[data-action]');if(!btn)return;
   const id=Number(btn.dataset.id);const type=btn.dataset.action;
-  const msg=type==='publish'?'Publicar este link de afiliado AGORA no Telegram?':'Revise no Telegram se a oferta não saiu antes de reenfileirá-la. Confirma?';
+  const msg=type==='publish'?'Publicar este link de afiliado AGORA no canal Telegram configurado?':'Revise no canal se a oferta não saiu antes de reenfileirá-la. Confirma?';
   if(!confirm(msg))return;
   try{const result=await call('/api/offers/'+id+'/'+type,{method:'POST',body:'{}'});notice(type==='publish'?(result.format==='photo'?'Oferta publicada com FOTO no Telegram.':'Oferta publicada em texto: foto indisponível ou não aceita pelo Telegram.'):'Oferta reenfileirada.');await refresh();}
   catch(err){notice(err.message,true);await refresh();}

@@ -33,6 +33,7 @@ test('fluxo completo: login → cadastro → habilitação → simulação Teleg
   let calls=0;let lastPayload;
   const nativeFetch=globalThis.fetch;
   globalThis.fetch=async (url,init)=>{
+    if (String(url).includes('/getChat?')) return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200});
     if (String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{headers:{'content-type':'text/html'}});
     calls++;
     assert.match(String(url),/^https:\/\/api\.telegram\.org\/botTOKEN_SIMULADO\/sendMessage$/);
@@ -58,7 +59,7 @@ test('fluxo completo: login → cadastro → habilitação → simulação Teleg
     const state=await (await worker.fetch(req('/api/state',{cookie}),env)).json();
     assert.equal(state.offers.length,1);
     assert.equal(state.settings.automation_enabled,0);
-    const settings={channel_registered:true,telegram_enabled:true,automation_enabled:false,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
+    const settings={telegram_chat_id:'@achadinhosml1101',channel_registered:true,telegram_enabled:true,automation_enabled:false,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
     assert.equal((await worker.fetch(req('/api/settings',{method:'POST',body:settings,cookie}),env)).status,200);
     const testMsg=await worker.fetch(req('/api/test-telegram',{method:'POST',body:{},cookie}),env);
     assert.equal(testMsg.status,200);
@@ -83,7 +84,7 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   const DB=dbMock();
   const nativeFetch=globalThis.fetch;
   let calls=0;
-  globalThis.fetch=async(url)=>{if(String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{status:200,headers:{'content-type':'text/html'}}); calls++;return new Response(JSON.stringify({ok:true,result:{message_id:900+calls}}),{status:200});};
+  globalThis.fetch=async(url)=>{if(String(url).includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200}); if(String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{status:200,headers:{'content-type':'text/html'}}); calls++;return new Response(JSON.stringify({ok:true,result:{message_id:900+calls}}),{status:200});};
   try{
     DB.prepare("UPDATE settings SET automation_enabled=1, telegram_enabled=1, channel_registered=1, max_daily=1, interval_minutes=15, start_hour=0, end_hour=24 WHERE id=1").run();
     for(let i=0;i<2;i++) DB.prepare("INSERT INTO offers (title, affiliate_url, category,created_at) VALUES(?,?,?,?)")
@@ -102,7 +103,7 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
 });
 test('em erro da API, não repete oferta incerta sem revisão humana',async()=>{
   const DB=dbMock();const nativeFetch=globalThis.fetch;
-  globalThis.fetch=async()=>{throw new Error('simulação de rede interrompida');};
+  globalThis.fetch=async(url)=>{if(String(url).includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200}); throw new Error('simulação de rede interrompida');};
   try{
     DB.prepare("UPDATE settings SET telegram_enabled=1, channel_registered=1 WHERE id=1").run();
     DB.prepare("INSERT INTO offers (title,affiliate_url,category,created_at) VALUES(?,?,?,?)")
@@ -123,6 +124,7 @@ test('oferta com foto: resolve metadados, envia sendPhoto e mantém botão do af
   const observed=[];
   globalThis.fetch=async (url,init={})=>{
     const address=String(url);observed.push({url:address,method:init.method||'GET'});
+    if(address.includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200});
     if(address==='https://meli.la/2bsHW5y') return new Response('',{status:302,headers:{location:'https://www.mercadolivre.com.br/p/MLB123'}});
     if(address==='https://www.mercadolivre.com.br/p/MLB123') return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">',{headers:{'content-type':'text/html'}});
     if(address==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg') return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'10000'}});
@@ -154,6 +156,7 @@ test('foto recusada explicitamente pelo Telegram: envia texto uma única vez',as
   const DB=dbMock(); const nativeFetch=globalThis.fetch; const methods=[];
   globalThis.fetch=async (url,init={})=>{
     const address=String(url);
+    if(address.includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200});
     if(address==='https://meli.la/2bsHW5y') return new Response('<meta name="twitter:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg">',{headers:{'content-type':'text/html'}});
     if(address.startsWith('https://http2.mlstatic.com/')) return new Response(null,{status:200,headers:{'content-type':'image/jpeg'}});
     if(address.includes('/sendPhoto')){
@@ -183,6 +186,7 @@ test('foto recusada explicitamente pelo Telegram: envia texto uma única vez',as
 test('cupom cadastrado entra automaticamente na oferta e deixa de aparecer depois de vencer',async()=>{
   const DB=dbMock();const native=globalThis.fetch;const messages=[];
   globalThis.fetch=async(url,init={})=>{
+    if(String(url).includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200});
     if(String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{headers:{'content-type':'text/html'}});
     if(String(url).includes('/sendMessage')){
       const data=JSON.parse(init.body);messages.push(data);
@@ -215,5 +219,56 @@ test('cupom cadastrado entra automaticamente na oferta e deixa de aparecer depoi
     assert.equal((await worker.fetch(req('/api/coupons',{method:'POST',body:{...c,offer_id:2,start_day:'2025-01-01',end_day:'2025-01-31'},cookie}),env)).status,201);
     assert.equal((await worker.fetch(req('/api/offers/2/publish',{method:'POST',body:{},cookie}),env)).status,200);
     assert.doesNotMatch(messages[1].text,/MELI10/);
+  }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('troca de canal público pausa a automação, limpa confirmação anterior e valida o destino', async()=>{
+  const DB=dbMock();const native=globalThis.fetch;
+  let checkedChat='';
+  globalThis.fetch=async url=>{
+    const str=String(url);
+    if(str.includes('/getChat?')){
+      checkedChat=new URL(str).searchParams.get('chat_id');
+      return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200});
+    }
+    throw new Error('API não esperada');
+  };
+  try {
+    DB.prepare('UPDATE settings SET channel_registered=1, telegram_enabled=1, automation_enabled=1 WHERE id=1').run();
+    const env={DB,ADMIN_PASSWORD:'admin forte para teste',SESSION_SECRET:'segredo-super-forte-para-teste-123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+    const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    const body={telegram_chat_id:'https://t.me/achados_canal_novo',channel_registered:true,telegram_enabled:true,automation_enabled:true,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
+    const saved=await worker.fetch(req('/api/settings',{method:'POST',body,cookie}),env);
+    assert.equal(saved.status,200);
+    assert.equal((await saved.json()).channel_changed,true);
+    assert.equal(checkedChat,'@achados_canal_novo');
+    const next=await(await worker.fetch(req('/api/state',{cookie}),env)).json();
+    assert.equal(next.settings.telegram_chat_id,'@achados_canal_novo');
+    assert.equal(next.settings.automation_enabled,0);
+    assert.equal(next.settings.telegram_enabled,0);
+    assert.equal(next.settings.channel_registered,0);
+    assert.equal((await worker.fetch(req('/api/settings',{method:'POST',body:{...body,telegram_chat_id:'@achados_canal_novo'},cookie}),env)).status,200);
+    const active=await(await worker.fetch(req('/api/state',{cookie}),env)).json();
+    assert.equal(active.settings.channel_registered,1);
+    assert.equal(active.settings.telegram_enabled,1);
+  } finally {globalThis.fetch=native;DB.close();}
+});
+
+test('rejeita grupo do Telegram ao tentar configurar novo canal', async()=>{
+  const DB=dbMock();const native=globalThis.fetch;
+  globalThis.fetch=async url=>{
+    if(String(url).includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'supergroup'}}),{status:200});
+    throw new Error('API inesperada');
+  };
+  try {
+    const env={DB,ADMIN_PASSWORD:'admin forte para teste',SESSION_SECRET:'segredo-super-forte-para-teste-123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+    const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+    const cookie=login.headers.get('set-cookie').split(';')[0];
+    const body={telegram_chat_id:'@grupo_existente',channel_registered:true,telegram_enabled:true,automation_enabled:true,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
+    const response=await worker.fetch(req('/api/settings',{method:'POST',body,cookie}),env);
+    assert.equal(response.status,400);
+    assert.match((await response.json()).error,/não é um canal/);
+    assert.equal(DB.prepare('SELECT telegram_chat_id AS destination FROM settings WHERE id=1').first().destination,'@achadinhosml1101');
   }finally{globalThis.fetch=native;DB.close();}
 });

@@ -10,7 +10,7 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 - Fila de ofertas (cada URL uma publicação), deduplicação, registro de histórico e estado `needs_review` quando há falha ambígua.
 - Configurações de janela 8h–21h (Bahia), intervalo padrão 30 minutos e até 12 posts por dia; tudo editável.
 - Cron Trigger a cada 5 minutos, respeitando intervalo, janela e limite diário. Publicação **desligada por padrão**.
-- Telegram Bot API: publicação com foto do produto quando metadados públicos e imagem compatível estão disponíveis, com legenda, aviso de publicidade e botão de compra. Quando a foto não está acessível, publica o texto com URL e prévia quando o Telegram conseguir gerá-la; não repete envio em falha ambígua. O teste de conexão continua sendo somente texto.
+- Telegram Bot API: publicação no canal configurado, com foto do produto quando metadados públicos e imagem compatível estão disponíveis, com legenda, aviso de publicidade e botão de compra. Quando a foto não está acessível, publica o texto com URL e prévia quando o Telegram conseguir gerá-la; não repete envio em falha ambígua. O teste de conexão continua sendo somente texto.
 - Preço manual opcional. Se informado há mais de 6 horas, não é anunciado como preço atual.
 
 ## O que não está implementado (não confundir com sistema em produção)
@@ -25,7 +25,7 @@ Projeto novo, independente e preparado para Cloudflare Workers + D1. **Não foi 
 ## Identificadores pré-configurados
 
 - Perfil de afiliado exibido: `rykellmy_007` (não é autenticação).
-- Destino Telegram público: `@achadinhosml1101` (bot `@Crjornadabot`).
+- Destino Telegram: configurável pelo painel como canal público (`https://t.me/seucanal` ou `@seucanal`). O endereço antigo `@achadinhosml1101` correspondia a um grupo; é necessário apontar para o novo canal e dar permissão de publicação ao `@Crjornadabot`.
 - Link de exemplo do próprio usuário: `https://meli.la/2bsHW5y` (não vem pré-cadastrado/ativado).
 
 ## Instalação e publicação em conta Cloudflare autorizada
@@ -44,7 +44,7 @@ Requisitos: Node.js 20+, acesso à sua conta Cloudflare e token do BotFather gua
 7. Publicar: `npx wrangler deploy`.
 8. Abrir a URL Worker retornada; entrar com ADMIN_PASSWORD.
 9. Confirmar que o grupo @achadinhosml1101 está **cadastrado na Central do Afiliado e permitido** para essa conta. Se não estiver, **não habilitar a publicação**.
-10. Marcar "Canal registrado e permitido", salvar, pressionar "Testar Telegram" e conferir a mensagem no grupo. Se houver erro de chat inexistente/permissão, verificar se o bot é administrador e pode publicar.
+10. Informar o novo canal público do Telegram no painel e salvar. A mudança pausa o envio, limpa a confirmação anterior e exige nova confirmação de canal cadastrado no programa de afiliados. Confirmar as permissões de administrador do bot no novo canal, marcar "Canal registrado e permitido", ativar Telegram, salvar e pressionar "Testar Telegram".
 11. Cadastrar os links que você mesmo gerou no Portal de Afiliados, ativar Telegram e depois a automação.
 
 > Proteção adicional recomendada em produção: restringir o acesso à URL do painel via Cloudflare Access e configurar regras de limite de tentativas de login (WAF). O login incluído não substitui esses controles.
@@ -57,7 +57,7 @@ Requisitos: Node.js 20+, acesso à sua conta Cloudflare e token do BotFather gua
 
 ## Segurança e políticas
 
-- A lista de destinos no código está restrita a `@achadinhosml1101`; não realiza disparos em massa a números privados.
+- O destino de publicação é um canal público configurável pelo proprietário no painel; o Worker consulta `getChat` e rejeita grupos. A mudança de destino pausa automaticamente a publicação e exige nova confirmação. Não realiza disparos em massa a números privados.
 - Cada oferta exige confirmação do proprietário de que o link foi gerado oficialmente; essa confirmação não garante receita nem converte URL comum em URL de afiliado.
 - Não automatizar logins/captchas, não capturar credenciais, não burlar o Mercado Livre ou o WhatsApp.
 - Divulgação tem de obedecer às regras vigentes do programa, inclusive identificação clara como publicidade e uso apenas de canais públicos cadastrados.
@@ -85,3 +85,7 @@ No painel, você pode vincular um cupom oficialmente informado/confirmado a uma 
 O Worker cria automaticamente a tabela isolada offer_coupons no mesmo D1, com CREATE TABLE IF NOT EXISTS. Não execute novamente o SQL inicial e não modifique os bancos de outros projetos.
 
 Limite atual: não há fonte/API oficialmente autorizada para que um afiliado comum pesquise todos os novos cupons e teste sua aplicação por CPF. Por isso, esta versão não extrai cupons por robôs do site do Mercado Livre, não executa compra e não afirma elegibilidade. A API SELLER_COUPON_CAMPAIGN documentada pelo Mercado Livre é voltada a vendedores. Para descobrir novos cupons sem cadastrar manualmente será necessária uma integração oficialmente autorizada.
+
+## Troca de grupo para canal Telegram
+
+Abra **Automação** no painel e cole o link público do novo canal em **Canal público do Telegram**. Salve as configurações. A primeira gravação muda o destino mas **desliga automaticamente a publicação**, por segurança. Garanta que o bot `@Crjornadabot` foi adicionado ao canal como administrador com permissão de publicar. Verifique o cadastro desse canal na Central do Afiliado. Marque **Canal registrado e permitido** somente quando isso for verdadeiro, ative **Habilitar publicação no Telegram**, salve novamente, envie **Testar Telegram** e só depois reative a automação. As ofertas já publicadas no grupo antigo não são reenviadas automaticamente ao canal novo. Não precisa alterar D1 nem renovar os Secrets.

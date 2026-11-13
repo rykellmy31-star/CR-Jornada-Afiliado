@@ -1,5 +1,4 @@
 import { couponDescription } from './coupons.js';
-export const ALLOWED_CHATS = ['@achadinhosml1101'];
 export const BRAZIL_TIMEZONE = 'America/Bahia';
 
 export function validateAffiliateUrl(input) {

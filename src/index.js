@@ -1,7 +1,7 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
-import { normalizeOffer, localTimeParts, shouldSend, telegramPayload, ALLOWED_CHATS } from './logic.js';
+import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -59,8 +59,29 @@ function requireConfigured(env) {
 function requireTelegram(env) {
   if (!env.TELEGRAM_BOT_TOKEN) throw new Error('Configure o segredo TELEGRAM_BOT_TOKEN na Cloudflare.');
 }
-function validateChannel(s) {
-  if (!ALLOWED_CHATS.includes(s.telegram_chat_id)) throw new Error('Grupo Telegram não autorizado nesta instalação.');
+function normalizeChannelHandle(input) {
+  let value = String(input || '').trim();
+  if (/^https:\/\/t\.me\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      if (url.hostname.toLowerCase() !== 't.me' || url.username || url.password || url.port) throw new Error();
+      value = '@' + url.pathname.replace(/^\/+|\/+$/g, '');
+    } catch { throw new Error('Use o endereço público do canal, como https://t.me/seucanal.'); }
+  }
+  if (!/^@[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value)) throw new Error('Informe o @usuário público do canal ou o link https://t.me/seucanal.');
+  return value;
+}
+async function validateChannel(env, settings) {
+  requireTelegram(env);
+  const handle = normalizeChannelHandle(settings.telegram_chat_id);
+  const api = 'https://api.telegram.org/bot' + env.TELEGRAM_BOT_TOKEN + '/getChat?chat_id=' + encodeURIComponent(handle);
+  const response = await fetch(api, { signal: AbortSignal.timeout(10000) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw Object.assign(new Error('Canal não encontrado pelo bot. Verifique o endereço e adicione @Crjornadabot como administrador.'), { status: 400 });
+  }
+  if (data.result?.type !== 'channel') throw Object.assign(new Error('O destino informado ainda é um grupo, não um canal do Telegram.'), { status: 400 });
+  return handle;
 }
 async function telegramSend(env, chat, payload, endpoint = 'sendMessage') {
   requireTelegram(env);
@@ -107,7 +128,7 @@ async function sendOfferWithImage(env, chat, offer) {
 }
 
 async function sendOffer(env, offer, settings) {
-  validateChannel(settings);
+  await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
@@ -216,15 +237,29 @@ async function router(request, env) {
       return fail('Configuração inválida.');
     }
     if ([b.channel_registered, b.telegram_enabled, b.automation_enabled].some(x => typeof x !== 'boolean')) return fail('Seleções inválidas.');
-    if ((b.telegram_enabled || b.automation_enabled) && !b.channel_registered) return fail('Confirme primeiro que o grupo está cadastrado e permitido no Mercado Livre.');
-    if (b.automation_enabled && !b.telegram_enabled) return fail('Ative o Telegram antes de iniciar a automação.');
-    await env.DB.prepare('UPDATE settings SET automation_enabled=?, telegram_enabled=?, channel_registered=?, interval_minutes=?, max_daily=?, start_hour=?, end_hour=?, updated_at=? WHERE id=1')
-      .bind(+b.automation_enabled, +b.telegram_enabled, +b.channel_registered, interval, limit, start, end, Math.floor(Date.now() / 1000)).run();
-    await log(env, 'settings_updated', `Automação ${b.automation_enabled ? 'ligada' : 'desligada'}`);
-    return json({ ok: true });
+    let chat;
+    try { chat = normalizeChannelHandle(b.telegram_chat_id); }
+    catch (error) { return fail(error.message); }
+    const existing = await readSettings(env);
+    const changed = chat !== existing.telegram_chat_id;
+    // O novo endereço não herda a autorização anterior; pause toda a automação.
+    if (changed) {
+      await validateChannel(env, { telegram_chat_id: chat });
+    } else if (b.channel_registered && b.telegram_enabled) {
+      await validateChannel(env, { telegram_chat_id: chat });
+    }
+    const enabled = changed ? false : b.telegram_enabled;
+    const registered = changed ? false : b.channel_registered;
+    const automation = changed ? false : b.automation_enabled;
+    if ((enabled || automation) && !registered) return fail('Confirme primeiro que o canal está cadastrado e permitido no Mercado Livre.');
+    if (automation && !enabled) return fail('Ative o Telegram antes de iniciar a automação.');
+    await env.DB.prepare('UPDATE settings SET telegram_chat_id=?, automation_enabled=?, telegram_enabled=?, channel_registered=?, interval_minutes=?, max_daily=?, start_hour=?, end_hour=?, updated_at=? WHERE id=1')
+      .bind(chat, +automation, +enabled, +registered, interval, limit, start, end, Math.floor(Date.now() / 1000)).run();
+    await log(env, 'settings_updated', changed ? 'Canal alterado; automação e envio pausados para confirmação.' : `Automação ${automation ? 'ligada' : 'desligada'}`);
+    return json({ ok: true, channel_changed: changed });
   }
   if (u.pathname === '/api/test-telegram' && method === 'POST') {
-    const s = await readSettings(env); validateChannel(s);
+    const s = await readSettings(env); await validateChannel(env, s);
     if (!s.channel_registered) return fail('Confirme antes que o grupo público está cadastrado na sua conta de afiliado.');
     const result = await telegramSend(env, s.telegram_chat_id, { text: '✅ Teste de integração — CR Jornada Afiliados. Nenhuma oferta foi publicada.\n\nBot conectado com sucesso.' });
     await log(env, 'telegram_test', `Mensagem ${result.message_id}`);
