@@ -314,6 +314,7 @@ test('intervalo exclusivo do WhatsApp controla os envios sem mudar o Telegram',a
     assert.equal(calls.length,1);
     assert.ok((await getWhatsAppState(env)).schedule.last_attempt_at>0);
     DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1').bind(now-121*60).run();
+    DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=?').bind(now-121*60,INSTANCE).run();
     assert.equal((await runWhatsAppScheduled(env)).status,'sent');
     assert.equal(calls.length,2);
     assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').first().interval_minutes,15);
@@ -389,6 +390,7 @@ test('intervalo arbitrário do WhatsApp de 7 minutos é respeitado entre duas of
     DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1').bind(now-6*60).run();
     assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'interval'});
     DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1').bind(now-8*60).run();
+    DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=?').bind(now-8*60,INSTANCE).run();
     assert.equal((await runWhatsAppScheduled(env)).status,'sent');
     assert.equal(sent.length,2);
   }finally{globalThis.fetch=native;DB.close();}
