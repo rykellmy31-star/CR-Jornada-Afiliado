@@ -268,7 +268,7 @@ test('rejeita grupo do Telegram ao tentar configurar novo canal', async()=>{
     const body={telegram_chat_id:'@grupo_existente',channel_registered:true,telegram_enabled:true,automation_enabled:true,interval_minutes:30,max_daily:12,start_hour:8,end_hour:21};
     const response=await worker.fetch(req('/api/settings',{method:'POST',body,cookie}),env);
     assert.equal(response.status,400);
-    assert.match((await response.json()).error,/não é um canal/);
+    assert.match((await response.json()).error,/não um canal/);
     assert.equal(DB.prepare('SELECT telegram_chat_id AS destination FROM settings WHERE id=1').first().destination,'@achadinhosml1101');
   }finally{globalThis.fetch=native;DB.close();}
 });
