@@ -42,6 +42,12 @@ export function renderPage() {
       <div class="main-grid">
         <section class="card settings"><div class="section-header"><div><h2>Automação</h2><p>O envio automático começa desligado por segurança.</p></div><div class="symbol">⚙</div></div>
           <form id="settings-form">
+            <div id="channel-primary-category">
+              <label>Categoria permitida neste canal
+                <input id="primary-channel-category" maxlength="60" value="Geral" placeholder="Ex.: Motos, Feminino, Masculino, Infantil, Peças">
+              </label>
+              <p class="hint">Geral aceita todas as categorias. Se escolher uma categoria específica, somente ofertas correspondentes serão cadastradas ou publicadas aqui.</p>
+            </div>
             <div id="channel-extra-settings" class="channel-extra-settings hidden">
               <h2>Configurações exclusivas deste canal</h2>
               <div class="field-grid">
@@ -96,6 +102,10 @@ export function renderPage() {
             <div class="actions" style="align-items:end"><button type="button" class="outline" id="wa-groups">Buscar meus grupos</button></div>
           </div>
           <p class="hint">O link de convite do grupo não é seu ID técnico. O botão consulta apenas os grupos que o número conectado na Evolution já participa.</p>
+          <label>Categoria permitida no grupo principal
+            <input id="wa-category" maxlength="60" placeholder="Geral, Motos, Feminino, Masculino, Infantil, Peças" value="Geral" required>
+          </label>
+          <p class="hint">Geral espelha todas as categorias. Outra categoria filtra as ofertas já publicadas no Telegram principal.</p>
           <label>Intervalo entre publicações no WhatsApp (minutos)
             <input id="wa-interval" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required>
           </label>
@@ -107,6 +117,95 @@ export function renderPage() {
         </form>
         <div class="section-header" style="margin-top:14px"><div><h2>Últimos envios no WhatsApp</h2></div></div>
         <div id="wa-deliveries" class="whatsapp-results">Ainda não há envios.</div>
+      </section>
+      <section class="card wa-multichannel" id="wa-multichannel">
+        <div class="section-header">
+          <div><h2>🟢 Central multigrupos do WhatsApp</h2>
+            <p>Crie grupos independentes por categoria, com horários, filas e números próprios. O grupo principal continua funcionando como antes.</p></div>
+          <button type="button" class="outline" id="wa-multi-create-toggle">+ Adicionar grupo</button>
+        </div>
+        <label>Grupo para administrar
+          <select id="wa-multi-select"><option value="1">WhatsApp principal (existente)</option></select>
+        </label>
+        <div class="channel-create hidden" id="wa-multi-create">
+          <form id="wa-multi-create-form">
+            <div class="field-grid">
+              <label>Nome do grupo no painel<input name="name" required minlength="3" maxlength="80" placeholder="Ex.: Ofertas para motociclistas"></label>
+              <label>Categoria permitida<input name="category" required maxlength="60" value="Motos" placeholder="Motos, Feminino, Masculino, Infantil, Peças"></label>
+              <label>Número do WhatsApp
+                <select name="instance_mode">
+                  <option value="shared">Usar o número Evolution já conectado</option>
+                  <option value="dedicated">Conectar número exclusivo por QR Code</option>
+                </select>
+              </label>
+            </div>
+            <div class="actions"><button type="submit" class="primary">Criar grupo desligado</button><button type="button" id="wa-multi-create-cancel" class="outline">Cancelar</button></div>
+          </form>
+        </div>
+        <div id="wa-multi-extra" class="hidden" style="margin-top:17px">
+          <div class="wa-connect-box">
+            <p><strong id="wa-multi-instance">Instância Evolution</strong></p>
+            <p id="wa-multi-connection-state" class="hint">Verifique a conexão antes de buscar grupos.</p>
+            <button type="button" id="wa-multi-connect" class="outline">Verificar / Gerar QR Code</button>
+            <div id="wa-multi-qr-wrap" class="wa-qr-wrap hidden">
+              <img id="wa-multi-qr-image" width="260" height="260" alt="QR Code para conectar WhatsApp exclusivo do grupo">
+              <p>WhatsApp → Aparelhos conectados → Conectar um aparelho → leia o QR Code</p>
+            </div>
+          </div>
+          <form id="wa-multi-settings-form" class="wa-multi-form">
+            <div class="field-grid">
+              <label>Nome do grupo<input id="wa-multi-name" maxlength="80" required></label>
+              <label>Categoria permitida<input id="wa-multi-category" maxlength="60" placeholder="Ex.: Infantil" required></label>
+              <label>Grupo da Evolution
+                <select id="wa-multi-jid"><option value="">Buscar grupos para selecionar</option></select>
+              </label>
+              <div class="actions" style="align-items:end"><button type="button" class="outline" id="wa-multi-groups">Buscar meus grupos</button></div>
+              <label>Intervalo entre publicações (minutos)<input id="wa-multi-interval" type="number" inputmode="numeric" min="1" max="1440" step="1" required></label>
+              <label>Máximo diário (1 a 48)<input id="wa-multi-daily" type="number" inputmode="numeric" min="1" max="48" step="1" required></label>
+              <label>Começar às (Bahia)<select id="wa-multi-start"></select></label>
+              <label>Parar às (Bahia)<select id="wa-multi-end"></select></label>
+            </div>
+            <label class="check-row"><input type="checkbox" id="wa-multi-registered"><span><b>Grupo público cadastrado no Mercado Livre</b><small>Confirmo que é público, aberto e informado como mídia na Central de Afiliados.</small></span></label>
+            <label class="check-row"><input type="checkbox" id="wa-multi-enabled"><span><b>Ativar publicação automática deste grupo</b><small>Somente ofertas da categoria escolhida e da fila exclusiva deste grupo.</small></span></label>
+            <div class="actions"><button type="submit" class="primary">Salvar grupo WhatsApp</button><button type="button" id="wa-multi-test" class="outline">Enviar teste ao grupo</button></div>
+          </form>
+          <div class="divider-wa"></div>
+          <div class="section-header"><div><h2>Ofertas exclusivas deste grupo</h2><p>Use os links oficiais de afiliado. Cada grupo recebe somente a categoria que você definiu.</p></div></div>
+          <form id="wa-multi-offer-form" class="wa-multi-form">
+            <label>Produto<input name="title" minlength="5" maxlength="180" required placeholder="Ex.: Capacete para moto"></label>
+            <label>Link de afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label>
+            <div class="field-grid">
+              <label>Categoria<input name="category" id="wa-multi-offer-category" required></label>
+              <label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01"></label>
+              <label>Preço antigo (opcional)<input name="old_price" type="number" min="0.01" step="0.01"></label>
+            </div>
+            <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Link criado pela minha Central de Afiliados</b></span></label>
+            <button type="submit" class="primary">Adicionar à fila deste grupo</button>
+          </form>
+          <div class="section-header" style="margin-top:21px"><div><h2>Cupom opcional da oferta</h2></div></div>
+          <form id="wa-multi-coupon-form" class="wa-multi-form">
+            <div class="field-grid">
+              <label>Oferta na fila<select name="offer_id" id="wa-multi-coupon-offer" required></select></label>
+              <label>Tipo<select name="kind" id="wa-multi-coupon-kind"><option value="code">Código</option><option value="activation">Ativação</option></select></label>
+              <label>Código<input name="code" id="wa-multi-coupon-code"></label>
+              <label>Desconto<select name="discount_type"><option value="percent">Porcentagem</option><option value="fixed">Valor fixo (R$)</option></select></label>
+              <label>Valor<input name="discount_value" type="number" min="1" step="1" required></label>
+              <label>Compra mínima (R$)<input name="min_cart" type="number" min="0" step="0.01"></label>
+              <label>Teto desconto (R$)<input name="max_discount" type="number" min="0.01" step="0.01"></label>
+              <label>Início<input name="start_day" type="date" required></label>
+              <label>Fim<input name="end_day" type="date" required></label>
+              <label>Fonte oficial do cupom<input name="source_url" type="url" required placeholder="https://www.mercadolivre.com.br/..."></label>
+            </div>
+            <label>Restrições<input name="notes" maxlength="220"></label>
+            <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Conferi a origem e as condições do cupom</b></span></label>
+            <button class="outline" type="submit">Salvar cupom</button>
+          </form>
+          <div class="section-header" style="margin-top:21px"><div><h2>Fila e histórico do grupo</h2></div></div>
+          <div class="table-scroll"><table><thead><tr><th>Oferta</th><th>Estado</th><th>Ação</th></tr></thead><tbody id="wa-multi-offers"><tr><td colspan="3">Sem ofertas.</td></tr></tbody></table></div>
+          <div id="wa-multi-logs" class="logs"></div>
+        </div>
+        <p class="feedback" id="wa-multi-feedback" role="status" aria-live="polite"></p>
+        <p class="hint">A Evolution API usa uma integração WhatsApp não oficial. Não publique em grupos privados, nem em grupos que não autorizaram a divulgação. A busca automática e os links de comissão ainda dependem da API oficial do Mercado Livre.</p>
       </section>
       <section class="card coupon-panel">
         <div class="section-header"><div><h2>🎟️ Cupons vinculados às ofertas</h2><p>O robô inclui o cupom na publicação automaticamente quando estiver dentro da validade informada.</p></div></div>
@@ -139,8 +238,8 @@ export function renderPage() {
 
 export const CSS = `
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.channels-panel{padding:22px;margin-bottom:16px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
-@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
+*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.channels-panel{padding:22px;margin-bottom:16px}.wa-multichannel{padding:22px;margin-top:16px}.wa-multichannel>label{max-width:560px}.wa-multi-form{display:flex;flex-direction:column;gap:12px;margin-top:15px}.wa-multichannel .hint{margin:8px 0}.divider-wa{border-top:1px solid #e6edf5;margin:21px 0}.wa-multichannel .wa-connect-box{margin-bottom:14px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
+@media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 `;
 
 export const CLIENT_JS = `
@@ -149,6 +248,7 @@ const $ = id => document.getElementById(id);
 const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const toDate = s => s ? new Date(s*1000).toLocaleString('pt-BR') : '—';
 let currentChannelId=1;
+let currentWaGroupId=1;
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 async function call(path, opts={}) {
   const init = {...opts, credentials: 'same-origin'};
@@ -200,6 +300,7 @@ async function refreshWhatsApp(){
     $('wa-registered').checked=!!d.config.public_registered;
     $('wa-enabled').checked=!!d.config.enabled;
     $('wa-interval').value=String(d.schedule?.interval_minutes||60);
+    $('wa-category').value=d.category||'Geral';
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
     $('whatsapp-server-status').textContent=d.server_configured?'✅ Endereço e chave Evolution presentes no servidor (autenticação ainda não confirmada).':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
     if(d.server_configured)await refreshWhatsAppConnection();
@@ -212,6 +313,72 @@ async function refreshWhatsApp(){
       (x.status==='needs_review'?'<button class="mini" data-wa-retry="'+Number(x.offer_id)+'">Reenfileirar</button>':'')+'</div>'
     ).join(''):'<p class="hint">Nenhuma oferta enviada pelo WhatsApp nesta configuração.</p>';
   }catch(error){notice('WhatsApp: '+error.message,true,'wa-feedback');}
+}
+async function refreshManagedWhatsApp(){
+  try{
+    const result=await call('/api/wa-groups');
+    const list=result.groups||[];
+    if(!list.some(x=>x.id===currentWaGroupId))currentWaGroupId=1;
+    const selector=$('wa-multi-select');
+    selector.innerHTML=list.map(g=>'<option value="'+Number(g.id)+'">'+escape(g.name)+' • '+escape(g.category)+(g.id===1?' (atual)':'')+'</option>').join('');
+    selector.value=String(currentWaGroupId);
+    const extra=currentWaGroupId!==1;
+    $('wa-multi-extra').classList.toggle('hidden',!extra);
+    $('whatsapp').classList.toggle('hidden',extra);
+    if(!extra)return;
+    const result2=await call('/api/wa-groups/'+currentWaGroupId+'/state');
+    const g=result2.group;
+    $('wa-multi-instance').textContent=(g.instance_mode==='shared'?'Número Evolution principal: ':'Número exclusivo: ')+g.instance_name;
+    $('wa-multi-name').value=g.name;
+    $('wa-multi-category').value=g.category;
+    $('wa-multi-interval').value=String(g.interval_minutes);
+    $('wa-multi-daily').value=String(g.max_daily);
+    $('wa-multi-start').value=String(g.start_hour);
+    $('wa-multi-end').value=String(g.end_hour);
+    $('wa-multi-registered').checked=!!g.public_registered;
+    $('wa-multi-enabled').checked=!!g.enabled;
+    const groupSelect=$('wa-multi-jid');
+    if(!Array.from(groupSelect.options).some(o=>o.value===g.group_jid)&&g.group_jid){
+      const option=document.createElement('option');
+      option.value=g.group_jid;option.textContent='Grupo salvo: '+g.group_jid;
+      groupSelect.add(option);
+    }
+    groupSelect.value=g.group_jid||'';
+    const cat=$('wa-multi-offer-category');
+    cat.value=g.category==='Geral'?'':g.category;
+    cat.readOnly=g.category!=='Geral';
+    $('wa-multi-test').disabled=!g.public_registered;
+    const coupons=$('wa-multi-coupon-offer');
+    coupons.innerHTML='<option value="">Selecione uma oferta...</option>'+result2.offers.filter(o=>o.status==='ready')
+      .map(o=>'<option value="'+Number(o.id)+'">'+escape(o.title)+'</option>').join('');
+    $('wa-multi-offers').innerHTML=result2.offers.length?result2.offers.map(o=>
+      '<tr><td><a target="_blank" rel="noopener noreferrer" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+
+      (o.coupon_code?'<small>Cupom: '+escape(o.coupon_code)+'</small>':'')+
+      (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td>'+escape(statusLabel(o.status))+'</td><td>'+
+      (o.status==='ready'?'<button class="mini" type="button" data-wa-group-action="publish" data-id="'+Number(o.id)+'">Publicar</button>':
+       o.status==='needs_review'?'<button class="mini" type="button" data-wa-group-action="requeue" data-id="'+Number(o.id)+'">Reenfileirar</button>':'—')+
+      '</td></tr>').join(''):'<tr><td colspan="3">Nenhuma oferta cadastrada neste grupo.</td></tr>';
+    $('wa-multi-logs').innerHTML=result2.logs.map(x=>'<div><span>'+escape(x.event)+' • '+escape(x.detail||'')+'</span><time>'+toDate(x.created_at)+'</time></div>').join('');
+    await refreshManagedWhatsAppConnection(false);
+  }catch(err){notice('Grupos WhatsApp: '+err.message,true,'wa-multi-feedback');}
+}
+async function refreshManagedWhatsAppConnection(showErrors=true){
+  if(currentWaGroupId===1)return;
+  try{
+    const res=await call('/api/wa-groups/'+currentWaGroupId+'/connection');
+    const names={open:'✅ WhatsApp conectado.',close:'Número desconectado. Gere o QR Code.',
+      connecting:'Aguardando leitura do QR Code.',not_created:'Instância ainda não criada.',refused:'Conexão recusada.'};
+    $('wa-multi-connection-state').textContent=names[res.state]||'Verifique a conexão.';
+    if(res.state==='open'){
+      $('wa-multi-qr-wrap').classList.add('hidden');
+      $('wa-multi-qr-image').removeAttribute('src');
+    }
+    return res;
+  }catch(error){
+    $('wa-multi-connection-state').textContent='Falha ao consultar conexão: '+error.message;
+    if(showErrors)notice(error.message,true,'wa-multi-feedback');
+    return null;
+  }
 }
 async function refresh(){
   try{
@@ -227,6 +394,8 @@ async function refresh(){
     $('telegram_chat_id').value=s.telegram_chat_id||'';
     const isExtra=currentChannelId!==1;
     $('channel-extra-settings').classList.toggle('hidden',!isExtra);
+    $('channel-primary-category').classList.toggle('hidden',isExtra);
+    if(!isExtra)$('primary-channel-category').value=s.category||'Geral';
     if(isExtra){
       $('channel-name').value=s.name||'';
       $('channel-category').value=s.category||'Geral';
@@ -235,7 +404,7 @@ async function refresh(){
       $('channel-bot-token').value='';
     }
     const categoryInput=$('offer-form').elements.category;
-    if(isExtra&&s.category!=='Geral'){
+    if(s.category&&s.category.toLowerCase()!=='geral'){
       categoryInput.value=s.category;
       categoryInput.readOnly=true;
     }else{
@@ -266,6 +435,7 @@ async function refresh(){
     }).join(''):'<tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr>';
     $('log-list').innerHTML=data.logs.length?data.logs.map(l=>'<div><span><b>'+escape(l.event)+'</b> '+escape(l.detail||'')+'</span><time>'+toDate(l.created_at)+'</time></div>').join(''):'Ainda não há eventos.';
     await refreshWhatsApp();
+    await refreshManagedWhatsApp();
   }catch(e){ if(e.message.includes('login')){view(false);$('top-status').textContent='Aguardando login';}else notice(e.message,true); }
 }
 for(let h=0;h<=24;h++){
@@ -273,6 +443,134 @@ for(let h=0;h<=24;h++){
   if(h<24) $('start_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
   if(h>0) $('end_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
 }
+for(let h=0;h<=24;h++){
+ const label=String(h).padStart(2,'0')+':00';
+ if(h<24)$('wa-multi-start').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
+ if(h>0)$('wa-multi-end').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
+}
+$('wa-multi-select').addEventListener('change',async()=>{
+ currentWaGroupId=Number($('wa-multi-select').value)||1;
+ notice('',false,'wa-multi-feedback');
+ await refreshManagedWhatsApp();
+});
+$('wa-multi-create-toggle').addEventListener('click',()=>{
+ $('wa-multi-create').classList.toggle('hidden');
+});
+$('wa-multi-create-cancel').addEventListener('click',()=>{
+ $('wa-multi-create').classList.add('hidden');
+});
+$('wa-multi-create-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const body=Object.fromEntries(new FormData(e.target));
+ try{
+   const result=await call('/api/wa-groups',{method:'POST',body:JSON.stringify(body)});
+   currentWaGroupId=result.id;
+   $('wa-multi-create').classList.add('hidden');
+   e.target.reset();
+   await refreshManagedWhatsApp();
+   notice('Grupo criado desligado! Conecte o número, escolha o grupo e confirme a autorização.',false,'wa-multi-feedback');
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+});
+$('wa-multi-connect').addEventListener('click',async()=>{
+ if(currentWaGroupId===1)return;
+ const btn=$('wa-multi-connect');btn.disabled=true;btn.textContent='Verificando...';
+ try{
+   const res=await call('/api/wa-groups/'+currentWaGroupId+'/connection',{method:'POST',body:'{}'});
+   if(res.qr_image){
+     $('wa-multi-qr-image').src=res.qr_image;
+     $('wa-multi-qr-wrap').classList.remove('hidden');
+     notice('QR Code pronto. Conecte seu número exclusivo.',false,'wa-multi-feedback');
+   }else if(res.state==='open'){
+     $('wa-multi-qr-wrap').classList.add('hidden');
+     notice('Número já conectado à Evolution.',false,'wa-multi-feedback');
+   }else notice('Instância preparada. Se o QR não aparecer, clique novamente.',true,'wa-multi-feedback');
+   await refreshManagedWhatsAppConnection();
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+ finally{btn.disabled=false;btn.textContent='Verificar / Gerar QR Code';}
+});
+$('wa-multi-groups').addEventListener('click',async()=>{
+ if(currentWaGroupId===1)return;
+ const btn=$('wa-multi-groups');btn.disabled=true;
+ try{
+   const result=await call('/api/wa-groups/'+currentWaGroupId+'/options');
+   const current=$('wa-multi-jid').value;
+   const sel=$('wa-multi-jid');
+   sel.innerHTML='<option value="">Selecione um grupo público...</option>'+result.groups.map(g=>
+      '<option value="'+escape(g.id)+'">'+escape(g.name)+'</option>').join('');
+   if(result.groups.some(g=>g.id===current))sel.value=current;
+   notice(result.groups.length+' grupos encontrados. Escolha um grupo autorizado.',false,'wa-multi-feedback');
+ }catch(err){notice(err.message,true,'wa-multi-feedback');}
+ finally{btn.disabled=false;}
+});
+$('wa-multi-settings-form').addEventListener('submit',async e=>{
+ e.preventDefault();if(currentWaGroupId===1)return;
+ const body={
+   name:$('wa-multi-name').value,category:$('wa-multi-category').value,
+   group_jid:$('wa-multi-jid').value,interval_minutes:Number($('wa-multi-interval').value),
+   max_daily:Number($('wa-multi-daily').value),start_hour:Number($('wa-multi-start').value),
+   end_hour:Number($('wa-multi-end').value),enabled:$('wa-multi-enabled').checked,
+   public_registered:$('wa-multi-registered').checked
+ };
+ try{
+   const result=await call('/api/wa-groups/'+currentWaGroupId+'/settings',{method:'POST',body:JSON.stringify(body)});
+   await refreshManagedWhatsApp();
+   notice(result.group_changed?'Grupo selecionado. Por segurança, confirme o cadastro público e ative novamente.':'Configurações exclusivas do grupo salvas.',false,'wa-multi-feedback');
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+});
+$('wa-multi-test').addEventListener('click',async()=>{
+ if(currentWaGroupId===1||!confirm('Enviar AGORA uma mensagem de teste para este grupo de WhatsApp?'))return;
+ try{
+   await call('/api/wa-groups/'+currentWaGroupId+'/test',{method:'POST',body:'{}'});
+   notice('Teste enviado ao grupo.',false,'wa-multi-feedback');
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+});
+$('wa-multi-offer-form').addEventListener('submit',async e=>{
+ e.preventDefault();if(currentWaGroupId===1)return;
+ const body=Object.fromEntries(new FormData(e.target));
+ body.owner_confirmation=e.target.elements.owner_confirmation.checked;
+ try{
+   await call('/api/wa-groups/'+currentWaGroupId+'/offers',{method:'POST',body:JSON.stringify(body)});
+   e.target.reset();
+   await refreshManagedWhatsApp();
+   notice('Oferta adicionada à fila somente deste grupo.',false,'wa-multi-feedback');
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+});
+$('wa-multi-coupon-kind').addEventListener('change',()=>{
+ const isCode=$('wa-multi-coupon-kind').value==='code';
+ $('wa-multi-coupon-code').required=isCode;
+ $('wa-multi-coupon-code').disabled=!isCode;
+});
+$('wa-multi-coupon-kind').dispatchEvent(new Event('change'));
+$('wa-multi-coupon-form').elements.discount_type.addEventListener('change',()=>{
+ const v=$('wa-multi-coupon-form').elements.discount_type.value==='fixed';
+ const input=$('wa-multi-coupon-form').elements.discount_value;
+ input.step=v?'0.01':'1';input.min=v?'0.01':'1';
+});
+$('wa-multi-coupon-form').addEventListener('submit',async e=>{
+ e.preventDefault();if(currentWaGroupId===1)return;
+ const body=Object.fromEntries(new FormData(e.target));
+ body.owner_confirmation=e.target.elements.owner_confirmation.checked;
+ try{
+   await call('/api/wa-groups/'+currentWaGroupId+'/coupons',{method:'POST',body:JSON.stringify(body)});
+   await refreshManagedWhatsApp();
+   notice('Cupom vinculado à oferta deste grupo.',false,'wa-multi-feedback');
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+});
+$('wa-multi-offers').addEventListener('click',async e=>{
+ const button=e.target.closest('button[data-wa-group-action]');if(!button||currentWaGroupId===1)return;
+ const action=button.dataset.waGroupAction,id=Number(button.dataset.id);
+ const prompt=action==='publish'?'Publicar esta oferta AGORA somente no grupo selecionado?':'Verifique antes se a oferta não foi recebida no grupo. Reenfileirar pode duplicá-la. Continuar?';
+ if(!confirm(prompt))return;
+ try{
+   const result=await call('/api/wa-groups/'+currentWaGroupId+'/offers/'+id+'/'+action,{method:'POST',body:'{}'});
+   await refreshManagedWhatsApp();
+   notice(action==='publish'?'Oferta publicada neste grupo.':'Oferta liberada para o próximo ciclo.',false,'wa-multi-feedback');
+ }catch(error){notice(error.message,true,'wa-multi-feedback');}
+});
+setInterval(()=>{
+ if(!$('dashboard').classList.contains('hidden')&&currentWaGroupId!==1&&!$('wa-multi-qr-wrap').classList.contains('hidden'))
+   refreshManagedWhatsAppConnection(false);
+},12000);
 $('channel-select').addEventListener('change',async()=>{
   currentChannelId=Number($('channel-select').value)||1;
   notice('');
@@ -318,7 +616,7 @@ $('settings-form').addEventListener('submit',async e=>{
     body.category=$('channel-category').value;
     body.bot_mode=$('channel-bot-mode').value;
     if($('channel-bot-token').value.trim())body.bot_token=$('channel-bot-token').value.trim();
-  }
+  }else body.category=$('primary-channel-category').value.trim();
   try{const saved=await call(currentChannelId===1?'/api/settings':'/api/channels/'+currentChannelId+'/settings',{method:'POST',body:JSON.stringify(body)});notice(saved.channel_changed?'Novo canal salvo e validado. Publicações pausadas: confirme o cadastro do canal no Mercado Livre, marque Canal registrado e permitido, habilite Telegram e salve novamente.':'Configurações salvas.');await refresh();}
   catch(err){notice(err.message,true);}
 });
@@ -378,7 +676,7 @@ $('whatsapp-form').addEventListener('submit',async e=>{
     const data=await call('/api/whatsapp/settings',{method:'POST',body:JSON.stringify({
       instance_name:$('wa-instance').value,group_jid:$('wa-group').value,
       public_registered:$('wa-registered').checked,enabled:$('wa-enabled').checked,
-      interval_minutes:Number($('wa-interval').value)
+      interval_minutes:Number($('wa-interval').value),category:$('wa-category').value.trim()
     })});
     await refreshWhatsApp();
     notice(data.group_changed?'Grupo salvo. Por segurança, confirme e ative novamente antes de publicar.':'Configurações do WhatsApp salvas.',false,'wa-feedback');

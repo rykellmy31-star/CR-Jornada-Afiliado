@@ -5,6 +5,11 @@ import { normalizeCoupon } from './coupons.js';
 // Tabelas ADITIVAS: o canal 1 continua usando settings/offers/offer_coupons/logs.
 // Canais adicionais nunca recebem automaticamente ofertas do canal principal.
 const SCHEMA=[
+`CREATE TABLE IF NOT EXISTS primary_channel_category (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ category TEXT NOT NULL DEFAULT 'Geral'
+)`,
+
 `CREATE TABLE IF NOT EXISTS telegram_channels (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -111,6 +116,30 @@ async function decryptToken(secret,cipher){
 }
 export async function ensureMultiChannelTables(env){
   for(const statement of SCHEMA)await env.DB.prepare(statement).run();
+  await env.DB.prepare("INSERT OR IGNORE INTO primary_channel_category(id) VALUES(1)").run();
+}
+export function normalizeChannelCategory(value){
+  const s=String(value||'').trim();
+  if(!s||s.length>60)throw bad('Informe uma categoria com até 60 caracteres.');
+  return s;
+}
+export function categoryMatches(category,allowed){
+  return !allowed||String(allowed).trim().toLocaleLowerCase('pt-BR')==='geral'
+    ||String(category||'').trim().toLocaleLowerCase('pt-BR')===String(allowed).trim().toLocaleLowerCase('pt-BR');
+}
+export async function getPrimaryCategory(env){
+  await ensureMultiChannelTables(env);
+  return (await env.DB.prepare('SELECT category FROM primary_channel_category WHERE id=1').first()).category;
+}
+export async function savePrimaryCategory(env,value){
+  const category=normalizeChannelCategory(value);
+  const old=await getPrimaryCategory(env);
+  if(category!==old&&category!=='Geral'){
+    const pending=await env.DB.prepare("SELECT COUNT(*) AS total FROM offers WHERE status='ready' AND lower(category)<>lower(?)").bind(category).first();
+    if(pending?.total)throw bad('Existem ofertas na fila de outra categoria. Publique ou resolva essas ofertas antes de restringir o canal principal.');
+  }
+  await env.DB.prepare('UPDATE primary_channel_category SET category=? WHERE id=1').bind(category).run();
+  return category;
 }
 const sanitized=c=>{if(!c)return null;const {token_encrypted,...rest}=c;return {...rest,bot_configured:c.bot_mode==='shared'?null:!!token_encrypted};};
 async function row(env,id){
@@ -180,7 +209,7 @@ export async function listTelegramChannels(env){
 export async function createTelegramChannel(env,body){
   await ensureMultiChannelTables(env);
   const name=trimField(body.name,80,'Nome do canal');
-  const category=trimField(body.category||'Geral',60,'Categoria');
+  const category=normalizeChannelCategory(body.category||'Geral');
   const handle=normalizeTelegramHandle(body.telegram_chat_id);
   const mode=body.bot_mode==='dedicated'?'dedicated':'shared';
   if(body.bot_mode&&!['shared','dedicated'].includes(body.bot_mode))throw bad('Tipo de bot inválido.');
@@ -214,7 +243,7 @@ export async function updateTelegramChannel(env,id,body){
   const previous=await row(env,id);
   const {interval,maxDaily,start,end}=parseSettings(body);
   const name=trimField(body.name||previous.name,80,'Nome do canal');
-  const category=trimField(body.category||previous.category,60,'Categoria');
+  const category=normalizeChannelCategory(body.category||previous.category);
   const handle=normalizeTelegramHandle(body.telegram_chat_id);
   const mode=body.bot_mode;
   if(!['shared','dedicated'].includes(mode))throw bad('Selecione um bot válido.');
@@ -266,7 +295,7 @@ export async function testTelegramChannel(env,id){
 export async function addChannelOffer(env,id,body){
   const c=await row(env,id);
   const offer=normalizeOffer(body);
-  if(c.category!=='Geral'&&offer.category.toLocaleLowerCase('pt-BR')!==c.category.toLocaleLowerCase('pt-BR'))
+  if(!categoryMatches(offer.category,c.category))
     throw bad('Este canal aceita somente ofertas da categoria '+c.category+'.');
   const duplicated=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=?').bind(offer.affiliate_url).first();
   if(duplicated)throw bad('Este link já está no canal principal. Use uma oferta diferente para cada canal.',409);
@@ -352,7 +381,7 @@ export async function runMultiChannelScheduled(env){
       env.DB.prepare("SELECT MAX(published_at) AS time FROM channel_offers WHERE channel_id=? AND status='published'").bind(c.id).first()
     ]);
     if(!shouldSend(c,now,counts?.total||0,latest?.time?latest.time*1000:null))continue;
-    const offer=await env.DB.prepare("SELECT id FROM channel_offers WHERE channel_id=? AND status='ready' ORDER BY created_at,id LIMIT 1").bind(c.id).first();
+    const offer=await env.DB.prepare("SELECT id FROM channel_offers WHERE channel_id=? AND status='ready' AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at,id LIMIT 1").bind(c.id,c.category,c.category).first();
     if(!offer)continue;
     const stamp=epoch();
     const slot=await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND automation_enabled=1 AND telegram_enabled=1 AND channel_registered=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')

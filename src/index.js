@@ -3,7 +3,13 @@ import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp } from './whatsapp.js';
-import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled } from './multichannel.js';
+import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
+import {
+ listManagedWhatsAppGroups,createManagedWhatsAppGroup,getManagedWhatsAppGroupState,
+ saveManagedWhatsAppGroup,addManagedWhatsAppOffer,saveManagedWhatsAppCoupon,
+ requeueManagedWhatsAppOffer,managedWhatsAppConnection,listManagedWhatsAppGroupOptions,
+ testManagedWhatsAppGroup,publishManagedWhatsAppOffer,runManagedWhatsAppScheduled
+} from './whatsapp-groups.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -59,7 +65,10 @@ async function readSettings(env) {
   // Não altera outros canais configurados nem reativa disparos sem nova confirmação.
   const updated = await env.DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr', automation_enabled=0, telegram_enabled=0, channel_registered=0, updated_at=unixepoch() WHERE id=1 AND telegram_chat_id='@achadinhosml1101'").run();
   if (updated.meta?.changes === 1) await log(env, 'channel_migrated', 'Destino alterado para @achadinhosmlcr; envios pausados para validação.');
-  return env.DB.prepare('SELECT * FROM settings WHERE id=1').first();
+  const [settings,category]=await Promise.all([
+    env.DB.prepare('SELECT * FROM settings WHERE id=1').first(),getPrimaryCategory(env)
+  ]);
+  return {...settings,category};
 }
 function requireConfigured(env) {
   if (!env.DB || !env.ADMIN_PASSWORD || !env.SESSION_SECRET) throw Object.assign(new Error('Configure DB, ADMIN_PASSWORD e SESSION_SECRET na Cloudflare.'), { status: 503 });
@@ -138,6 +147,7 @@ async function sendOfferWithImage(env, chat, offer) {
 async function sendOffer(env, offer, settings) {
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
+  if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
   try {
@@ -169,7 +179,7 @@ async function runScheduled(env) {
   if (!shouldSend(settings, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
   if (!env.TELEGRAM_BOT_TOKEN) return;
   await ensureCouponTable(env);
-  const offer = await env.DB.prepare(OFFER_WITH_COUPON + " WHERE o.status='ready' ORDER BY o.created_at ASC, o.id ASC LIMIT 1").first();
+  const offer = await env.DB.prepare(OFFER_WITH_COUPON + " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC, o.id ASC LIMIT 1").bind(settings.category,settings.category).first();
   if (!offer) return;
   await sendOffer(env, offer, settings);
 }
@@ -206,6 +216,33 @@ async function router(request, env) {
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
   // Todos os endpoints multicanal exigem a mesma sessão administrativa e origem.
+  // Central de grupos WhatsApp; o grupo principal usa a integração legada.
+  if(u.pathname==='/api/wa-groups'&&method==='GET')
+    return json({groups:await listManagedWhatsAppGroups(env)});
+  if(u.pathname==='/api/wa-groups'&&method==='POST')
+    return json(await createManagedWhatsAppGroup(env,await getBody(request)),201);
+  const waState=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/state$/);
+  if(waState&&method==='GET')return json(await getManagedWhatsAppGroupState(env,waState[1]));
+  const waSettings=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/settings$/);
+  if(waSettings&&method==='POST')return json(await saveManagedWhatsAppGroup(env,waSettings[1],await getBody(request)));
+  const waOptions=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/options$/);
+  if(waOptions&&method==='GET')return json(await listManagedWhatsAppGroupOptions(env,waOptions[1]));
+  const waConnection=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/connection$/);
+  if(waConnection&&method==='GET')return json(await managedWhatsAppConnection(env,waConnection[1],false));
+  if(waConnection&&method==='POST')return json(await managedWhatsAppConnection(env,waConnection[1],true));
+  const waTest=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/test$/);
+  if(waTest&&method==='POST')return json(await testManagedWhatsAppGroup(env,waTest[1]));
+  const waAddOffer=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/offers$/);
+  if(waAddOffer&&method==='POST')return json(await addManagedWhatsAppOffer(env,waAddOffer[1],await getBody(request)),201);
+  const waCoupon=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/coupons$/);
+  if(waCoupon&&method==='POST')return json(await saveManagedWhatsAppCoupon(env,waCoupon[1],await getBody(request)),201);
+  const waOfferAction=u.pathname.match(/^\/api\/wa-groups\/(\d+)\/offers\/(\d+)\/(publish|requeue)$/);
+  if(waOfferAction&&method==='POST'){
+    const result=waOfferAction[3]==='publish'
+      ?await publishManagedWhatsAppOffer(env,waOfferAction[1],waOfferAction[2])
+      :await requeueManagedWhatsAppOffer(env,waOfferAction[1],waOfferAction[2]);
+    return json(result,result.status==='needs_review'?409:200);
+  }
   if(u.pathname==='/api/channels'&&method==='GET')
     return json({channels:await listTelegramChannels(env)});
   if(u.pathname==='/api/channels'&&method==='POST')
@@ -267,6 +304,9 @@ async function router(request, env) {
     catch (error) { return fail(error.message, 400); }
     const now = Math.floor(Date.now() / 1000);
     // O mesmo link não entra em canais diferentes sem decisão explícita.
+    const primaryCategory=await getPrimaryCategory(env);
+    if(!categoryMatches(data.category,primaryCategory))
+      return fail('Este canal só aceita ofertas da categoria '+primaryCategory+'.');
     await ensureMultiChannelTables(env);
     const other=await env.DB.prepare('SELECT channel_id FROM channel_offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
     if(other)return fail('Este link já pertence a outro canal. Use ofertas diferentes em cada canal.',409);
@@ -308,6 +348,8 @@ async function router(request, env) {
     try { chat = normalizeChannelHandle(b.telegram_chat_id); }
     catch (error) { return fail(error.message); }
     const existing = await readSettings(env);
+    const category=b.category===undefined?existing.category:String(b.category||'').trim();
+    if(!category||category.length>60)return fail('Informe uma categoria válida (até 60 caracteres).');
     const changed = chat !== existing.telegram_chat_id;
     // O novo endereço não herda a autorização anterior; pause toda a automação.
     if (changed) {
@@ -320,6 +362,7 @@ async function router(request, env) {
     const automation = changed ? false : b.automation_enabled;
     if ((enabled || automation) && !registered) return fail('Confirme primeiro que o canal está cadastrado e permitido no Mercado Livre.');
     if (automation && !enabled) return fail('Ative o Telegram antes de iniciar a automação.');
+    await savePrimaryCategory(env,category);
     await env.DB.prepare('UPDATE settings SET telegram_chat_id=?, automation_enabled=?, telegram_enabled=?, channel_registered=?, interval_minutes=?, max_daily=?, start_hour=?, end_hour=?, updated_at=? WHERE id=1')
       .bind(chat, +automation, +enabled, +registered, interval, limit, start, end, Math.floor(Date.now() / 1000)).run();
     await log(env, 'settings_updated', changed ? 'Canal alterado; automação e envio pausados para confirmação.' : `Automação ${automation ? 'ligada' : 'desligada'}`);
@@ -360,6 +403,7 @@ export default {
     ctx.waitUntil(runScheduled(env).catch(error => console.error('Publicador:', error?.message)));
     ctx.waitUntil(runWhatsAppScheduled(env).catch(error => console.error('WhatsApp:', error?.message)));
     ctx.waitUntil(runMultiChannelScheduled(env).catch(error => console.error('Canais extras:', error?.message)));
+    ctx.waitUntil(runManagedWhatsAppScheduled(env).catch(error => console.error('Grupos WhatsApp:', error?.message)));
   }
 };
 export { runScheduled, router };

@@ -1,8 +1,10 @@
 import { composeOfferMessage } from './logic.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable } from './coupons.js';
+import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
 
 // Integração independente, desligada por padrão. Sem destinatários individuais.
+const CREATE_PRIMARY_CATEGORY = "CREATE TABLE IF NOT EXISTS whatsapp_primary_category (id INTEGER PRIMARY KEY CHECK(id=1),category TEXT NOT NULL DEFAULT 'Geral')";
 const CREATE_CONFIG = `CREATE TABLE IF NOT EXISTS whatsapp_settings (
   id INTEGER PRIMARY KEY CHECK (id=1),
   enabled INTEGER NOT NULL DEFAULT 0,
@@ -181,6 +183,8 @@ export async function connectAffiliateWhatsApp(env){
 export async function ensureWhatsAppTables(env) {
   await env.DB.prepare(CREATE_CONFIG).run();
   await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_settings(id) VALUES(1)').run();
+  await env.DB.prepare(CREATE_PRIMARY_CATEGORY).run();
+  await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_primary_category(id) VALUES(1)").run();
   await env.DB.prepare(CREATE_DELIVERIES).run();
   await env.DB.prepare(CREATE_SCHEDULE).run();
   await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_schedule(id) VALUES(1)').run();
@@ -191,12 +195,13 @@ export async function ensureWhatsAppTables(env) {
 }
 export async function getWhatsAppState(env) {
   await ensureWhatsAppTables(env);
-  const [config,deliveries,schedule]=await Promise.all([
+  const [config,deliveries,schedule,categoryRow]=await Promise.all([
     env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first(),
     env.DB.prepare("SELECT d.offer_id,d.status,d.last_error,d.updated_at,o.title FROM whatsapp_deliveries d JOIN offers o ON o.id=d.offer_id ORDER BY d.updated_at DESC LIMIT 12").all(),
-    env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first()
+    env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first(),
+    env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()
   ]);
-  return {config,schedule,server_configured:configured(env),deliveries:deliveries.results};
+  return {config,schedule,category:categoryRow.category,server_configured:configured(env),deliveries:deliveries.results};
 }
 export async function listWhatsAppGroups(env,instance) {
   const data=await evoFetch(env,instance,'/group/fetchAllGroups',{method:'GET'});
@@ -210,15 +215,17 @@ export async function updateWhatsAppSettings(env,body) {
   await ensureWhatsAppTables(env);
   if(typeof body?.enabled!=='boolean'||typeof body?.public_registered!=='boolean')
     throw new Error('Seleções de WhatsApp inválidas.');
-  const [prev,previousSchedule]=await Promise.all([
+  const [prev,previousSchedule,previousCategory]=await Promise.all([
     env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first(),
-    env.DB.prepare('SELECT interval_minutes FROM whatsapp_schedule_custom WHERE id=1').first()
+    env.DB.prepare('SELECT interval_minutes FROM whatsapp_schedule_custom WHERE id=1').first(),
+    env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()
   ]);
   // Requisições antigas sem interval_minutes preservam o intervalo salvo.
   const interval=body.interval_minutes===undefined ? previousSchedule.interval_minutes : Number(body.interval_minutes);
   if(!validWhatsAppInterval(interval)||body.interval_minutes==='')
 
     throw new Error('Intervalo do WhatsApp inválido. Escolha uma opção disponível.');
+  const category=body.category===undefined ? previousCategory.category : normalizeChannelCategory(body.category);
   const name=validateInstance(body.instance_name);
   const jid=validateGroupJid(body.group_jid);
   const changed=name!==prev.instance_name||jid!==prev.group_jid;
@@ -238,7 +245,8 @@ export async function updateWhatsAppSettings(env,body) {
     await env.DB.prepare('UPDATE whatsapp_schedule_custom SET interval_minutes=?,last_attempt_at=0 WHERE id=1').bind(interval).run();
   else
     await env.DB.prepare('UPDATE whatsapp_schedule_custom SET interval_minutes=? WHERE id=1').bind(interval).run();
-  return {ok:true,enabled,group_changed:changed,interval_minutes:interval};
+  await env.DB.prepare('UPDATE whatsapp_primary_category SET category=? WHERE id=1').bind(category).run();
+  return {ok:true,enabled,group_changed:changed,interval_minutes:interval,category};
 }
 export async function testWhatsApp(env) {
   await ensureWhatsAppTables(env);
@@ -276,13 +284,14 @@ export async function runWhatsAppScheduled(env){
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
   await ensureCouponTable(env);
+  const cat=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
   const offer=await env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
     c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,
     c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,c.owner_confirmed AS coupon_owner_confirmed
     FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
     LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
-    WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
-    ORDER BY o.published_at ASC,o.id ASC LIMIT 1`).bind(cfg.group_jid,cfg.started_at).first();
+    WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL AND (lower(?)='geral' OR lower(o.category)=lower(?))
+    ORDER BY o.published_at ASC,o.id ASC LIMIT 1`).bind(cfg.group_jid,cfg.started_at,cat,cat).first();
   if(!offer)return {skipped:'empty'};
   const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
   const timestamp=nowSec();
