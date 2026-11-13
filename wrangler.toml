@@ -9,5 +9,5 @@ crons = ["*/5 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "cr-jornada-afiliados-db"
-database_id = "SUBSTITUIR_PELO_ID_DO_D1"
+database_id = "fa5ae244-84dc-4ad4-8a5e-95be14523a34"
 migrations_dir = "migrations"
