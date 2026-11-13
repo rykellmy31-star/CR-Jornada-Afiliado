@@ -127,10 +127,10 @@ test('oferta com foto: resolve metadados, envia sendPhoto e mantém botão do af
     if(address.includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200});
     if(address==='https://meli.la/2bsHW5y') return new Response('',{status:302,headers:{location:'https://www.mercadolivre.com.br/p/MLB123'}});
     if(address==='https://www.mercadolivre.com.br/p/MLB123') return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">',{headers:{'content-type':'text/html'}});
-    if(address==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg') return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'10000'}});
+    if(address==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-F.jpg') return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'850000'}});
     if(address.endsWith('/sendPhoto')){
       const body=JSON.parse(init.body);
-      assert.equal(body.photo,'https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.jpg');
+      assert.equal(body.photo,'https://http2.mlstatic.com/D_NQ_NP_99999-MLB-F.jpg');
       assert.match(body.caption,/Publicidade/);
       assert.equal(body.reply_markup.inline_keyboard[0][0].url,'https://meli.la/2bsHW5y');
       return new Response(JSON.stringify({ok:true,result:{message_id:42}}),{status:200});

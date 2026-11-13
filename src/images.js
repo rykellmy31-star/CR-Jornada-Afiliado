@@ -64,25 +64,71 @@ async function readLimitedHtml(response) {
   return text;
 }
 
-// Quando o Mercado Livre expõe a mesma imagem em JPG, preferimos esse formato para sendPhoto.
-async function acceptedPhoto(url, fetcher) {
-  const candidates = /\.webp$/i.test(url) ? [url.replace(/\.webp$/i, '.jpg'), url] : [url];
-  for (const candidate of candidates) {
-    if (!trustedProductImage(candidate)) continue;
-    try {
-      const response = await fetcher(candidate, {
-        method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(4500)
-      });
-      const type = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
-      const length = Number(response.headers.get('content-length') || 0);
-      if (response.ok && (type === 'image/jpeg' || type === 'image/png') && (length === 0 || length <= MAX_PHOTO_BYTES)) {
-        return candidate;
-      }
-    } catch { /* Resposta de imagem indisponível; tentar outro formato. */ }
+// A CDN do Mercado Livre documenta -F como variante de maior resolução.
+// Priorizamos uma foto grande da MESMA identificação, nunca ampliamos o thumbnail
+// e nunca assumimos que basta alterar o sufixo: cada variante é verificada na CDN.
+export function highQualityPhotoCandidates(value) {
+  if (!trustedProductImage(value)) return [];
+  const original = new URL(value);
+  const candidates = [];
+  const seen = new Set();
+  function add(path, keepQuery = false) {
+    const u = new URL(original.href);
+    u.pathname = path;
+    if (!keepQuery) u.search = '';
+    if (trustedProductImage(u.href) && !seen.has(u.href)) {
+      seen.add(u.href);
+      candidates.push(u.href);
+    }
   }
-  // Algumas CDNs não aceitam HEAD embora atendam GET. O Telegram validará a foto por URL;
-  // se a API recusar explicitamente (400), a oferta seguirá em texto sem duplicar mensagens.
-  return candidates.find(trustedProductImage) || null;
+
+  // Mantém o ID real da foto; D_Q é a versão com preenchimento, D_NQ sem.
+  // O prefixo 2X pertence apenas à miniatura e não é reutilizado.
+  const match = /^\/D_(?:NQ|Q)_NP_(?:2X_)?([A-Za-z0-9]+-ML[A-Za-z0-9_]+)-[A-Z]{1,2}\.(?:jpe?g|png|webp)$/i.exec(original.pathname);
+  if (match) {
+    const base = '/D_NQ_NP_' + match[1];
+    for (const size of ['F', 'OO', 'O']) add(base + '-' + size + '.jpg');
+  }
+  if (/\.webp$/i.test(original.pathname)) add(original.pathname.replace(/\.webp$/i, '.jpg'), true);
+  if (/\.(?:jpe?g|png)$/i.test(original.pathname)) add(original.pathname, true);
+  return candidates;
+}
+
+function acceptableImageResponse(response, ranged = false) {
+  if (!response.ok) return false;
+  const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'image/jpeg' && type !== 'image/png') return false;
+  const rangeTotal = ranged ? /\/(\d+)$/.exec(response.headers.get('content-range') || '') : null;
+  const length = Number(rangeTotal?.[1] || response.headers.get('content-length') || 0);
+  return Number.isFinite(length) && (length === 0 || length <= MAX_PHOTO_BYTES);
+}
+
+async function candidateExists(url, fetcher) {
+  try {
+    const head = await fetcher(url, {
+      method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(4500)
+    });
+    if (acceptableImageResponse(head)) return true;
+    // Alguns servidores de mídia não implementam HEAD. Verificamos MIME e tamanho
+    // com GET parcial, sem baixar o arquivo inteiro no Worker.
+    if (![405, 501].includes(head.status) && !(head.ok && !head.headers.get('content-type'))) return false;
+    const probe = await fetcher(url, {
+      method: 'GET', headers: { range: 'bytes=0-1023' },
+      redirect: 'manual', signal: AbortSignal.timeout(4500)
+    });
+    const good = acceptableImageResponse(probe, true);
+    try { await probe.body?.cancel(); } catch {}
+    return good;
+  } catch { return false; }
+}
+
+async function acceptedPhoto(url, fetcher) {
+  for (const candidate of highQualityPhotoCandidates(url)) {
+    if (await candidateExists(candidate, fetcher)) return candidate;
+  }
+  // Não envia URL inexistente ou HTML disfarçado de foto. Se não houver imagem
+  // válida, o publicador preserva a oferta com texto, link e prévia.
+  return null;
 }
 
 export async function findProductImage(affiliateUrl, fetcher = fetch) {

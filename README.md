@@ -73,7 +73,7 @@ Referências oficiais:
 
 ## Imagens automáticas no Telegram
 
-O robô tenta obter a imagem divulgada nos metadados públicos (`og:image` ou `twitter:image`) da página correspondente ao próprio link de afiliado `meli.la` / `mercadolivre.com.br`. Redirecionamentos ficam restritos a domínios oficiais; as imagens aceitas têm origem na CDN oficial `http2.mlstatic.com`. O bot tenta o método `sendPhoto` com a legenda e mantém exatamente o link de afiliado no botão.
+O robô tenta obter a imagem divulgada nos metadados públicos (`og:image` ou `twitter:image`) da página correspondente ao próprio link de afiliado `meli.la` / `mercadolivre.com.br`. A partir desta melhoria, ele reconstrói somente variantes da mesma foto identificada pela CDN, priorizando a versão oficial `-F.jpg` de maior resolução, depois a original disponível e, por último, uma versão intermediária. Antes do envio, confirma por HTTPS que a URL retorna JPEG ou PNG dentro do limite de 5 MB aceito por URL pelo Telegram. Quando a CDN não permite HEAD, tenta uma verificação GET parcial. Não cria detalhes artificiais nem promete qualidade superior à foto original do vendedor. Redirecionamentos ficam restritos a domínios oficiais; as imagens aceitas têm origem na CDN oficial `http2.mlstatic.com`. O bot tenta o método `sendPhoto` com a legenda e mantém exatamente o link de afiliado no botão.
 
 Caso a página não exponha imagem pública, ou a foto seja recusada explicitamente pela API do Telegram, a oferta será enviada como texto contendo o link, permitindo a prévia automática quando disponível. Em falha ambígua de rede o registro fica em revisão para evitar duplicidade. **A alteração vale para as próximas ofertas**, não edita publicações antigas. Não há nova migração D1 nem segredos adicionais.
 
