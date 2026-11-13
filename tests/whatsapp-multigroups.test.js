@@ -269,3 +269,30 @@ test('painel contém todos os controles necessários e JavaScript válido',()=>{
  assert.doesNotThrow(()=>new Function(CLIENT_JS));
  assert.match(CLIENT_JS,/\/api\/wa-groups/);
 });
+
+
+test('grupo principal e grupo extra no mesmo número não disparam simultaneamente',async()=>{
+ const DB=dbMock(),env=envFor(DB),sent=[];
+ try{
+   mockEvolution(sent);
+   await ensureWhatsAppTables(env);
+   DB.prepare('UPDATE whatsapp_settings SET instance_name=?,group_jid=?,enabled=1,public_registered=1,started_at=1 WHERE id=1')
+     .bind('cr-jornada-afiliados',GROUP_MOTO).run();
+   const now=Math.floor(Date.now()/1000);
+   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+     .bind('Produto do canal principal','https://meli.la/AbCde9','Geral',now,'published',now+2).run();
+   const id=await newGroup(env,'Promoções Femininas','Feminino');
+   await activate(env,id,GROUP_FEM,'Promoções Femininas','Feminino');
+   await addManagedWhatsAppOffer(env,id,ad('https://meli.la/AbCde2','Feminino'));
+   assert.equal((await runWhatsAppScheduled(env)).status,'sent');
+   assert.equal(sent.length,1);
+   assert.equal(sent[0].number,GROUP_MOTO);
+   assert.equal((await runManagedWhatsAppScheduled(env)).results.length,0);
+   assert.equal(sent.length,1);
+   const last=now-65;
+   DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=?')
+     .bind(last,'cr-jornada-afiliados').run();
+   assert.equal((await runManagedWhatsAppScheduled(env)).results[0].status,'published');
+   assert.equal(sent[1].number,GROUP_FEM);
+ }finally{globalThis.fetch=ownFetch;DB.close();}
+});

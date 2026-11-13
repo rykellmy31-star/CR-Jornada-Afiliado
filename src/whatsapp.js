@@ -302,6 +302,18 @@ export async function runWhatsAppScheduled(env){
   const slot=await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
     .bind(timestamp,timestamp-minGap).run();
   if(slot.meta?.changes!==1)return {skipped:'interval'};
+  // Uma única janela de envio por instância Evolution, inclusive quando
+  // outros grupos do mesmo número estiverem habilitados.
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS whatsapp_instance_pacing (instance_name TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0)").run();
+  await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_instance_pacing(instance_name,last_attempt_at) VALUES(?,0)').bind(cfg.instance_name).run();
+  const sharedSlot=await env.DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=? AND (last_attempt_at=0 OR last_attempt_at<=?)')
+    .bind(timestamp,cfg.instance_name,timestamp-60).run();
+  if(sharedSlot.meta?.changes!==1){
+    // Não inicia um intervalo novo quando o número já está enviando a outro grupo.
+    await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND last_attempt_at=?')
+      .bind(schedule.last_attempt_at,timestamp).run();
+    return {skipped:'instance_interval'};
+  }
   const claim=await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_deliveries(offer_id,group_jid,status,created_at,updated_at) VALUES(?,?,'sending',?,?)")
     .bind(offer.id,cfg.group_jid,timestamp,timestamp).run();
   if(claim.meta?.changes!==1)return {skipped:'claimed'};

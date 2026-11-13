@@ -331,7 +331,7 @@ export async function runManagedWhatsAppScheduled(env){
    const instance=await env.DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=? AND (last_attempt_at=0 OR last_attempt_at<=?)')
      .bind(time,g.instance_name,time-60).run();
    if(instance.meta?.changes!==1){
-     await env.DB.prepare('UPDATE whatsapp_groups SET last_attempt_at=? WHERE id=?').bind(g.last_attempt_at,g.id).run();
+     await env.DB.prepare('UPDATE whatsapp_groups SET last_attempt_at=? WHERE id=? AND last_attempt_at=?').bind(g.last_attempt_at,g.id,time).run();
      continue;
    }
    try{results.push({group_id:g.id,...await publishManagedWhatsAppOffer(env,g.id,offer.id)});}
