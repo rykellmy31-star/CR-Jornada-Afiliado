@@ -164,7 +164,7 @@ export async function prepareMonitorBatch(env,body){
    :body?.ids;
  if(!Array.isArray(ids)||!ids.length||ids.length>50||!ids.every(x=>Number.isSafeInteger(x)&&x>0)||new Set(ids).size!==ids.length)
    throw fail('Selecione de 1 a 50 produtos diferentes.');
- const sql='SELECT id,title,source_url,category FROM ml_monitor_links WHERE status=\'available\' AND id IN ('+ids.map(()=>'?').join(',')+') ORDER BY id';
+ const sql='SELECT id,title,source_url,category FROM ml_monitor_links WHERE status=\'available\' AND id IN ('+ids.map(()=>'?').join(',')+') ORDER BY category,id';
  const rows=(await env.DB.prepare(sql).bind(...ids).all()).results;
  if(rows.length!==ids.length)throw fail('Um produto já foi utilizado em lote. Atualize a lista.',409);
  if(rows.some(x=>x.category==='Geral'))throw fail('Defina a categoria dos produtos não reconhecidos antes de montar o lote.');

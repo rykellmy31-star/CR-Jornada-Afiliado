@@ -96,7 +96,7 @@ test('endpoints do lote exigem login administrativo',async()=>{
    assert.equal(read.status,200);
  }finally{DB.close();}
 });
-test('interface possui duas etapas e não publica automaticamente ao copiar',()=>{
+test('interface apresenta as quatro etapas sem misturar nomes nos links copiados',()=>{
  const html=renderPage();
  for(const id of ['ml-link-batches','ml-batch-prepare','ml-batch-copy','ml-batch-step2','ml-batch-converted',
    'ml-batch-preview','ml-batch-pair-confirmation','ml-batch-import'])
@@ -105,6 +105,16 @@ test('interface possui duas etapas e não publica automaticamente ao copiar',()=
  assert.match(CLIENT_JS,/navigator.clipboard.writeText/);
  assert.match(CLIENT_JS,/ml-batch-import/);
  assert.match(CLIENT_JS,/refreshMLLinkBatches/);
+
+ assert.match(html,/Etapa 1 • Produtos identificados e classificados/);
+ assert.match(html,/Etapa 2 • Somente links para copiar/);
+ assert.match(html,/Etapa 3 • Cole os links convertidos/);
+ assert.match(html,/Etapa 4 • Colocar cada link na categoria e na fila correta/);
+ assert.match(html,/id="ml-batch-links-only" readonly/);
+ assert.match(html,/id="ml-batch-final-step" class="ml-batch-phase hidden"/);
+ assert.match(CLIENT_JS,/\$\('ml-batch-links-only'\)\.value=mlBatchUrlList\(\)/);
+ assert.match(CLIENT_JS,/const text=\$\('ml-batch-links-only'\)\.value/);
+ assert.match(CLIENT_JS,/\$\('ml-batch-final-step'\)\.classList\.remove\('hidden'\)/);
  assert.match(CLIENT_JS,/item\.id==='ml-link-batches'/);
  assert.match(CLIENT_JS,/selectedPage!=='linkbatches'/);
  assert.match(html,/data-panel="linkbatches"/);
