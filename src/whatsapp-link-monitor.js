@@ -10,7 +10,9 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_groups(id INTEGER PRIMARY KEY AUTOINCREMENT,instance_name TEXT NOT NULL,group_jid TEXT NOT NULL,group_name TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,authorized INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,UNIQUE(instance_name,group_jid))",
  "CREATE TABLE IF NOT EXISTS ml_monitor_links(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',product_id TEXT NOT NULL UNIQUE,source_url TEXT NOT NULL,title TEXT NOT NULL,category TEXT NOT NULL DEFAULT 'Geral',classification TEXT NOT NULL DEFAULT 'needs_review',status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','batched')),batch_id INTEGER,created_at INTEGER NOT NULL)",
  "CREATE INDEX IF NOT EXISTS idx_ml_monitor_links_queue ON ml_monitor_links(status,category,id)",
- "CREATE TABLE IF NOT EXISTS ml_monitor_shortlinks(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',short_url TEXT NOT NULL UNIQUE,message_hint TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','review','resolved')),tries INTEGER NOT NULL DEFAULT 0,reason TEXT,created_at INTEGER NOT NULL)"
+ "CREATE TABLE IF NOT EXISTS ml_monitor_shortlinks(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',short_url TEXT NOT NULL UNIQUE,message_hint TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','review','resolved')),tries INTEGER NOT NULL DEFAULT 0,reason TEXT,created_at INTEGER NOT NULL)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),events_received INTEGER NOT NULL DEFAULT 0,events_while_off INTEGER NOT NULL DEFAULT 0,messages_with_links INTEGER NOT NULL DEFAULT 0,authorized_messages INTEGER NOT NULL DEFAULT 0,links_recognized INTEGER NOT NULL DEFAULT 0,last_event_at INTEGER,last_authorized_at INTEGER,last_link_at INTEGER)",
+ "INSERT OR IGNORE INTO ml_monitor_diagnostics(id) VALUES(1)"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -70,14 +72,16 @@ function productTitle(url,hint,id){
 }
 export async function monitorState(env){
  await ensureMonitor(env);
- const [settings,groups,links,pending,categories,counts,perGroup]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
   env.DB.prepare("SELECT status,COUNT(*) AS total FROM ml_monitor_shortlinks GROUP BY status").all(),
   (async()=>{await ensureAutomationCenter(env);return env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1 ORDER BY name').all()})(),
   env.DB.prepare("SELECT COUNT(l.id) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id").first(),
-  env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all()
+  env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all(),
+  env.DB.prepare("SELECT events_received,events_while_off,messages_with_links,authorized_messages,links_recognized,last_event_at,last_authorized_at,last_link_at FROM ml_monitor_diagnostics WHERE id=1").first(),
+  env.DB.prepare("SELECT s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status IN ('pending','review') ORDER BY s.id DESC LIMIT 8").all()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -88,6 +92,8 @@ export async function monitorState(env){
  const perGroupMap=new Map(perGroup.results.map(x=>[x.group_id,normalizedCounts(x)]));
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
    counts:normalizedCounts(counts),
+   diagnostics:diagnostics||{},
+   recent_shortlinks:latestShortlinks.results,
    groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||normalizedCounts(null)})),
    links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),
    shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
@@ -155,19 +161,26 @@ async function saveProduct(env,entry,source){
 }
 export async function ingestMonitorEvent(env,payload){
  await ensureMonitor(env);
+ const receivedAt=epoch();
+ await env.DB.prepare("UPDATE ml_monitor_diagnostics SET events_received=events_received+1,last_event_at=? WHERE id=1").bind(receivedAt).run();
  const state=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
- if(!state?.enabled)return {ok:true,ignored:'monitor_off'};
+ if(!state?.enabled){
+   await env.DB.prepare("UPDATE ml_monitor_diagnostics SET events_while_off=events_while_off+1 WHERE id=1").run();
+   return {ok:true,ignored:'monitor_off'};
+ }
  const messages=parseMonitorEvent(payload);
  if(!messages.length)return {ok:true,accepted:0};
  const groupList=(await env.DB.prepare('SELECT id,instance_name,group_jid FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').all()).results;
- let captured=0,pending=0;
+ let captured=0,pending=0,authorized=0,recognized=0;
  for(const msg of messages){
    const group=groupList.find(x=>x.instance_name===msg.instance&&x.group_jid===msg.group_jid);
    if(!group)continue;
+   authorized++;
    const entry={...msg,group_id:group.id};
    for(const raw of msg.urls){
      const candidate=urlCandidate(raw);
      if(!candidate)continue;
+     recognized++;
      if(candidate.kind==='short'){
        // O mesmo link encurtado pode voltar a ser publicado; reverifique após um intervalo.
        const inserted=await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_shortlinks(group_id,message_id,short_url,message_hint,status,tries,created_at) VALUES(?,?,?,?,'pending',0,?)")
@@ -179,6 +192,8 @@ export async function ingestMonitorEvent(env,payload){
      }else{if(await saveProduct(env,entry,candidate))captured++;}
    }
  }
+ await env.DB.prepare("UPDATE ml_monitor_diagnostics SET messages_with_links=messages_with_links+?,authorized_messages=authorized_messages+?,links_recognized=links_recognized+?,last_authorized_at=CASE WHEN ?>0 THEN ? ELSE last_authorized_at END,last_link_at=CASE WHEN ?>0 THEN ? ELSE last_link_at END WHERE id=1")
+   .bind(messages.length,authorized,recognized,authorized,receivedAt,recognized,receivedAt).run();
  return {ok:true,captured,pending};
 }
 export async function updateMonitorLinkCategory(env,id,body){
