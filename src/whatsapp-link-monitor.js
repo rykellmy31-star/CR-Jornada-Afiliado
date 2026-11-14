@@ -1,6 +1,7 @@
 import {classifyProduct,ensureAutomationCenter} from './automation-center.js';
-import {createLinkBatch,productId,validateSourceUrl} from './link-batches.js';
+import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './link-batches.js';
 import {listWhatsAppGroups} from './whatsapp.js';
+import {ensureRepeatMeta,extractOfferPriceCents,canRequeueProduct} from './monitor-repeat-policy.js';
 
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
@@ -15,7 +16,7 @@ const epoch=()=>Math.floor(Date.now()/1000);
 const GROUP=/^\d{6,30}(?:-\d{6,20})?@g\.us$/;
 const INSTANCE=/^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/;
 const HOSTS=new Set(['www.mercadolivre.com.br','mercadolivre.com.br','produto.mercadolivre.com.br']);
-export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();}
+export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
  return [...new Set((text.slice(0,8000).match(/https:\/\/[^\s<>"'()[\]{}]+/gi)||[])
@@ -70,7 +71,7 @@ export async function monitorState(env){
  const [settings,groups,links,pending,categories]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
-  env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id ORDER BY l.id DESC LIMIT 200").all(),
+  env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_queued_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
   env.DB.prepare("SELECT status,COUNT(*) AS total FROM ml_monitor_shortlinks GROUP BY status").all(),
   (async()=>{await ensureAutomationCenter(env);return env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1 ORDER BY name').all()})()
  ]);
@@ -115,13 +116,28 @@ export async function updateMonitorGroup(env,id,body){
  return {ok:true};
 }
 async function saveProduct(env,entry,source){
+ const time=epoch(),price=extractOfferPriceCents(entry.hint);
  const title=productTitle(source.url,entry.hint,source.product_id);
  await ensureAutomationCenter(env);
  const cats=(await env.DB.prepare('SELECT * FROM affiliate_group_categories WHERE enabled=1').all()).results;
- const c=classifyProduct(title+' '+entry.hint,'',cats);
- const category=c.category?.name||'Geral';
- await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) VALUES(?,?,?,?,?,?,?,'available',?)")
-   .bind(entry.group_id,entry.message_id,source.product_id,source.url,title,category,c.classification,epoch()).run();
+ const classification=classifyProduct(title+' '+entry.hint,'',cats);
+ const category=classification.category?.name||'Geral';
+ // Registre o último preço mencionado com precisão, inclusive NULL para mensagens sem preço.
+ const prior=await env.DB.prepare("SELECT l.id,l.status,l.batch_id,b.status AS batch_status,b.imported_at,m.last_queued_at,m.last_queued_price_cents FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id WHERE l.product_id=?").bind(source.product_id).first();
+ await env.DB.prepare("INSERT INTO ml_monitor_product_meta(product_id,last_seen_price_cents,last_seen_at) VALUES(?,?,?) ON CONFLICT(product_id) DO UPDATE SET last_seen_price_cents=excluded.last_seen_price_cents,last_seen_at=excluded.last_seen_at")
+   .bind(source.product_id,price,time).run();
+ if(!prior){
+   const inserted=await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) VALUES(?,?,?,?,?,?,?,'available',?)")
+     .bind(entry.group_id,entry.message_id,source.product_id,source.url,title,category,classification.classification,time).run();
+   return inserted.meta?.changes===1;
+ }
+ if(prior.status==='available')return false; // Já está na etapa 1; não repita.
+ if(prior.batch_status!=='imported')return false; // Lote ainda está aguardando conversão.
+ const lastQueued=prior.last_queued_at||prior.imported_at||0;
+ if(!canRequeueProduct(lastQueued,prior.last_queued_price_cents,price,time))return false;
+ const updated=await env.DB.prepare("UPDATE ml_monitor_links SET group_id=?,message_id=?,source_url=?,title=?,category=?,classification=?,status='available',batch_id=NULL,created_at=? WHERE id=? AND status='batched' AND EXISTS(SELECT 1 FROM ml_link_batches WHERE id=ml_monitor_links.batch_id AND status='imported')")
+   .bind(entry.group_id,entry.message_id,source.url,title,category,classification.classification,time,prior.id).run();
+ return updated.meta?.changes===1;
 }
 export async function ingestMonitorEvent(env,payload){
  await ensureMonitor(env);
@@ -139,9 +155,14 @@ export async function ingestMonitorEvent(env,payload){
      const candidate=urlCandidate(raw);
      if(!candidate)continue;
      if(candidate.kind==='short'){
-       await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_shortlinks(group_id,message_id,short_url,message_hint,status,tries,created_at) VALUES(?,?,?,?,'pending',0,?)")
-         .bind(group.id,msg.message_id,candidate.url,msg.hint,epoch()).run();pending++;
-     }else{await saveProduct(env,entry,candidate);captured++;}
+       // O mesmo link encurtado pode voltar a ser publicado; reverifique após um intervalo.
+       const inserted=await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_shortlinks(group_id,message_id,short_url,message_hint,status,tries,created_at) VALUES(?,?,?,?,'pending',0,?)")
+         .bind(group.id,msg.message_id,candidate.url,msg.hint,epoch()).run();
+       if(inserted.meta?.changes===1){pending++;continue;}
+       const retried=await env.DB.prepare("UPDATE ml_monitor_shortlinks SET group_id=?,message_id=?,message_hint=?,status='pending',tries=0,reason=NULL,created_at=? WHERE short_url=? AND status IN ('resolved','review') AND message_id<>? AND created_at<=?")
+         .bind(group.id,msg.message_id,msg.hint,epoch(),candidate.url,msg.message_id,epoch()-300).run();
+       if(retried.meta?.changes===1)pending++;
+     }else{if(await saveProduct(env,entry,candidate))captured++;}
    }
  }
  return {ok:true,captured,pending};
@@ -170,7 +191,12 @@ export async function prepareMonitorBatch(env,body){
  if(rows.some(x=>x.category==='Geral'))throw fail('Defina a categoria dos produtos não reconhecidos antes de montar o lote.');
  const text=rows.map(x=>x.title.replace(/\|/g,' ')+' | '+x.source_url+' | '+x.category).join('\n');
  const batch=await createLinkBatch(env,{text});
- const changes=await env.DB.batch(rows.map(x=>env.DB.prepare("UPDATE ml_monitor_links SET status='batched',batch_id=? WHERE id=? AND status='available'").bind(batch.batch.id,x.id)));
+ const ops=[];
+ for(const x of rows){
+  ops.push(env.DB.prepare("UPDATE ml_monitor_links SET status='batched',batch_id=? WHERE id=? AND status='available'").bind(batch.batch.id,x.id));
+  ops.push(env.DB.prepare("UPDATE ml_monitor_product_meta SET pending_batch_id=?,pending_price_cents=last_seen_price_cents WHERE product_id=(SELECT product_id FROM ml_monitor_links WHERE id=?)").bind(batch.batch.id,x.id));
+ }
+ const changes=await env.DB.batch(ops);
  if(changes.some(x=>x.meta?.changes!==1))throw fail('Um produto mudou durante a criação do lote. Revise os lotes salvos.',409);
  return batch;
 }
