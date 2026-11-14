@@ -7,13 +7,13 @@ export const CATEGORY_PAGE_HTML = `
       <h2>Categorias de grupos</h2>
       <form id="category-create-form" class="category-form">
         <label>Nome da categoria<input name="name" maxlength="60" minlength="3" required placeholder="Ex.: Ferramentas, Peças de motos"></label>
-        <label>Palavras-chave dos produtos<input name="keywords" maxlength="350" placeholder="Ex.: chave de fenda, chave de boca, furadeira"></label>
+        <label>Palavras-chave dos produtos<input name="keywords" maxlength="800" placeholder="Ex.: chave de fenda, chave de boca, furadeira"></label>
         <button type="submit" class="primary">Criar categoria</button>
       </form>
       <div class="divider-wa"></div>
       <label>Categoria para configurar<select id="category-group-select"><option value="">Selecione uma categoria</option></select></label>
       <form id="category-edit-form" class="category-form">
-        <label>Palavras-chave para reconhecimento<input id="category-edit-keywords" maxlength="350" placeholder="Separe por vírgulas"></label>
+        <label>Palavras-chave para reconhecimento<input id="category-edit-keywords" maxlength="800" placeholder="Separe por vírgulas"></label>
         <label class="check-row"><input id="category-edit-enabled" type="checkbox" checked><span><b>Categoria ativa</b><small>Desativada não distribui ofertas</small></span></label>
         <button type="submit" class="outline">Salvar categoria</button>
       </form>
