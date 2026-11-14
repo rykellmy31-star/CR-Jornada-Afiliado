@@ -65,11 +65,11 @@ export function classifyProduct(title,sourceCategory,categories){
   if(matches.length===1)return {category:matches[0],subcategory:inferSubcategory(title),classification:'keywords'};
   return {category:null,subcategory:null,classification:'needs_review'};
 }
-export async function upsertProductCategory(env,platform,offer){
+export async function upsertProductCategory(env,platform,offer,categoriesGiven=null){
   if(!['mercadolivre','shopee'].includes(platform))return null;
   if(!offer?.affiliate_url||!offer?.title)return null;
-  await ensureAutomationCenter(env);
-  const categories=(await env.DB.prepare('SELECT * FROM affiliate_group_categories WHERE enabled=1 ORDER BY id').all()).results;
+  if(!categoriesGiven)await ensureAutomationCenter(env);
+  const categories=categoriesGiven||(await env.DB.prepare('SELECT * FROM affiliate_group_categories WHERE enabled=1 ORDER BY id').all()).results;
   const c=classifyProduct(offer.title,offer.category,categories);
   const t=timestamp();
   await env.DB.prepare(
@@ -216,6 +216,8 @@ async function alreadySentByOriginal(env,platform,offer,r){
   if(platform==='mercadolivre'){
     if(r.destination_scope==='mercadolivre'&&r.network==='telegram'&&r.destination_id===1)return true;
     if(r.destination_scope==='mercadolivre'&&r.network==='whatsapp'&&r.destination_id===1){
+      const directMode=await env.DB.prepare('SELECT delivery_mode FROM offer_delivery_routing WHERE offer_id=?').bind(offer.id).first().catch(()=>null);
+      if(!directMode||directMode.delivery_mode==='both')return true;
       const sent=await env.DB.prepare("SELECT 1 AS found FROM whatsapp_deliveries WHERE offer_id=? AND status IN ('sent','sending','needs_review')").bind(offer.id).first().catch(()=>null);
       if(sent)return true;
     }
@@ -228,16 +230,19 @@ async function alreadySentByOriginal(env,platform,offer,r){
 export async function runCategoryRoutingScheduled(env){
   if(!env?.DB||env.MASTER_SCHEDULE_ENABLED!==true)return {skipped:'master_off'};
   await ensureAutomationCenter(env);
-  const cutoff=timestamp()-7*86400;
+  const routesFound=await env.DB.prepare('SELECT COUNT(*) AS total FROM affiliate_category_routes r JOIN affiliate_group_categories g ON g.id=r.group_category_id WHERE g.enabled=1').first();
+  if(!routesFound?.total)return {skipped:'no_category_routes'};
+  const categories=(await env.DB.prepare('SELECT * FROM affiliate_group_categories WHERE enabled=1').all()).results;
+  const cutoff=timestamp()-2*86400;
   const [ml,sh]=await Promise.all([
-    env.DB.prepare("SELECT * FROM offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 60").bind(cutoff).all(),
-    env.DB.prepare("SELECT * FROM shopee_offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 60").bind(cutoff).all().catch(()=>({results:[]}))
+    env.DB.prepare("SELECT * FROM offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 30").bind(cutoff).all(),
+    env.DB.prepare("SELECT * FROM shopee_offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 30").bind(cutoff).all().catch(()=>({results:[]}))
   ]);
   const out=[];
   for(const [platform,offers] of [['mercadolivre',ml.results],['shopee',sh.results]]){
     for(const offer of offers){
       // Ofertas antigas são classificadas quando entram no radar, sem modificar seu cadastro original.
-      const classification=await upsertProductCategory(env,platform,offer);
+      const classification=await upsertProductCategory(env,platform,offer,categories);
       const category=classification?.category;
       if(!category)continue;
       const routes=await env.DB.prepare('SELECT * FROM affiliate_category_routes WHERE group_category_id=? AND '+(platform==='shopee'?'allow_shopee=1':'allow_mercadolivre=1')+' ORDER BY id LIMIT 40').bind(category.id).all();
