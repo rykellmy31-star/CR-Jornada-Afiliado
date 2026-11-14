@@ -30,7 +30,7 @@ test('cinco categorias iniciais são cadastradas sem duplicar nem sobrescrever c
     const first=await listCategories(env);
     assert.equal(STARTER_GROUP_CATEGORIES.length,5);
     for(const preset of STARTER_GROUP_CATEGORIES){
-      assert.ok(preset.keywords.length>40&&preset.keywords.length<=350);
+      assert.ok(preset.keywords.length>40&&preset.keywords.length<=800);
       const row=first.groups.find(g=>g.name===preset.name);
       assert.ok(row,'Categoria inicial ausente: '+preset.name);
       assert.equal(row.keywords,preset.keywords);
@@ -42,6 +42,9 @@ test('cinco categorias iniciais são cadastradas sem duplicar nem sobrescrever c
     DB.prepare('UPDATE affiliate_group_categories SET keywords=?,enabled=0 WHERE id=?').bind('palavra personalizada',custom.id).run();
     const empty=first.groups.find(g=>g.name==='Moda e Acessórios');
     DB.prepare('UPDATE affiliate_group_categories SET keywords=? WHERE id=?').bind('',empty.id).run();
+    const automotive=first.groups.find(g=>g.name==='Ferramentas e Peças Automotivas');
+    DB.prepare('UPDATE affiliate_group_categories SET keywords=? WHERE id=?')
+      .bind(STARTER_GROUP_CATEGORIES.find(p=>p.name===automotive.name).keywords.split(', lavadora de alta pressão')[0],automotive.id).run();
     await ensureAutomationCenter(env);
     const second=await listCategories(env);
     assert.equal(second.groups.filter(g=>STARTER_GROUP_CATEGORIES.some(p=>p.name===g.name)).length,5);
@@ -50,6 +53,11 @@ test('cinco categorias iniciais são cadastradas sem duplicar nem sobrescrever c
     assert.equal(second.groups.find(g=>g.name===empty.name).keywords,STARTER_GROUP_CATEGORIES.find(p=>p.name===empty.name).keywords);
     const selected=classifyProduct('Furadeira parafusadeira 20v','Geral',second.groups);
     assert.equal(selected.category.name,'Ferramentas e Peças Automotivas');
+    assert.equal(second.groups.find(g=>g.name===automotive.name).keywords,STARTER_GROUP_CATEGORIES.find(p=>p.name===automotive.name).keywords,'Preset antigo deve incorporar lavagem sem duplicação');
+    for(const title of ['Lavadora de alta pressão WAP 2000', 'Cera automotiva premium','Shampoo automotivo concentrado']){
+      const found=classifyProduct(title,'Geral',second.groups);
+      assert.equal(found.category?.name,'Ferramentas e Peças Automotivas',title);
+    }
   }finally{DB.close();}
 });
 
