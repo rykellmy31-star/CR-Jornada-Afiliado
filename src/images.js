@@ -1,7 +1,12 @@
 // Usa apenas metadados públicos da página do próprio produto. Não acessa contas nem contorna bloqueios.
 const MAX_HTML_BYTES = 1_000_000;
 const MAX_PHOTO_BYTES = 5_000_000;
-const ALLOWED_PAGES = new Set(['meli.la', 'mercadolivre.com.br', 'www.mercadolivre.com.br']);
+// Redirecionamentos oficiais do meli.la podem atravessar /sec/ e a página do anúncio.
+const ALLOWED_PAGES = new Set([
+  'meli.la', 'mercadolivre.com', 'www.mercadolivre.com',
+  'mercadolivre.com.br', 'www.mercadolivre.com.br',
+  'produto.mercadolivre.com.br', 'm.mercadolivre.com.br'
+]);
 const ALLOWED_IMAGES = new Set(['http2.mlstatic.com']);
 
 export function trustedProductPage(value) {
@@ -40,6 +45,27 @@ export function extractProductImage(html) {
       if ((attrs.property || attrs.name || '').toLowerCase() === kind && trustedProductImage(attrs.content)) {
         return attrs.content;
       }
+    }
+  }
+  // Algumas páginas oficiais trazem a foto somente em JSON-LD (schema.org/Product).
+  // Nunca usa fotos de recomendações ou URLs fora da CDN aprovada.
+  for (const script of String(html).matchAll(/<script\b(?=[^>]*\btype\s*=\s*["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+    let data;
+    try { data = JSON.parse(script[1]); } catch { continue; }
+    const queue = [data];
+    while (queue.length) {
+      const item = queue.shift();
+      if (Array.isArray(item)) { queue.push(...item.slice(0, 30)); continue; }
+      if (!item || typeof item !== 'object') continue;
+      const types = Array.isArray(item['@type']) ? item['@type'] : [item['@type']];
+      if (types.includes('Product')) {
+        const photos = Array.isArray(item.image) ? item.image : [item.image];
+        for (const photo of photos) {
+          const url = typeof photo === 'string' ? photo : photo?.url || photo?.contentUrl;
+          if (trustedProductImage(url)) return url;
+        }
+      }
+      if (item['@graph']) queue.push(item['@graph']);
     }
   }
   return null;
@@ -111,7 +137,8 @@ async function candidateExists(url, fetcher) {
     if (acceptableImageResponse(head)) return true;
     // Alguns servidores de mídia não implementam HEAD. Verificamos MIME e tamanho
     // com GET parcial, sem baixar o arquivo inteiro no Worker.
-    if (![405, 501].includes(head.status) && !(head.ok && !head.headers.get('content-type'))) return false;
+    // Algumas CDNs negam HEAD (403) embora aceitem GET com Range.
+    if (![400, 403, 405, 501].includes(head.status) && !(head.ok && !head.headers.get('content-type'))) return false;
     const probe = await fetcher(url, {
       method: 'GET', headers: { range: 'bytes=0-1023' },
       redirect: 'manual', signal: AbortSignal.timeout(4500)
@@ -134,7 +161,7 @@ async function acceptedPhoto(url, fetcher) {
 export async function findProductImage(affiliateUrl, fetcher = fetch) {
   if (!trustedProductPage(affiliateUrl)) return null;
   let pageUrl = affiliateUrl;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     const response = await fetcher(pageUrl, {
       redirect: 'manual', headers: { accept: 'text/html' }, signal: AbortSignal.timeout(7000)
     });
