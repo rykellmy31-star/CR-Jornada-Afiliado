@@ -2,7 +2,8 @@ export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
   <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><span id="top-status" class="pill">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
   <main>
-    <section id="login" class="login card"><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
+    <section id="initial-loading" class="login card" role="status" aria-live="polite"><strong>Carregando o painel...</strong></section>
+    <section id="login" class="login card hidden"><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
     <section id="dashboard" class="hidden">
       <aside class="platform-sidebar" id="platform-sidebar" aria-label="Menu de plataformas">
         <div class="platform-nav-heading">PLATAFORMAS</div>
@@ -527,6 +528,58 @@ let selectedPlatform='mercadolivre';
 let selectedNetwork='telegram';
 const lastNetwork={mercadolivre:'telegram',shopee:'telegram'};
 const shopeeTarget={telegram:null,whatsapp:null};
+const NAV_KEY='cr-jornada-afiliados:navegacao:v1';
+const SCROLL_KEY='cr-jornada-afiliados:rolagem:v1';
+function validNavigationId(value,min=1){
+  const id=Number(value);
+  return Number.isSafeInteger(id)&&id>=min?id:null;
+}
+function restoreNavigationState(){
+  try{
+    const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
+    if(!state||typeof state!=='object')return;
+    if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
+    for(const platform of ['mercadolivre','shopee']){
+      const network=state.lastNetwork?.[platform];
+      if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
+    }
+    selectedNetwork=state.network==='telegram'||state.network==='whatsapp'
+      ?state.network:lastNetwork[selectedPlatform];
+    lastNetwork[selectedPlatform]=selectedNetwork;
+    currentChannelId=validNavigationId(state.channelId)||1;
+    currentWaGroupId=validNavigationId(state.whatsappGroupId)||1;
+    shopeeTarget.telegram=validNavigationId(state.shopeeTelegram,1000);
+    shopeeTarget.whatsapp=validNavigationId(state.shopeeWhatsApp,1000);
+  }catch{/* Navegação anterior indisponível: permanece na tela padrão. */}
+}
+function rememberNavigation(){
+  try{
+    sessionStorage.setItem(NAV_KEY,JSON.stringify({
+      platform:selectedPlatform,network:selectedNetwork,
+      lastNetwork:{mercadolivre:lastNetwork.mercadolivre,shopee:lastNetwork.shopee},
+      channelId:currentChannelId,whatsappGroupId:currentWaGroupId,
+      shopeeTelegram:shopeeTarget.telegram,shopeeWhatsApp:shopeeTarget.whatsapp
+    }));
+  }catch{/* Armazenamento desativado: a navegação continua funcional. */}
+}
+restoreNavigationState();
+let firstRefresh=true;
+function restoreScrollAfterRefresh(){
+  if(!firstRefresh)return;
+  firstRefresh=false;
+  let offset;
+  try{
+    const stored=sessionStorage.getItem(SCROLL_KEY);
+    sessionStorage.removeItem(SCROLL_KEY);
+    if(stored===null)return;
+    offset=Number(stored);
+  }catch{return;}
+  if(Number.isFinite(offset)&&offset>0)
+    requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,offset)));
+}
+window.addEventListener('pagehide',()=>{
+  try{sessionStorage.setItem(SCROLL_KEY,String(Math.max(0,window.scrollY||0)));}catch{}
+});
 let shoAccountState=null;
 let mlTopStatus='Robô desligado';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
@@ -535,10 +588,18 @@ async function call(path, opts={}) {
   if(opts.body) init.headers = {'content-type':'application/json'};
   const r=await fetch(path,init);
   const data=await r.json().catch(()=>({error:'Resposta inválida do servidor'}));
-  if(!r.ok) throw new Error(data.error || 'Falha na requisição');
+  if(!r.ok) {const err=new Error(data.error || 'Falha na requisição');err.status=r.status;throw err;}
   return data;
 }
-function view(auth) { $('dashboard').classList.toggle('hidden', !auth); $('login').classList.toggle('hidden', auth); $('logout').classList.toggle('hidden', !auth); document.body.classList.toggle('app-has-sidebar',auth); }
+let authenticated=false;
+function view(auth) {
+  authenticated=auth;
+  $('initial-loading').classList.add('hidden');
+  $('dashboard').classList.toggle('hidden',!auth);
+  $('login').classList.toggle('hidden',auth);
+  $('logout').classList.toggle('hidden',!auth);
+  document.body.classList.toggle('app-has-sidebar',auth);
+}
 function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'Publicado',needs_review:'Revisar'})[s]||s;}
 
 function updatePlatformIdentity(){
@@ -641,6 +702,7 @@ async function refreshPlatformTargets(){
   }
   select.value=selected==null?'':String(selected);
   select.disabled=entries.length===0;
+  rememberNavigation();
   if(selectedPlatform==='shopee'){
     $('shopee-create-toggle').textContent=selectedNetwork==='telegram'?'+ Adicionar canal Telegram Shopee':'+ Adicionar grupo WhatsApp Shopee';
     $('shopee-create-heading').textContent=selectedNetwork==='telegram'?'Adicionar canal Telegram exclusivo da Shopee':'Adicionar grupo WhatsApp exclusivo da Shopee';
@@ -744,6 +806,7 @@ async function switchPlatform(platform,network){
   selectedPlatform=platform;
   selectedNetwork=network||lastNetwork[platform]||'telegram';
   lastNetwork[platform]=selectedNetwork;
+  rememberNavigation();
   applyPlatformView();
   $('shopee-destination-create').classList.add('hidden');
   try{
@@ -1021,7 +1084,16 @@ async function refresh(){
     await refreshPlatformTargets();
     applyPlatformView();
     if(selectedPlatform==='shopee'){await refreshShopeeAccount();await refreshShopee();}
-  }catch(e){ if(e.message.includes('login')){view(false);$('top-status').textContent='Aguardando login';}else notice(e.message,true); }
+    restoreScrollAfterRefresh();
+  }catch(e){
+    if(e.status===401){
+      view(false);
+      $('top-status').textContent='Aguardando login';
+    }else if(!authenticated){
+      view(false);
+      notice('Não foi possível carregar o painel: '+e.message,true,'login-error');
+    }else notice(e.message,true);
+  }
 }
 for(let h=0;h<=24;h++){
   const label=String(h).padStart(2,'0')+':00';
