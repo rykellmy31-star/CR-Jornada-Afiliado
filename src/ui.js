@@ -240,6 +240,76 @@ export function renderPage() {
         </div>
         <p class="hint">Use links que você gerou no Portal de Afiliados da Shopee. Esta integração publica links cadastrados manualmente; a busca automática e a criação de links via API ainda não estão habilitadas.</p>
         <div id="shopee-feedback" class="feedback" role="status" aria-live="polite"></div>
+        <div class="shopee-destination-toolbar">
+          <button id="shopee-create-toggle" type="button" class="outline">+ Adicionar canal Telegram Shopee</button>
+          <p class="hint">Destinos da Shopee são independentes dos canais e grupos do Mercado Livre.</p>
+        </div>
+        <div id="shopee-destination-create" class="channel-create hidden">
+          <h2 id="shopee-create-heading">Adicionar canal exclusivo da Shopee</h2>
+          <form id="shopee-destination-create-form" class="shopee-form">
+            <div class="field-grid">
+              <label>Nome para identificar<input name="name" minlength="3" maxlength="80" required placeholder="Ex.: Shopee Infantil"></label>
+              <label>Categoria<input name="category" maxlength="60" required value="Geral" placeholder="Ex.: Motos, Moda, Infantil"></label>
+            </div>
+            <label id="shopee-create-telegram-field">Canal público do Telegram
+              <input id="shopee-create-telegram-handle" name="telegram_chat_id" required placeholder="https://t.me/meucanalshopee">
+            </label>
+            <label id="shopee-create-wa-field" class="hidden">Número de WhatsApp para a Shopee
+              <select name="instance_mode" id="shopee-create-wa-mode">
+                <option value="shared">Usar número Shopee compartilhado (separado do Mercado Livre)</option>
+                <option value="dedicated">Número exclusivo deste grupo Shopee (QR Code próprio)</option>
+              </select>
+            </label>
+            <p class="hint">Os novos destinos são criados desligados. Nenhum bot ou número do Mercado Livre será alterado.</p>
+            <div class="actions">
+              <button type="submit" class="primary">Criar destino Shopee</button>
+              <button type="button" id="shopee-create-cancel" class="outline">Cancelar</button>
+            </div>
+          </form>
+        </div>
+        <div id="shopee-destination-manage" class="shopee-destination-manage hidden">
+          <h2>Conexão e autorização exclusiva deste destino</h2>
+          <form id="shopee-telegram-destination-form" class="shopee-form hidden">
+            <div class="field-grid">
+              <label>Nome do canal<input id="shopee-tele-name" required minlength="3" maxlength="80"></label>
+              <label>Categoria do canal<input id="shopee-tele-category" required maxlength="60"></label>
+            </div>
+            <label>Canal público da Shopee<input id="shopee-tele-chat" required placeholder="@canalshopee"></label>
+            <label>Token do bot exclusivo (BotFather)
+              <input id="shopee-tele-token" type="password" autocomplete="new-password" placeholder="Vazio mantém o bot já configurado">
+            </label>
+            <p class="hint">Este token é criptografado no banco. Não reutilizamos automaticamente o bot do Mercado Livre.</p>
+            <label class="check-row"><input id="shopee-tele-registered" type="checkbox"><span><b>Canal autorizado para divulgação Shopee</b><small>Confirmo que é público e que tenho permissão de publicar.</small></span></label>
+            <label class="check-row"><input id="shopee-tele-enabled" type="checkbox"><span><b>Habilitar este canal Telegram Shopee</b><small>O bot deve ser administrador com permissão de publicação.</small></span></label>
+            <div class="actions"><button class="primary" type="submit">Salvar canal Shopee</button><button type="button" id="shopee-tele-test" class="outline">Testar bot e canal</button></div>
+          </form>
+          <div id="shopee-whatsapp-destination" class="hidden">
+            <div class="wa-connect-box">
+              <p><strong id="shopee-wa-instance">Instância Shopee</strong></p>
+              <p class="hint" id="shopee-wa-connection-state">Conecte seu número para listar os grupos.</p>
+              <div class="actions"><button type="button" id="shopee-wa-connect" class="outline">Conectar WhatsApp Shopee • QR Code</button></div>
+              <div class="wa-qr-wrap hidden" id="shopee-wa-qr-wrap">
+                <img id="shopee-wa-qr-image" width="260" height="260" alt="QR Code do número WhatsApp Shopee">
+                <p>No WhatsApp, entre em Aparelhos conectados → Conectar um aparelho e leia o QR Code.</p>
+              </div>
+            </div>
+            <form id="shopee-whatsapp-destination-form" class="shopee-form">
+              <div class="field-grid">
+                <label>Nome do grupo<input id="shopee-wa-name" minlength="3" maxlength="80" required></label>
+                <label>Categoria do grupo<input id="shopee-wa-category" maxlength="60" required></label>
+                <label>Grupo na instância Shopee
+                  <select id="shopee-wa-group"><option value="">Clique em buscar grupos</option></select>
+                </label>
+                <div class="actions" style="align-items:end"><button type="button" id="shopee-wa-search" class="outline">Buscar grupos da Shopee</button></div>
+              </div>
+              <label class="check-row"><input id="shopee-wa-registered" type="checkbox"><span><b>Grupo público e autorizado para divulgação Shopee</b><small>Confirmo que o grupo é aberto e que está cadastrado como mídia permitida.</small></span></label>
+              <label class="check-row"><input id="shopee-wa-enabled" type="checkbox"><span><b>Habilitar este grupo WhatsApp Shopee</b><small>Os envios da Shopee não utilizam o número do Mercado Livre.</small></span></label>
+              <div class="actions"><button type="submit" class="primary">Salvar grupo Shopee</button><button type="button" id="shopee-wa-test" class="outline">Enviar teste</button></div>
+            </form>
+          </div>
+        </div>
+        <div id="shopee-content" class="hidden">
+
         <div class="main-grid shopee-grid">
           <section class="shopee-inner">
             <h2>Configurações deste destino</h2>
@@ -309,6 +379,7 @@ export function renderPage() {
           <tbody id="shopee-offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table>
         </div>
         <div id="shopee-logs" class="logs"></div>
+        </div>
       </section>
       <section class="card coupon-panel">
         <div class="section-header"><div><h2>🎟️ Cupons vinculados às ofertas</h2><p>O robô inclui o cupom na publicação automaticamente quando estiver dentro da validade informada.</p></div></div>
@@ -341,7 +412,7 @@ export function renderPage() {
 
 export const CSS = `
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.platform-sidebar{position:fixed;left:12px;top:82px;width:205px;z-index:5;background:#112747;color:#ecf5fb;border-radius:16px;padding:18px;box-shadow:0 10px 30px #0b1b3520;display:flex;flex-direction:column;gap:9px}.platform-nav-heading{font-size:11px;font-weight:900;letter-spacing:1.2px;color:#91aecb;margin-bottom:9px}.platform-nav-item{display:flex;align-items:center;gap:10px;text-align:left;background:transparent;border:1px solid transparent;color:#e0e9f4;padding:12px;border-radius:10px;font-weight:750;cursor:pointer}.platform-nav-item.active{background:#1e4c65;border-color:#35c4b7;color:#fff}.platform-side-divider{height:1px;background:#35516c;margin:10px 0}.platform-side-note{font-size:11px;color:#abc0d4}.app-has-sidebar main{margin-left:225px;max-width:none}.platform-context{padding:20px 22px;margin-bottom:16px}.platform-context-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.platform-context h2{font-size:22px;margin:5px 0}.platform-network-tabs{display:flex;gap:5px;padding:5px;border-radius:13px;background:#eaf0f5}.platform-network-button{padding:9px 15px;border:0;border-radius:9px;background:transparent;color:#475c76;cursor:pointer;font-size:13px;font-weight:700}.platform-network-button.active{background:white;color:#0f7d8a;box-shadow:0 1px 4px #153e5920}.platform-target-label{margin-top:13px;max-width:650px}.shopee-panel{padding:22px;margin-top:16px}.shopee-grid{margin-top:18px}.shopee-inner{background:#f8fafc;padding:18px;border-radius:13px;border:1px solid #e3eaf2}.shopee-inner h2{margin-bottom:12px}.shopee-form{display:flex;flex-direction:column;gap:12px}.shopee-panel .logs{margin-top:15px}@media(max-width:950px){.app-has-sidebar main{margin-left:0}.platform-sidebar{position:static;left:auto;top:auto;width:auto;flex-direction:row;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px}.platform-nav-heading,.platform-side-divider,.platform-side-note{display:none}.platform-nav-item{padding:10px 12px}.platform-context-head{flex-direction:column;align-items:stretch}}@media(max-width:520px){.platform-network-tabs{width:100%;justify-content:space-evenly}.platform-network-button{flex:1}.platform-context,.shopee-panel{padding:15px}}.channels-panel{padding:22px;margin-bottom:16px}.wa-multichannel{padding:22px;margin-top:16px}.wa-multichannel>label{max-width:560px}.wa-multi-form{display:flex;flex-direction:column;gap:12px;margin-top:15px}.wa-multichannel .hint{margin:8px 0}.divider-wa{border-top:1px solid #e6edf5;margin:21px 0}.wa-multichannel .wa-connect-box{margin-bottom:14px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
+*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.platform-sidebar{position:fixed;left:12px;top:82px;width:205px;z-index:5;background:#112747;color:#ecf5fb;border-radius:16px;padding:18px;box-shadow:0 10px 30px #0b1b3520;display:flex;flex-direction:column;gap:9px}.platform-nav-heading{font-size:11px;font-weight:900;letter-spacing:1.2px;color:#91aecb;margin-bottom:9px}.platform-nav-item{display:flex;align-items:center;gap:10px;text-align:left;background:transparent;border:1px solid transparent;color:#e0e9f4;padding:12px;border-radius:10px;font-weight:750;cursor:pointer}.platform-nav-item.active{background:#1e4c65;border-color:#35c4b7;color:#fff}.platform-side-divider{height:1px;background:#35516c;margin:10px 0}.platform-side-note{font-size:11px;color:#abc0d4}.app-has-sidebar main{margin-left:225px;max-width:none}.platform-context{padding:20px 22px;margin-bottom:16px}.platform-context-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.platform-context h2{font-size:22px;margin:5px 0}.platform-network-tabs{display:flex;gap:5px;padding:5px;border-radius:13px;background:#eaf0f5}.platform-network-button{padding:9px 15px;border:0;border-radius:9px;background:transparent;color:#475c76;cursor:pointer;font-size:13px;font-weight:700}.platform-network-button.active{background:white;color:#0f7d8a;box-shadow:0 1px 4px #153e5920}.platform-target-label{margin-top:13px;max-width:650px}.shopee-panel{padding:22px;margin-top:16px}.shopee-grid{margin-top:18px}.shopee-destination-toolbar{margin:14px 0}.shopee-destination-toolbar .hint{margin-top:8px}.shopee-destination-manage{background:#f8fafc;border:1px solid #e0e8f3;border-radius:14px;padding:18px;margin:14px 0}.shopee-destination-manage h2{margin-bottom:14px}.shopee-destination-manage .shopee-form{margin-bottom:4px}.shopee-destination-manage .wa-connect-box{margin-bottom:14px}.shopee-destination-manage .hint{margin:7px 0}.shopee-inner{background:#f8fafc;padding:18px;border-radius:13px;border:1px solid #e3eaf2}.shopee-inner h2{margin-bottom:12px}.shopee-form{display:flex;flex-direction:column;gap:12px}.shopee-panel .logs{margin-top:15px}@media(max-width:950px){.app-has-sidebar main{margin-left:0}.platform-sidebar{position:static;left:auto;top:auto;width:auto;flex-direction:row;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px}.platform-nav-heading,.platform-side-divider,.platform-side-note{display:none}.platform-nav-item{padding:10px 12px}.platform-context-head{flex-direction:column;align-items:stretch}}@media(max-width:520px){.platform-network-tabs{width:100%;justify-content:space-evenly}.platform-network-button{flex:1}.platform-context,.shopee-panel{padding:15px}}.channels-panel{padding:22px;margin-bottom:16px}.wa-multichannel{padding:22px;margin-top:16px}.wa-multichannel>label{max-width:560px}.wa-multi-form{display:flex;flex-direction:column;gap:12px;margin-top:15px}.wa-multichannel .hint{margin:8px 0}.divider-wa{border-top:1px solid #e6edf5;margin:21px 0}.wa-multichannel .wa-connect-box{margin-bottom:14px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 `;
 
@@ -355,7 +426,7 @@ let currentWaGroupId=1;
 let selectedPlatform='mercadolivre';
 let selectedNetwork='telegram';
 const lastNetwork={mercadolivre:'telegram',shopee:'telegram'};
-const shopeeTarget={telegram:1,whatsapp:1};
+const shopeeTarget={telegram:null,whatsapp:null};
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 async function call(path, opts={}) {
   const init = {...opts, credentials: 'same-origin'};
@@ -370,7 +441,7 @@ function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'P
 
 function applyPlatformView(){
   const isML=selectedPlatform==='mercadolivre',telegram=selectedNetwork==='telegram';
-  const groups=['channels-panel','shopee-panel'];
+  // Shopee não compartilha canais, grupos ou bots com Mercado Livre.
   $('channels-panel').classList.toggle('hidden',!isML||!telegram);
   $('shopee-panel').classList.toggle('hidden',isML);
   document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram);
@@ -414,20 +485,64 @@ async function refreshPlatformTargets(){
       (selectedPlatform==='shopee'?(e.shopee_enabled?' • Shopee ativo':e.configured?' • Shopee configurado':' • Novo destino'):'')+
       '</option>').join('');
   if(!entries.some(e=>e.id===selected)){
-    selected=entries[0]?.id||1;
+    selected=entries[0]?.id??(selectedPlatform==='shopee'?null:1);
     if(selectedPlatform==='shopee')shopeeTarget[selectedNetwork]=selected;
     else if(selectedNetwork==='telegram')currentChannelId=selected;
     else currentWaGroupId=selected;
   }
-  select.value=String(selected);
+  select.value=selected==null?'':String(selected);
+  select.disabled=entries.length===0;
+  if(selectedPlatform==='shopee'){
+    $('shopee-create-toggle').textContent=selectedNetwork==='telegram'?'+ Adicionar canal Telegram Shopee':'+ Adicionar grupo WhatsApp Shopee';
+    $('shopee-create-heading').textContent=selectedNetwork==='telegram'?'Adicionar canal Telegram exclusivo da Shopee':'Adicionar grupo WhatsApp exclusivo da Shopee';
+    $('shopee-create-telegram-field').classList.toggle('hidden',selectedNetwork!=='telegram');
+    $('shopee-create-wa-field').classList.toggle('hidden',selectedNetwork!=='whatsapp');
+    $('shopee-create-telegram-handle').disabled=selectedNetwork!=='telegram';
+  }
   return entries;
 }
 async function refreshShopee(){
   if(selectedPlatform!=='shopee')return;
   try{
     const id=shopeeTarget[selectedNetwork];
+    const hasDestination=Number.isInteger(id)&&id>=1000;
+    $('shopee-content').classList.toggle('hidden',!hasDestination);
+    $('shopee-destination-manage').classList.toggle('hidden',!hasDestination);
+    if(!hasDestination){
+      $('shopee-target-title').textContent='Nenhum destino da Shopee nesta modalidade. Clique em + Adicionar para criar.';
+      $('shopee-status').textContent='Nenhum destino cadastrado';
+      $('shopee-base-status').textContent='Crie primeiro um destino exclusivo Shopee.';
+      return;
+    }
     const result=await call('/api/shopee/state?network='+encodeURIComponent(selectedNetwork)+'&target_id='+id);
     const base=result.base,settings=result.config;
+    const isTelegram=selectedNetwork==='telegram';
+    $('shopee-telegram-destination-form').classList.toggle('hidden',!isTelegram);
+    $('shopee-whatsapp-destination').classList.toggle('hidden',isTelegram);
+    if(isTelegram){
+      $('shopee-tele-name').value=base.name;
+      $('shopee-tele-category').value=base.category||'Geral';
+      $('shopee-tele-chat').value=base.telegram_chat_id||base.handle||'';
+      $('shopee-tele-token').value='';
+      $('shopee-tele-registered').checked=!!base.base_registered;
+      $('shopee-tele-enabled').checked=!!base.base_enabled;
+      $('shopee-tele-test').disabled=!base.base_enabled;
+    }else{
+      $('shopee-wa-name').value=base.name;
+      $('shopee-wa-category').value=base.category||'Geral';
+      $('shopee-wa-instance').textContent='Número Shopee: '+base.instance_name+
+        (base.instance_mode==='dedicated'?' (exclusivo deste grupo)':' (compartilhado apenas entre grupos Shopee)');
+      $('shopee-wa-registered').checked=!!base.base_registered;
+      $('shopee-wa-enabled').checked=!!base.base_enabled;
+      const selector=$('shopee-wa-group');
+      if(base.group_jid&&!Array.from(selector.options).some(o=>o.value===base.group_jid)){
+        const opt=document.createElement('option');
+        opt.value=base.group_jid;opt.textContent='Grupo salvo: '+base.group_jid;selector.add(opt);
+      }
+      selector.value=base.group_jid||'';
+      $('shopee-wa-test').disabled=!base.base_enabled;
+      await refreshShopeeWaConnection(false);
+    }
     $('shopee-target-title').textContent=(selectedNetwork==='telegram'?'Canal Telegram: ':'Grupo WhatsApp: ')+base.name;
     $('channel-label').textContent='Destino Shopee: '+base.name;
     $('shopee-category').value=settings.category||base.category||'Geral';
@@ -439,8 +554,8 @@ async function refreshShopee(){
     $('shopee-enabled').checked=!!settings.enabled;
     $('shopee-status').textContent=settings.enabled?'Shopee ligada':'Shopee desligada';
     $('shopee-base-status').textContent=base.base_enabled&&base.base_registered
-      ?'✅ Canal/grupo de origem ativo e autorizado. A publicação Shopee tem um controle separado.'
-      :'⚠ Ative e confirme antes o canal/grupo na área Mercado Livre (Telegram ou WhatsApp).';
+      ?'✅ Canal ou grupo exclusivo da Shopee autorizado. Configure abaixo as publicações automáticas.'
+      :'⚠ Configure e autorize primeiro este canal/grupo da própria Shopee acima.';
     const offerCategory=$('shopee-offer-category');
     offerCategory.readOnly=(settings.category||'Geral').toLowerCase()!=='geral';
     offerCategory.value=offerCategory.readOnly?settings.category:'';
@@ -459,12 +574,28 @@ async function refreshShopee(){
       '</span><time>'+toDate(x.created_at)+'</time></div>').join('');
   }catch(error){notice('Shopee: '+error.message,true,'shopee-feedback');}
 }
+async function refreshShopeeWaConnection(showFeedback=true){
+  const id=shopeeTarget.whatsapp;
+  if(!Number.isSafeInteger(id)||id<1000)return;
+  try{
+    const c=await call('/api/shopee/whatsapp/connection?target_id='+id);
+    const states={open:'✅ Número Shopee conectado.',connecting:'Aguardando leitura do QR Code.',
+      close:'Número desconectado. Gere um novo QR Code.',not_created:'Número Shopee ainda não conectado.',
+      refused:'Conexão recusada. Gere outro QR Code.'};
+    $('shopee-wa-connection-state').textContent=states[c.state]||'Confira o estado da instância.';
+    if(c.state==='open')$('shopee-wa-qr-wrap').classList.add('hidden');
+  }catch(error){
+    $('shopee-wa-connection-state').textContent='Conexão Shopee: '+error.message;
+    if(showFeedback)notice(error.message,true,'shopee-feedback');
+  }
+}
 async function switchPlatform(platform,network){
   if(platform!=='mercadolivre'&&platform!=='shopee')return;
   selectedPlatform=platform;
   selectedNetwork=network||lastNetwork[platform]||'telegram';
   lastNetwork[platform]=selectedNetwork;
   applyPlatformView();
+  $('shopee-destination-create').classList.add('hidden');
   try{
     await refreshPlatformTargets();
     if(selectedPlatform==='shopee')await refreshShopee();
@@ -790,6 +921,98 @@ setInterval(()=>{
    refreshManagedWhatsAppConnection(false);
 },12000);
 
+
+$('shopee-create-toggle').addEventListener('click',()=>{
+  $('shopee-destination-create').classList.toggle('hidden');
+});
+$('shopee-create-cancel').addEventListener('click',()=>{
+  $('shopee-destination-create').classList.add('hidden');
+});
+$('shopee-destination-create-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const form=e.target,body=Object.fromEntries(new FormData(form));
+  body.network=selectedNetwork;
+  if(selectedNetwork==='telegram')delete body.instance_mode;
+  else delete body.telegram_chat_id;
+  try{
+    const result=await call('/api/shopee/destinations/create',{method:'POST',body:JSON.stringify(body)});
+    shopeeTarget[selectedNetwork]=result.id;
+    form.reset();
+    $('shopee-destination-create').classList.add('hidden');
+    await refreshPlatformTargets();
+    await refreshShopee();
+    notice('Destino exclusivo Shopee criado desligado. Configure o bot ou número, confirme a autorização e depois ative a automação.',false,'shopee-feedback');
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+});
+$('shopee-telegram-destination-form').addEventListener('submit',async e=>{
+  e.preventDefault();if(selectedNetwork!=='telegram')return;
+  const body={target_id:shopeeTarget.telegram,
+    name:$('shopee-tele-name').value,category:$('shopee-tele-category').value,
+    telegram_chat_id:$('shopee-tele-chat').value,
+    bot_token:$('shopee-tele-token').value.trim(),
+    channel_registered:$('shopee-tele-registered').checked,enabled:$('shopee-tele-enabled').checked};
+  try{
+    const response=await call('/api/shopee/telegram/configure',{method:'POST',body:JSON.stringify(body)});
+    await refreshPlatformTargets();await refreshShopee();
+    notice(response.changed?'Bot ou endereço atualizado. Por segurança, confirme e ative o canal numa segunda gravação.':'Canal Telegram exclusivo Shopee configurado.',false,'shopee-feedback');
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+});
+$('shopee-tele-test').addEventListener('click',async()=>{
+  if(!confirm('Enviar uma mensagem de TESTE ao canal Telegram da Shopee?'))return;
+  try{
+    await call('/api/shopee/destinations/test',{method:'POST',
+      body:JSON.stringify({network:'telegram',target_id:shopeeTarget.telegram})});
+    notice('Mensagem de teste enviada ao Telegram Shopee.',false,'shopee-feedback');
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+});
+$('shopee-wa-connect').addEventListener('click',async()=>{
+  const btn=$('shopee-wa-connect');btn.disabled=true;
+  try{
+    const response=await call('/api/shopee/whatsapp/connection',{method:'POST',
+      body:JSON.stringify({target_id:shopeeTarget.whatsapp})});
+    if(response.qr_image){
+      $('shopee-wa-qr-image').src=response.qr_image;
+      $('shopee-wa-qr-wrap').classList.remove('hidden');
+      notice('QR Code do número exclusivo Shopee pronto. Leia pelo WhatsApp.',false,'shopee-feedback');
+    }else if(response.state==='open'){
+      $('shopee-wa-qr-wrap').classList.add('hidden');
+      notice('Número Shopee já conectado!',false,'shopee-feedback');
+    }else notice('Instância Shopee preparada. Clique novamente caso o QR Code não apareça.',true,'shopee-feedback');
+    await refreshShopeeWaConnection(false);
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+  finally{btn.disabled=false;}
+});
+$('shopee-wa-search').addEventListener('click',async()=>{
+  const btn=$('shopee-wa-search');btn.disabled=true;
+  try{
+    const response=await call('/api/shopee/whatsapp/groups?target_id='+shopeeTarget.whatsapp);
+    const group=$('shopee-wa-group'),old=group.value;
+    group.innerHTML='<option value="">Selecione um grupo público da Shopee...</option>'+
+      response.groups.map(g=>'<option value="'+escape(g.id)+'">'+escape(g.name)+'</option>').join('');
+    if(response.groups.some(g=>g.id===old))group.value=old;
+    notice('Grupos conectados ao número Shopee: '+response.groups.length,false,'shopee-feedback');
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+  finally{btn.disabled=false;}
+});
+$('shopee-whatsapp-destination-form').addEventListener('submit',async e=>{
+  e.preventDefault();if(selectedNetwork!=='whatsapp')return;
+  const body={target_id:shopeeTarget.whatsapp,name:$('shopee-wa-name').value,
+    category:$('shopee-wa-category').value,group_jid:$('shopee-wa-group').value,
+    public_registered:$('shopee-wa-registered').checked,enabled:$('shopee-wa-enabled').checked};
+  try{
+    const response=await call('/api/shopee/whatsapp/configure',{method:'POST',body:JSON.stringify(body)});
+    await refreshPlatformTargets();await refreshShopee();
+    notice(response.changed?'Grupo alterado. Por segurança, confirme o cadastro e ative no próximo salvamento.':'Grupo WhatsApp exclusivo Shopee configurado.',false,'shopee-feedback');
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+});
+$('shopee-wa-test').addEventListener('click',async()=>{
+  if(!confirm('Enviar uma mensagem de TESTE ao grupo WhatsApp da Shopee?'))return;
+  try{
+    await call('/api/shopee/destinations/test',{method:'POST',
+      body:JSON.stringify({network:'whatsapp',target_id:shopeeTarget.whatsapp})});
+    notice('Teste enviado ao grupo Shopee.',false,'shopee-feedback');
+  }catch(error){notice(error.message,true,'shopee-feedback');}
+});
 for(const button of document.querySelectorAll('[data-platform]')){
   button.addEventListener('click',()=>switchPlatform(button.dataset.platform));
 }
@@ -799,7 +1022,7 @@ for(const button of document.querySelectorAll('[data-network]')){
 $('platform-target-select').addEventListener('change',async()=>{
   const id=Number($('platform-target-select').value)||1;
   if(selectedPlatform==='shopee'){
-    shopeeTarget[selectedNetwork]=id;
+    shopeeTarget[selectedNetwork]=id>=1000?id:null;
     await refreshShopee();
   }else if(selectedNetwork==='telegram'){
     currentChannelId=id;

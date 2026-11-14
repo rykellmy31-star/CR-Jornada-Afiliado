@@ -1,7 +1,6 @@
 import {parseOptionalBRL,localTimeParts,formatBRL} from './logic.js';
-import {listTelegramChannels,getPrimaryCategory,categoryMatches,sendPlatformTelegramText} from './multichannel.js';
-import {listManagedWhatsAppGroups,sendPlatformWhatsAppText} from './whatsapp-groups.js';
-import {getWhatsAppState} from './whatsapp.js';
+import {categoryMatches} from './multichannel.js';
+import {listShopeeOwnDestinations,shoOwnDestination,sendShopeeOwnText,shopeeWhatsAppInstance,ensureShopeeDestinationTables} from './shopee-destinations.js';
 
 const SCHEMA=[
   "CREATE TABLE IF NOT EXISTS shopee_targets (id INTEGER PRIMARY KEY AUTOINCREMENT,network TEXT NOT NULL CHECK(network IN ('telegram','whatsapp')),target_id INTEGER NOT NULL CHECK(target_id>=1),category TEXT NOT NULL DEFAULT 'Geral',enabled INTEGER NOT NULL DEFAULT 0,permission_confirmed INTEGER NOT NULL DEFAULT 0,interval_minutes INTEGER NOT NULL DEFAULT 60 CHECK(interval_minutes BETWEEN 1 AND 1440),max_daily INTEGER NOT NULL DEFAULT 12 CHECK(max_daily BETWEEN 1 AND 48),start_hour INTEGER NOT NULL DEFAULT 8,end_hour INTEGER NOT NULL DEFAULT 21,last_attempt_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(network,target_id))",
@@ -48,17 +47,9 @@ export function normalizeShopeeOffer(data){
 export async function ensureShopeeTables(env){for(const sql of SCHEMA)await env.DB.prepare(sql).run();}
 async function available(env){
   await ensureShopeeTables(env);
-  const [telegram,whatsapp,primaryTelegram,primaryWhatsApp]=await Promise.all([
-    listTelegramChannels(env),listManagedWhatsAppGroups(env),getPrimaryCategory(env),getWhatsAppState(env)
-  ]);
-  return [
-    ...telegram.map(c=>({network:'telegram',target_id:c.id,name:c.name,
-      handle:c.telegram_chat_id,category:c.id===1?primaryTelegram:c.category,
-      base_enabled:!!c.telegram_enabled,base_registered:!!c.channel_registered})),
-    ...whatsapp.map(c=>({network:'whatsapp',target_id:c.id,name:c.name,
-      handle:c.group_jid||c.instance_name,category:c.id===1?primaryWhatsApp.category:c.category,
-      base_enabled:!!c.enabled,base_registered:c.id===1?!!primaryWhatsApp.config.public_registered:!!c.public_registered}))
-  ];
+  // Somente os destinos próprios da Shopee. IDs antigos 1,2,3 do Mercado Livre
+  // permanecem armazenados mas são inelegíveis para qualquer publicação Shopee.
+  return listShopeeOwnDestinations(env);
 }
 async function verifyTarget(env,network,value){
   if(!allowedNetwork(network))throw fail('Plataforma de publicação inválida.');
@@ -156,14 +147,12 @@ function shopeeText(offer){
   return lines.join('\n');
 }
 async function claimInstance(env,targetId,stamp){
-  const g=targetId===1
-    ?await env.DB.prepare('SELECT instance_name FROM whatsapp_settings WHERE id=1').first()
-    :await env.DB.prepare('SELECT instance_name FROM whatsapp_groups WHERE id=?').bind(targetId).first();
-  if(!g?.instance_name)throw fail('Instância Evolution deste grupo não configurada.');
+  const name=await shopeeWhatsAppInstance(env,targetId);
+  if(!name.startsWith('cr-jornada-shopee'))throw fail('Essa instância não pertence à Shopee.',409);
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS whatsapp_instance_pacing(instance_name TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0)').run();
-  await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_instance_pacing(instance_name,last_attempt_at) VALUES(?,0)').bind(g.instance_name).run();
+  await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_instance_pacing(instance_name,last_attempt_at) VALUES(?,0)').bind(name).run();
   const claim=await env.DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=? AND (last_attempt_at=0 OR last_attempt_at<=?)')
-    .bind(stamp,g.instance_name,stamp-60).run();
+    .bind(stamp,name,stamp-60).run();
   if(claim.meta?.changes!==1)throw fail('O número Evolution enviou outra mensagem há menos de um minuto. Tente novamente no próximo ciclo.',409);
 }
 async function attempt(env,config,offer){
@@ -173,9 +162,7 @@ async function attempt(env,config,offer){
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
     const text=shopeeText(offer);
-    const sent=config.network==='telegram'
-      ?await sendPlatformTelegramText(env,config.target_id,text)
-      :await sendPlatformWhatsAppText(env,config.target_id,text);
+    const sent=await sendShopeeOwnText(env,config.network,config.target_id,text);
     await env.DB.prepare("UPDATE shopee_offers SET status='published',published_at=?,published_day=?,message_id=? WHERE id=? AND status='sending'")
       .bind(nowSec(),localTimeParts(new Date()).day,sent.message_id,offer.id).run();
     await log(env,config.id,'published','Publicação Shopee confirmada.',offer.id);

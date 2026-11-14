@@ -179,3 +179,16 @@ Não altere segredos existentes da Evolution API, Telegram ou banco D1. Os desti
 
 Referência oficial Shopee para geração de links no Portal/App de Afiliados:
 https://help.shopee.com.br/portal/10/article/128461-Como%20gerar%20links%20de%20produtos%20ou%20lojas
+
+
+## Shopee — canais Telegram e grupos WhatsApp próprios (sem misturar Mercado Livre)
+
+A partir desta versão, os destinos Shopee são **completamente separados** daqueles cadastrados em Mercado Livre. No menu lateral **Shopee**, selecione **Telegram** ou **WhatsApp** e clique em **+ Adicionar canal Telegram Shopee** ou **+ Adicionar grupo WhatsApp Shopee**. O painel oferece um fluxo de criação e configuração do destino, permissões, teste de envio e, separadamente, parâmetros de publicação Shopee (categoria, intervalo editável, limite diário, horários, fila e histórico).
+
+Os canais Shopee Telegram são armazenados na tabela aditiva **shopee_telegram_channels**. Cada um possui nome, categoria, @canal, token exclusivo do BotFather criptografado com AES-GCM, confirmação de divulgação e ativação próprias. O bot precisa ser administrador do canal; o sistema confirma permissões com a API Telegram antes de ativar ou testar. O token do Mercado Livre **não é reutilizado** e nenhum token é devolvido pela API do painel.
+
+Os grupos Shopee WhatsApp são armazenados na tabela aditiva **shopee_whatsapp_groups**. É possível utilizar um único número compartilhado **apenas entre os grupos Shopee**, com instância Evolution **cr-jornada-shopee**, ou criar uma instância por grupo com nome **cr-jornada-shopee-grupo-ID**. O QR Code e a consulta de grupos são feitos pela Evolution API existente, usando somente as instâncias da Shopee. A instância **cr-jornada-afiliados** e todas as instâncias do Mercado Livre permanecem intocadas. Cada grupo deve ser público, autorizado e selecionado a partir da lista real de grupos participantes daquele número antes de poder publicar.
+
+As tabelas antigas **shopee_targets**, **shopee_offers** e **shopee_logs** permanecem no D1, assim como todas as tabelas do Mercado Livre. Para impedir o vazamento de ofertas Shopee para canais do Mercado Livre, somente destinos próprios com ID a partir de 1000 são elegíveis para criação de fila e publicação Shopee. Qualquer registro de associação Shopee antigo que apontava para um ID do Mercado Livre permanece armazenado, mas **não publica mais** até configurar um destino Shopee próprio. Esta migração é intencionalmente não destrutiva e não faz migração silenciosa para um canal incorreto.
+
+As publicações automáticas Shopee continuam exigindo links de afiliado gerados manualmente pelo usuário. Integração de pesquisa automática, geração de links e produtos via API Shopee continuam pendentes da liberação oficial. Todas as configurações Shopee novas começam desligadas. Confirme os destinos, permissões e regras de divulgação antes de ligar as automações.

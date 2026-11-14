@@ -11,6 +11,10 @@ import {
  testManagedWhatsAppGroup,publishManagedWhatsAppOffer,runManagedWhatsAppScheduled
 } from './whatsapp-groups.js';
 import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
+import {
+ createShopeeOwnDestination,saveShopeeOwnTelegram,saveShopeeOwnWhatsApp,
+ shopeeWhatsAppConnection,shopeeWhatsAppOptions,testShopeeOwnDestination
+} from './shopee-destinations.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -218,6 +222,27 @@ async function router(request, env) {
   }
   // Shopee: apenas links oficiais já gerados pelo próprio afiliado, sem consulta
   // a API/credenciais Shopee; destinos/filas/agendamentos são isolados do Mercado Livre.
+  if(u.pathname==='/api/shopee/destinations/create'&&method==='POST')
+    return json(await createShopeeOwnDestination(env,await getBody(request)),201);
+  if(u.pathname==='/api/shopee/telegram/configure'&&method==='POST'){
+    const data=await getBody(request);
+    return json(await saveShopeeOwnTelegram(env,data.target_id,data));
+  }
+  if(u.pathname==='/api/shopee/whatsapp/configure'&&method==='POST'){
+    const data=await getBody(request);
+    return json(await saveShopeeOwnWhatsApp(env,data.target_id,data));
+  }
+  if(u.pathname==='/api/shopee/whatsapp/connection'&&(method==='GET'||method==='POST')){
+    const data=method==='GET'?u.searchParams:await getBody(request);
+    return json(await shopeeWhatsAppConnection(env,
+      method==='GET'?data.get('target_id'):data.target_id,method==='POST'));
+  }
+  if(u.pathname==='/api/shopee/whatsapp/groups'&&method==='GET')
+    return json(await shopeeWhatsAppOptions(env,u.searchParams.get('target_id')));
+  if(u.pathname==='/api/shopee/destinations/test'&&method==='POST'){
+    const data=await getBody(request);
+    return json(await testShopeeOwnDestination(env,data.network,data.target_id));
+  }
   if(u.pathname==='/api/shopee/destinations'&&method==='GET')
     return json(await shopeeDestinations(env));
   if(u.pathname==='/api/shopee/state'&&method==='GET')
