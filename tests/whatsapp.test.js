@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import worker from '../src/index.js';
 import {
   evolutionOrigin,validateGroupJid,validateInstance,ensureWhatsAppTables,
-  listWhatsAppGroups,updateWhatsAppSettings,getWhatsAppState,runWhatsAppScheduled,
+  listWhatsAppGroups,updateWhatsAppSettings,updateWhatsAppAutomation,getWhatsAppState,runWhatsAppScheduled,
   connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,AFFILIATE_INSTANCE_NAME
 } from '../src/whatsapp.js';
 
@@ -86,6 +86,28 @@ test('configurar grupo exige reconfirmação e não envia mensagens antigas',asy
   }finally{globalThis.fetch=native;DB.close();}
 });
 
+test('salvar automação preserva grupo, instância e permissões',async()=>{
+  const DB=dbMock(),env=envFor(DB);
+  try{
+    mockFetch();
+    await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:60});
+    await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:60});
+    const before=await getWhatsAppState(env);
+    await assert.rejects(updateWhatsAppAutomation(env,{enabled:false,interval_minutes:0}),/intervalo/);
+    await updateWhatsAppAutomation(env,{enabled:false,interval_minutes:47});
+    const paused=await getWhatsAppState(env);
+    assert.equal(paused.config.enabled,0);
+    assert.equal(paused.schedule.interval_minutes,47);
+    for(const k of ['instance_name','group_jid','public_registered','started_at'])
+      assert.equal(paused.config[k],before.config[k],k);
+    assert.equal(paused.category,before.category);
+    await updateWhatsAppAutomation(env,{enabled:true,interval_minutes:33});
+    const resumed=await getWhatsAppState(env);
+    assert.equal(resumed.config.enabled,1);
+    assert.equal(resumed.schedule.interval_minutes,33);
+    assert.equal(resumed.config.group_jid,GROUP);
+  }finally{globalThis.fetch=native;DB.close();}
+});
 test('envia foto da oferta ao grupo após publicação no Telegram e evita repetição',async()=>{
   const DB=dbMock();const env=envFor(DB);const sent=[];
   try{
