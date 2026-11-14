@@ -48,3 +48,136 @@ export const CATEGORY_CSS = `
 .category-route-item small{color:#68748b}.category-inner .table-scroll{margin-top:12px}
 @media(max-width:900px){.categories-grid{grid-template-columns:1fr}}@media(max-width:520px){.categories-page{padding:15px}}
 `;
+
+export const CATEGORY_CLIENT_JS = `
+let categoryData={groups:[],products:[],routes:[]};
+let categoryDestinations=[];
+let categorySelectedId=null;
+let masterActive=null;
+
+function setCategoryFieldValue(el,value){
+  if(typeof el==='string')el=$(el);
+  if(!el)return;
+  const text=String(value||'Geral');
+  el.dataset.desiredCategory=text;
+  if(Array.from(el.options).some(o=>o.value===text))el.value=text;
+}
+function refreshCategoryDropdowns(){
+  const options=['Geral',...categoryData.groups.filter(c=>c.enabled&&c.name!=='Geral').map(c=>c.name)];
+  for(const element of document.querySelectorAll('select[data-category-selector]')){
+    const desired=element.dataset.desiredCategory||element.value||'Geral';
+    element.innerHTML=options.map(name=>'<option value="'+escape(name)+'">'+escape(name)+'</option>').join('');
+    if(options.includes(desired))element.value=desired;
+    else{
+      element.add(new Option('Selecione uma categoria existente',''));
+      element.value='';
+    }
+    element.dataset.desiredCategory=element.value;
+  }
+}
+async function fetchCategoryOptions(){
+  const data=await call('/api/categories');
+  categoryData=data;
+  refreshCategoryDropdowns();
+  return data;
+}
+function renderCategoryRoutes(){
+  const id=Number($('category-group-select').value);
+  categorySelectedId=Number.isSafeInteger(id)&&id>0?id:null;
+  const selected=categoryData.groups.find(g=>g.id===id);
+  $('category-edit-keywords').value=selected?.keywords||'';
+  $('category-edit-enabled').checked=selected?!!selected.enabled:false;
+  const container=$('category-routes');
+  if(!selected){
+    container.textContent='Selecione uma categoria para configurar os destinos.';
+    return;
+  }
+  container.innerHTML=categoryDestinations.map(d=>{
+    const active=categoryData.routes.find(r=>r.group_category_id===id&&r.destination_scope===d.scope&&r.network===d.network&&r.destination_id===d.id);
+    return '<div class="category-route-item" data-scope="'+escape(d.scope)+'" data-network="'+escape(d.network)+'" data-id="'+Number(d.id)+'">'+
+      '<strong>'+escape(d.name)+' <small>('+escape(d.scope==='shopee'?'Shopee':'Mercado Livre')+' • '+escape(d.network)+
+      (d.active?' • autorizado':' • inativo')+')</small></strong>'+
+      '<label><input type="checkbox" data-platform-ml'+(active?.allow_mercadolivre?' checked':'')+'> Mercado Livre</label>'+
+      '<label><input type="checkbox" data-platform-shopee'+(active?.allow_shopee?' checked':'')+'> Shopee</label></div>';
+  }).join('')||'Nenhum canal ou grupo cadastrado. Cadastre e autorize os destinos primeiro.';
+}
+function renderCategoryProducts(){
+  $('category-products').innerHTML=categoryData.products.length?categoryData.products.map(p=>{
+    return '<tr><td>'+escape(p.title)+'</td><td>'+escape(p.platform==='shopee'?'Shopee':'Mercado Livre')+
+      '</td><td>'+escape(p.group_category||'A revisar')+'</td><td>'+escape(p.subcategory||'A identificar')+
+      '</td><td>'+escape(p.classification==='needs_review'?'Revisão necessária':p.classification==='selected'?'Selecionada':'Automática')+'</td></tr>';
+  }).join(''):'<tr><td colspan="5">Os produtos cadastrados aparecerão aqui.</td></tr>';
+}
+async function refreshCategories(){
+  const [data,targets]=await Promise.all([fetchCategoryOptions(),call('/api/categories/destinations')]);
+  categoryDestinations=targets.destinations||[];
+  const select=$('category-group-select');
+  const selection=categorySelectedId||Number(select.value);
+  select.innerHTML='<option value="">Selecione uma categoria</option>'+data.groups.map(c=>
+    '<option value="'+Number(c.id)+'">'+escape(c.name)+(c.enabled?'':' (inativa)')+'</option>').join('');
+  if(data.groups.some(c=>c.id===selection))select.value=String(selection);
+  else if(data.groups.length){select.value=String(data.groups[0].id);categorySelectedId=data.groups[0].id;}
+  renderCategoryRoutes();
+  renderCategoryProducts();
+}
+async function loadMasterState(){
+  const state=await call('/api/master');
+  masterActive=state.enabled;
+  const button=$('master-toggle');
+  button.textContent=masterActive===true?'Desligar robô':'Ligar robô';
+  button.classList.toggle('running',masterActive===true);
+  button.classList.toggle('paused',masterActive===false);
+  button.setAttribute('aria-pressed',masterActive===true?'true':'false');
+}
+$('master-toggle').addEventListener('click',async()=>{
+  const b=$('master-toggle'),target=masterActive!==true;
+  if(!target&&!confirm('Desligar os envios automáticos do Mercado Livre e da Shopee? As ofertas e configurações serão preservadas.'))return;
+  b.disabled=true;
+  try{
+    await call('/api/master',{method:'POST',body:JSON.stringify({enabled:target})});
+    await loadMasterState();
+    notice(target?'Robô geral ligado. Somente destinos cadastrados e autorizados serão utilizados.':'Robô geral pausado. Nenhuma fila foi apagada.');
+  }catch(e){notice('Controle geral: '+e.message,true);}
+  finally{b.disabled=false;}
+});
+$('categories-refresh').addEventListener('click',()=>refreshCategories().catch(e=>notice(e.message,true,'category-feedback')));
+$('category-group-select').addEventListener('change',renderCategoryRoutes);
+$('category-create-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  try{
+    const payload=Object.fromEntries(new FormData(e.target));
+    const result=await call('/api/categories/groups',{method:'POST',body:JSON.stringify(payload)});
+    categorySelectedId=result.id;
+    e.target.reset();
+    await refreshCategories();
+    notice('Categoria criada e disponível nos seletores.',false,'category-feedback');
+  }catch(err){notice(err.message,true,'category-feedback');}
+});
+$('category-edit-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!categorySelectedId){notice('Selecione uma categoria.',true,'category-feedback');return;}
+  try{
+    await call('/api/categories/groups/'+categorySelectedId,{method:'POST',body:JSON.stringify({
+      keywords:$('category-edit-keywords').value,enabled:$('category-edit-enabled').checked
+    })});
+    await refreshCategories();
+    notice('Categoria atualizada.',false,'category-feedback');
+  }catch(err){notice(err.message,true,'category-feedback');}
+});
+$('category-routes-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!categorySelectedId){notice('Selecione uma categoria primeiro.',true,'category-feedback');return;}
+  const routes=[];
+  for(const el of $('category-routes').querySelectorAll('.category-route-item')){
+    const ml=el.querySelector('[data-platform-ml]').checked;
+    const sh=el.querySelector('[data-platform-shopee]').checked;
+    if(ml||sh)routes.push({scope:el.dataset.scope,network:el.dataset.network,id:Number(el.dataset.id),mercadolivre:ml,shopee:sh});
+  }
+  try{
+    await call('/api/categories/groups/'+categorySelectedId+'/routes',{method:'POST',body:JSON.stringify({routes})});
+    await refreshCategories();
+    notice('Distribuição salva. Apenas destinos autorizados poderão receber anúncios.',false,'category-feedback');
+  }catch(error){notice(error.message,true,'category-feedback');}
+});
+$('activity-refresh').addEventListener('click',()=>refreshActivity().catch(e=>notice(e.message,true)));
+`;
