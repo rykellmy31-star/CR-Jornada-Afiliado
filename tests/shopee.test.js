@@ -309,8 +309,8 @@ test('robô geral ligado respeita pausa individual da Shopee',async()=>{
     mockExternal();
     const dest=await createTele(env);
     await activateTele(env,dest);
-    await saveShopeeTarget(env,{...config(dest),enabled:false});
-    await addShopeeOffer(env,offer(dest));
+    await saveShopeeTarget(env,{...config(dest,'Infantil'),enabled:false});
+    await addShopeeOffer(env,offer(dest,url,'Infantil'));
     const result=await runShopeeScheduled({...env,MASTER_SCHEDULE_ENABLED:true});
     assert.deepEqual(result.results,[],'Destino pausado não deve ser enviado pelo botão geral');
     assert.equal((await shopeeState(env,dest.network,dest.id)).offers[0].status,'ready');
