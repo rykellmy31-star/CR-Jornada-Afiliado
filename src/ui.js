@@ -315,24 +315,6 @@ export function renderPage() {
             <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Link criado pela minha Central de Afiliados</b></span></label>
             <button type="submit" class="primary">Adicionar à fila deste grupo</button>
           </form>
-          <div class="section-header" style="margin-top:21px"><div><h2>Cupom opcional da oferta</h2></div></div>
-          <form id="wa-multi-coupon-form" class="wa-multi-form">
-            <div class="field-grid">
-              <label>Oferta na fila<select name="offer_id" id="wa-multi-coupon-offer" required></select></label>
-              <label>Tipo<select name="kind" id="wa-multi-coupon-kind"><option value="code">Código</option><option value="activation">Ativação</option></select></label>
-              <label>Código<input name="code" id="wa-multi-coupon-code"></label>
-              <label>Desconto<select name="discount_type"><option value="percent">Porcentagem</option><option value="fixed">Valor fixo (R$)</option></select></label>
-              <label>Valor<input name="discount_value" type="number" min="1" step="1" required></label>
-              <label>Compra mínima (R$)<input name="min_cart" type="number" min="0" step="0.01"></label>
-              <label>Teto desconto (R$)<input name="max_discount" type="number" min="0.01" step="0.01"></label>
-              <label>Início<input name="start_day" type="date" required></label>
-              <label>Fim<input name="end_day" type="date" required></label>
-              <label>Fonte oficial do cupom<input name="source_url" type="url" required placeholder="https://www.mercadolivre.com.br/..."></label>
-            </div>
-            <label>Restrições<input name="notes" maxlength="220"></label>
-            <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Conferi a origem e as condições do cupom</b></span></label>
-            <button class="outline" type="submit">Salvar cupom</button>
-          </form>
           <div class="section-header" style="margin-top:21px"><div><h2>Fila e histórico do grupo</h2></div></div>
           <div class="table-scroll"><table><thead><tr><th>Oferta</th><th>Estado</th><th>Ação</th></tr></thead><tbody id="wa-multi-offers"><tr><td colspan="3">Sem ofertas.</td></tr></tbody></table></div>
           <div id="wa-multi-logs" class="logs"></div>
@@ -512,6 +494,27 @@ export function renderPage() {
           <button class="primary" type="submit">Salvar cupom Shopee</button>
           <p id="shopee-coupon-feedback" class="feedback" role="status" aria-live="polite"></p>
         </form>
+      </section>
+      <section class="card coupon-panel hidden" id="ml-whatsapp-coupon-panel">
+        <div class="section-header"><div><h2>🎟️ Cupons do grupo WhatsApp • Mercado Livre</h2><p>Selecione uma oferta ainda na fila do grupo. Os cupons são independentes da Shopee.</p></div></div>
+          <div class="section-header" style="margin-top:21px"><div><h2>Cupom opcional da oferta</h2></div></div>
+          <form id="wa-multi-coupon-form" class="wa-multi-form">
+            <div class="field-grid">
+              <label>Oferta na fila<select name="offer_id" id="wa-multi-coupon-offer" required></select></label>
+              <label>Tipo<select name="kind" id="wa-multi-coupon-kind"><option value="code">Código</option><option value="activation">Ativação</option></select></label>
+              <label>Código<input name="code" id="wa-multi-coupon-code"></label>
+              <label>Desconto<select name="discount_type"><option value="percent">Porcentagem</option><option value="fixed">Valor fixo (R$)</option></select></label>
+              <label>Valor<input name="discount_value" type="number" min="1" step="1" required></label>
+              <label>Compra mínima (R$)<input name="min_cart" type="number" min="0" step="0.01"></label>
+              <label>Teto desconto (R$)<input name="max_discount" type="number" min="0.01" step="0.01"></label>
+              <label>Início<input name="start_day" type="date" required></label>
+              <label>Fim<input name="end_day" type="date" required></label>
+              <label>Fonte oficial do cupom<input name="source_url" type="url" required placeholder="https://www.mercadolivre.com.br/..."></label>
+            </div>
+            <label>Restrições<input name="notes" maxlength="220"></label>
+            <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Conferi a origem e as condições do cupom</b></span></label>
+            <button class="outline" type="submit">Salvar cupom</button>
+          </form>
       </section>
       <section class="card coupon-panel">
         <div class="section-header"><div><h2>🎟️ Cupons • Mercado Livre</h2><p>Cupons separados da Shopee, vinculados a ofertas ainda na fila.</p></div></div>
@@ -708,14 +711,15 @@ function applyPlatformView(){
   $('channels-panel').classList.toggle('hidden',!isML||!telegram||coupons);
   $('shopee-panel').classList.toggle('hidden',isML||coupons);
   $('shopee-coupon-panel').classList.toggle('hidden',isML||!coupons);
+  $('ml-whatsapp-coupon-panel').classList.toggle('hidden',!isML||!coupons||telegram||currentWaGroupId===1);
   $('coupon-network-wrap').classList.toggle('hidden',!coupons);
   $('coupon-target-network').value=selectedNetwork;
   $('ml-coupon-target-hint').textContent=selectedNetwork==='telegram'
     ?'Selecione acima o canal Telegram do Mercado Livre para vincular um cupom à oferta.'
-    :'Cupons de grupos WhatsApp adicionais são cadastrados na configuração do próprio grupo. Para cupons de ofertas Telegram, selecione Telegram acima.';
+    :'No WhatsApp, escolha seu grupo acima. Para o principal, cupons de ofertas compartilhadas são vinculados à fila principal do Mercado Livre; ofertas exclusivas diretas não possuem cupons nesta versão.';
   document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram||coupons);
   document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram||coupons);
-  document.querySelector('#dashboard > .coupon-panel').classList.toggle('hidden',!isML||!coupons||!telegram);
+  document.querySelector('#dashboard > .coupon-panel').classList.toggle('hidden',!isML||!coupons||(!telegram&&currentWaGroupId!==1));
   document.querySelector('#dashboard > .list-panel').classList.toggle('hidden',!isML||!telegram||coupons);
   $('wa-multichannel').classList.toggle('hidden',!isML||telegram||coupons);
   $('whatsapp').classList.toggle('hidden',!isML||telegram||coupons||currentWaGroupId!==1);
