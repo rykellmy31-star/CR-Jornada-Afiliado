@@ -738,6 +738,11 @@ let shoAccountState=null;
 // Reutiliza o histórico original do WhatsApp no painel de Automação, sem mexer no banco.
 const waHistory=document.querySelector('#wa-direct-card .table-scroll');
 if(waHistory)$('ml-wa-automation-history').appendChild(waHistory);
+// Move os mesmos formulários e históricos do grupo extra, sem duplicar dados.
+for(const id of ['wa-multi-offer-heading','wa-multi-offer-form','wa-multi-queue-heading','wa-multi-queue-table','wa-multi-logs']){
+  const element=$(id);
+  if(element)$('auto-wa-multi-offer-content').appendChild(element);
+}
 let mlTopStatus='Robô desligado';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 // Requisições GET simultâneas à mesma rota compartilham o mesmo pedido.
@@ -1078,7 +1083,7 @@ async function switchPlatform(platform,network,tabOverride=null){
       void Promise.allSettled([refreshWhatsApp(),refreshManagedWhatsApp()]);
     }else if(platform==='mercadolivre'&&selectedNetwork==='telegram'){
       // O Telegram também é atualizado quando o usuário volta de outra plataforma.
-      void Promise.allSettled([refresh(),...(selectedTab==='automation'?[refreshWhatsApp()]:[])]);
+      void Promise.allSettled([refresh(),...(selectedTab==='automation'?[refreshWhatsApp(),refreshManagedWhatsApp()]:[])]);
     }
   }catch(error){
     if(revision===navigationRevision)notice('Destinos: '+error.message,true);
@@ -1238,7 +1243,10 @@ async function refreshManagedWhatsApp(){
     selector.innerHTML=list.map(g=>'<option value="'+Number(g.id)+'">'+escape(g.name)+' • '+escape(g.category)+(g.id===1?' (atual)':'')+'</option>').join('');
     selector.value=String(currentWaGroupId);
     const extra=currentWaGroupId!==1;
-    $('wa-multi-extra').classList.toggle('hidden',!extra);
+     $('wa-multi-extra').classList.toggle('hidden',!extra);
+     $('auto-wa-multi').classList.toggle('hidden',!extra);
+     $('auto-wa-multi-select').innerHTML=selector.innerHTML;
+     $('auto-wa-multi-select').value=String(currentWaGroupId);
     // Visibilidade da aba WhatsApp é controlada somente por applyPlatformView.
     if(selectedPlatform==='mercadolivre'&&selectedNetwork==='whatsapp')applyPlatformView();
     if(!extra)return;
@@ -1251,6 +1259,11 @@ async function refreshManagedWhatsApp(){
     $('wa-multi-daily').value=String(g.max_daily);
     $('wa-multi-start').value=String(g.start_hour);
     $('wa-multi-end').value=String(g.end_hour);
+     $('auto-wa-multi-interval').value=String(g.interval_minutes);
+     $('auto-wa-multi-daily').value=String(g.max_daily);
+     $('auto-wa-multi-start').value=String(g.start_hour);
+     $('auto-wa-multi-end').value=String(g.end_hour);
+     $('auto-wa-multi-enabled').checked=!!g.enabled;
     $('wa-multi-registered').checked=!!g.public_registered;
     $('wa-multi-enabled').checked=!!g.enabled;
     const groupSelect=$('wa-multi-jid');
@@ -1407,12 +1420,35 @@ for(let h=0;h<=24;h++){
  const label=String(h).padStart(2,'0')+':00';
  if(h<24)$('wa-multi-start').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
  if(h>0)$('wa-multi-end').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
+  if(h<24)$('auto-wa-multi-start').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
+  if(h>0)$('auto-wa-multi-end').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
 }
 for(let h=0;h<=24;h++){
  const label=String(h).padStart(2,'0')+':00';
  if(h<24)$('shopee-start').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
  if(h>0)$('shopee-end').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
 }
+$('auto-wa-multi-select').addEventListener('change',async()=>{
+  currentWaGroupId=Number($('auto-wa-multi-select').value)||1;
+  $('wa-multi-select').value=String(currentWaGroupId);
+  rememberNavigation();
+  await refreshManagedWhatsApp();
+});
+$('auto-wa-multi-settings-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(currentWaGroupId===1)return;
+  try{
+    const result=await call('/api/wa-groups/'+currentWaGroupId+'/settings',{method:'POST',body:JSON.stringify({
+      name:$('wa-multi-name').value,category:$('wa-multi-category').value,
+      group_jid:$('wa-multi-jid').value,interval_minutes:Number($('auto-wa-multi-interval').value),
+      max_daily:Number($('auto-wa-multi-daily').value),start_hour:Number($('auto-wa-multi-start').value),
+      end_hour:Number($('auto-wa-multi-end').value),enabled:$('auto-wa-multi-enabled').checked,
+      public_registered:$('wa-multi-registered').checked
+    })});
+    await refreshManagedWhatsApp();
+    notice(result.group_changed?'Confirme novamente a autorização do grupo.':'Automação deste grupo salva.',false,'auto-wa-multi-feedback');
+  }catch(error){notice(error.message,true,'auto-wa-multi-feedback');}
+});
 $('wa-multi-select').addEventListener('change',async()=>{
  currentWaGroupId=Number($('wa-multi-select').value)||1;
  rememberNavigation();
