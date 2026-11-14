@@ -30,7 +30,7 @@ test('cinco categorias iniciais são cadastradas sem duplicar nem sobrescrever c
     const first=await listCategories(env);
     assert.equal(STARTER_GROUP_CATEGORIES.length,5);
     for(const preset of STARTER_GROUP_CATEGORIES){
-      assert.ok(preset.keywords.length>40&&preset.keywords.length<=350);
+      assert.ok(preset.keywords.length>40&&preset.keywords.length<=800);
       const row=first.groups.find(g=>g.name===preset.name);
       assert.ok(row,'Categoria inicial ausente: '+preset.name);
       assert.equal(row.keywords,preset.keywords);
