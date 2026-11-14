@@ -16,6 +16,8 @@ const timestamp=()=>Math.floor(Date.now()/1000);
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 async function safeFirst(env,sql,...args){try{return await env.DB.prepare(sql).bind(...args).first();}catch{return null;}}
 // Categorias iniciais solicitadas; nunca substituem palavras-chave personalizadas nem criam rotas de envio.
+// Snapshot do preset anterior: migrar apenas o texto inicial intacto no D1, preservando edições manuais.
+const LEGACY_AUTOMOTIVE_KEYWORDS="chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor";
 export const STARTER_GROUP_CATEGORIES=[
   {
     "name": "Casa e Utilidades",
@@ -35,7 +37,7 @@ export const STARTER_GROUP_CATEGORIES=[
   },
   {
     "name": "Ferramentas e Peças Automotivas",
-    "keywords": "chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor"
+    "keywords": "chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor, lavadora de alta pressão, lavadora wap, lava jato automotivo, shampoo automotivo, cera automotiva, limpa pneus, desengraxante automotivo, snow foam, canhão de espuma, pistola de lavagem, pano microfibra automotivo, aspirador automotivo, politriz automotiva, kit lavagem automotiva"
   }
 ];
 const STARTER_CATEGORY_NAMES=new Set(STARTER_GROUP_CATEGORIES.map(c=>c.name.toLocaleLowerCase('pt-BR')));
@@ -50,6 +52,11 @@ async function seedStarterGroupCategories(env){
       await env.DB.prepare('INSERT OR IGNORE INTO affiliate_group_categories(name,keywords,created_at,updated_at) VALUES(?,?,?,?)').bind(c.name,c.keywords,now,now).run();
     }else if(!String(current.keywords||'').trim()){
       await env.DB.prepare("UPDATE affiliate_group_categories SET keywords=?,updated_at=? WHERE name=? AND trim(keywords)=''").bind(c.keywords,now,current.name).run();
+    }
+    else if(c.name==='Ferramentas e Peças Automotivas'&&current.keywords===LEGACY_AUTOMOTIVE_KEYWORDS){
+      // Atualiza apenas o preset intocado anterior; nunca troca palavras-chave escolhidas pelo usuário.
+      await env.DB.prepare('UPDATE affiliate_group_categories SET keywords=?,updated_at=? WHERE name=? AND keywords=?')
+        .bind(c.keywords,now,current.name,LEGACY_AUTOMOTIVE_KEYWORDS).run();
     }
   }
 }
@@ -154,7 +161,7 @@ export async function listCategories(env){
 export async function createGroupCategory(env,data){
   await ensureAutomationCenter(env);
   const name=String(data?.name||'').trim(),keywords=String(data?.keywords||'').trim();
-  if(name.length<3||name.length>60||keywords.length>350)throw fail('Informe um nome de 3 a 60 caracteres e até 350 caracteres de palavras-chave.');
+  if(name.length<3||name.length>60||keywords.length>800)throw fail('Informe um nome de 3 a 60 caracteres e até 800 caracteres de palavras-chave.');
   if(!/^[\p{L}\p{N} &/()\-]+$/u.test(name))throw fail('Categoria contém caracteres não permitidos.');
   try{
     const t=timestamp();
@@ -173,7 +180,7 @@ export async function updateGroupCategory(env,id,data){
   if(!old)throw fail('Categoria não encontrada.',404);
   const keywords=String(data?.keywords??old.keywords).trim();
   const enabled=data?.enabled??!!old.enabled;
-  if(keywords.length>350||typeof enabled!=='boolean')throw fail('Configuração de categoria inválida.');
+  if(keywords.length>800||typeof enabled!=='boolean')throw fail('Configuração de categoria inválida.');
   await env.DB.prepare('UPDATE affiliate_group_categories SET keywords=?,enabled=?,updated_at=? WHERE id=?')
     .bind(keywords,+enabled,timestamp(),n).run();
   return {ok:true};
