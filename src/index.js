@@ -186,7 +186,8 @@ async function runScheduled(env) {
     env.DB.prepare("SELECT MAX(published_at) AS published_at FROM offers WHERE status='published'").first()
   ]);
   if(env.MASTER_SCHEDULE_ENABLED===false)return;
-  const effective=env.MASTER_SCHEDULE_ENABLED===true?{...settings,automation_enabled:1,telegram_enabled:settings.channel_registered&&!!env.TELEGRAM_BOT_TOKEN?1:settings.telegram_enabled}:settings;
+  // O controle geral não ignora a pausa ou a autorização individual do destino.
+  const effective=settings;
   if (!shouldSend(effective, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
   if (!env.TELEGRAM_BOT_TOKEN) return;
   await ensureCouponTable(env);
