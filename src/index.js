@@ -1,5 +1,6 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
+import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
@@ -126,7 +127,7 @@ async function sendOfferWithImage(env, chat, offer) {
   const payload = telegramPayload(offer, chat);
   let imageUrl = null;
   try {
-    imageUrl = await findProductImage(offer.affiliate_url);
+    imageUrl = await resolveProductImage(env, offer.affiliate_url, findProductImage);
   } catch (error) {
     // Metadados indisponíveis não devem impedir a publicação do link validado.
     console.warn('Imagem indisponível para a oferta:', offer.id, String(error?.message || error).slice(0, 100));

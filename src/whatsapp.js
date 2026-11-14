@@ -1,5 +1,6 @@
 import { composeOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
+import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
 
@@ -355,7 +356,7 @@ function textForWhatsApp(offer){
 async function sendOfferWhatsApp(env,cfg,offer){
   const text=textForWhatsApp(offer);
   let image=null;
-  try{image=await findProductImage(offer.affiliate_url);}catch(e){console.warn('Foto WhatsApp:',String(e?.message||e).slice(0,100));}
+  try{image=await resolveProductImage(env,offer.affiliate_url,findProductImage);}catch(e){console.warn('Foto WhatsApp:',String(e?.message||e).slice(0,100));}
   const body=image?{
     number:cfg.group_jid,mediatype:'image',mimetype:image.endsWith('.png')?'image/png':'image/jpeg',
     media:image,caption:text,fileName:'oferta-mercado-livre.jpg',filename:'oferta-mercado-livre.jpg'
