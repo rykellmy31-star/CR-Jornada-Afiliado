@@ -199,3 +199,84 @@ test('o contador consulta todos os produtos do D1 mesmo com lista visual limitad
   assert.equal(state.groups[0].counts.captured,205);
  }finally{DB.close();}
 });
+
+
+test('melila.me publicado em grupo permitido passa por redirect seguro e identifica oferta Mercado Livre',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ const thirdParty='https://melila.me/ijeagkktlctt';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const message='OVERSIZED PRA ELAS\nCamiseta T-shirt Feminina Malha Peruana\nDe R$ 109\n💸por R$ 43\n🛒Compra aqui\n'+thirdParty;
+  const ingest=await ingestMonitorEvent(env,event(GROUP,message));
+  assert.equal(ingest.pending,1);
+  assert.equal(ingest.captured,0);
+  const item=DB.prepare('SELECT short_url,status FROM ml_monitor_shortlinks').first();
+  assert.equal(item.short_url,thirdParty);
+  assert.equal(item.status,'pending');
+  globalThis.fetch=async (url,options)=>{
+    assert.equal(String(url),thirdParty);
+    assert.equal(options.redirect,'manual');
+    return new Response(null,{status:302,headers:{location:PRODUCT+'?matt_tool=third_party'}});
+  };
+  const checked=await resolveMonitorShortlinks(env);
+  assert.equal(checked.resolved,1);
+  const state=await monitorState(env);
+  assert.equal(state.counts.captured,1);
+  assert.equal(state.links[0].source_url,PRODUCT);
+  assert.equal(state.links[0].last_seen_price_cents,4300);
+  assert.equal(DB.prepare('SELECT status FROM ml_monitor_shortlinks').first().status,'resolved');
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+test('melila.me pode passar por meli.la; nunca copia comissão do link original',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Compra aqui https://melila.me/abcde12345'));
+  const visited=[];
+  globalThis.fetch=async (url,options)=>{
+    visited.push(String(url));assert.equal(options.redirect,'manual');
+    if(String(url)==='https://melila.me/abcde12345')return new Response(null,{status:302,headers:{location:'https://meli.la/ABCDEF123'}});
+    if(String(url)==='https://meli.la/ABCDEF123')return new Response(null,{status:302,headers:{location:RAW}});
+    throw new Error('Destino não esperado');
+  };
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  assert.deepEqual(visited,['https://melila.me/abcde12345','https://meli.la/ABCDEF123']);
+  assert.equal((await monitorState(env)).links[0].source_url,PRODUCT);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+test('melila.me com deep link HTML só aceita um produto explícito do Mercado Livre',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Olha a oferta https://melila.me/xyz123456'));
+  globalThis.fetch=async ()=>{
+    return new Response('<html><head><meta property="og:url" content="'+PRODUCT+'?src=outro"></head><body>Ver oferta no Mercado Livre</body></html>',{status:200,headers:{'content-type':'text/html; charset=utf-8'}});
+  };
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  assert.equal((await monitorState(env)).links[0].source_url,PRODUCT);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+test('melila.me para Shopee ou página sem produto fica em revisão sem criar oferta',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Link desconhecido https://melila.me/abcd54321'));
+  globalThis.fetch=async ()=>new Response(null,{status:302,headers:{location:'https://shopee.com.br/produto-teste'}});
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,0);
+  assert.equal(DB.prepare('SELECT status FROM ml_monitor_shortlinks').first().status,'review');
+  assert.equal((await monitorState(env)).counts.captured,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+  await ingestMonitorEvent(env,event(GROUP,'Novo link https://melila.me/abcd99999'));
+  globalThis.fetch=async ()=>new Response('<html>'+PRODUCT+' https://www.mercadolivre.com.br/outro/p/MLB8877665544</html>',{status:200,headers:{'content-type':'text/html'}});
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,0);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_shortlinks WHERE status='review'").first().total,2);
+  assert.equal((await monitorState(env)).links.length,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
