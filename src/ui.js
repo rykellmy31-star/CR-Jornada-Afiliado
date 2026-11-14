@@ -12,6 +12,7 @@ export function renderPage() {
         <button class="platform-nav-item active" type="button" data-platform="mercadolivre"><span>🛍️</span> Mercado Livre</button>
         <button class="platform-nav-item" type="button" data-platform="shopee"><span>🧡</span> Shopee</button>
         <div class="platform-side-divider"></div>
+        <button class="platform-nav-item" type="button" data-panel="linkbatches"><span>🔗</span> Conversão de Link em Lote</button>
         <button class="platform-nav-item" type="button" data-panel="categories"><span>📁</span> Categorias</button>
         <button class="platform-nav-item" type="button" data-panel="activity"><span>📋</span> Atividade recente</button>
         <button class="platform-nav-item" type="button" data-panel="affiliate"><span>🔐</span> Conexão de Afiliado</button>
@@ -694,7 +695,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
-    if(['platform','categories','activity','affiliate'].includes(state.page))selectedPage=state.page;
+    if(['platform','categories','activity','affiliate','linkbatches'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -889,7 +890,7 @@ function applyPlatformView(){
     if(item.id==='platform-sidebar')continue;
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
-    if(item.id==='ml-link-batches'){item.classList.toggle('hidden',selectedPage!=='platform'||!isML||!automation);continue;}
+    if(item.id==='ml-link-batches'){item.classList.toggle('hidden',selectedPage!=='linkbatches');continue;}
      if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate'||!isML);continue;}
      if(item.id==='shopee-account-panel'){item.classList.toggle('hidden',selectedPage!=='affiliate'||isML);continue;}
     if(selectedPage!=='platform')item.classList.add('hidden');
@@ -1078,7 +1079,6 @@ async function switchPlatform(platform,network,tabOverride=null){
   $('shopee-destination-create').classList.add('hidden');
   rememberNavigation();
   applyPlatformView();
-  if(selectedPlatform==='mercadolivre'&&selectedTab==='automation')void refreshMLLinkBatches();
   try{
     const valid=await refreshPlatformTargets();
     if(!valid||revision!==navigationRevision)return;
@@ -1720,6 +1720,7 @@ for(const button of document.querySelectorAll('[data-panel]')){
     applyPlatformView();
     if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
     if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
+    if(selectedPage==='linkbatches')await refreshMLLinkBatches().catch(error=>notice(error.message,true,'ml-batch-feedback'));
     if(selectedPage==='affiliate'&&selectedPlatform==='shopee')await refreshShopeeAccount().catch(error=>notice(error.message,true,'shopee-account-feedback'));
   });
 }
@@ -2079,10 +2080,10 @@ async function bootstrap(){
     const tasks=[loadMasterState(),fetchCategoryOptions()];
     if(selectedPage==='categories')tasks.push(refreshCategories());
     else if(selectedPage==='activity')tasks.push(refreshActivity());
+    else if(selectedPage==='linkbatches')tasks.push(refreshMLLinkBatches());
     else if(selectedPage==='affiliate'&&selectedPlatform==='shopee')tasks.push(refreshShopeeAccount());
     else if(selectedPage==='platform'){
       const platform=selectedPlatform;
-      if(platform==='mercadolivre'&&selectedTab==='automation')tasks.push(refreshMLLinkBatches());
       tasks.push(refreshPlatformTargets().then(valid=>{
         if(valid&&platform==='shopee'&&selectedPlatform==='shopee')
           return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
