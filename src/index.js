@@ -1,4 +1,5 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
+import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
@@ -217,6 +218,7 @@ async function router(request, env) {
   if(u.pathname==='/api/master'&&method==='GET')return json(await masterState(env));
   if(u.pathname==='/api/master'&&method==='POST')return json(await setMasterState(env,(await getBody(request)).enabled));
   if(u.pathname==='/api/categories'&&method==='GET')return json(await listCategories(env));
+  if(u.pathname==='/api/activity'&&method==='GET')return json(await listActivity(env,100));
   if(u.pathname==='/api/categories/destinations'&&method==='GET')return json({destinations:await listCategoryDestinations(env)});
   if(u.pathname==='/api/categories/groups'&&method==='POST')return json(await createGroupCategory(env,await getBody(request)),201);
   const categoryUpdate=u.pathname.match(/^\/api\/categories\/groups\/(\d+)$/);
