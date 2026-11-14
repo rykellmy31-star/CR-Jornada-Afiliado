@@ -1466,6 +1466,15 @@ for(const button of document.querySelectorAll('[data-panel]')){
 for(const button of document.querySelectorAll('[data-network]')){
   button.addEventListener('click',()=>switchPlatform(selectedPlatform,button.dataset.network));
 }
+$('coupons-tab').addEventListener('click',async()=>{
+  selectedPage='platform';selectedTab='coupons';rememberNavigation();applyPlatformView();
+  if(selectedPlatform==='shopee')await refreshShopee();
+});
+$('coupon-target-network').addEventListener('change',async()=>{
+  const network=$('coupon-target-network').value;
+  await switchPlatform(selectedPlatform,network);
+  selectedTab='coupons';rememberNavigation();applyPlatformView();
+});
 $('platform-target-select').addEventListener('change',async()=>{
   const id=Number($('platform-target-select').value)||1;
   if(selectedPlatform==='shopee'){
@@ -1683,6 +1692,30 @@ $('wa-deliveries').addEventListener('click',async e=>{
   if(!confirm('Confira primeiro no grupo se a oferta NÃO foi enviada. Reenfileirar pode duplicar uma mensagem que já chegou. Deseja continuar?'))return;
   try{await call('/api/whatsapp/retry',{method:'POST',body:JSON.stringify({offer_id:Number(b.dataset.waRetry)})});notice('Oferta liberada para nova tentativa no próximo ciclo.',false,'wa-feedback');await refreshWhatsApp();}
   catch(error){notice(error.message,true,'wa-feedback');}
+});
+$('shopee-coupon-kind').addEventListener('change',()=>{
+  const isCode=$('shopee-coupon-kind').value==='code';
+  $('shopee-coupon-code').required=isCode;
+  $('shopee-coupon-code').disabled=!isCode;
+});
+$('shopee-coupon-kind').dispatchEvent(new Event('change'));
+$('shopee-coupon-discount-type').addEventListener('change',()=>{
+  const fixed=$('shopee-coupon-discount-type').value==='fixed';
+  $('shopee-coupon-discount-value').step=fixed?'0.01':'1';
+  $('shopee-coupon-discount-value').min=fixed?'0.01':'1';
+});
+$('shopee-coupon-discount-type').dispatchEvent(new Event('change'));
+$('shopee-coupon-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(selectedPlatform!=='shopee')return;
+  const body=Object.fromEntries(new FormData(e.target));
+  body.owner_confirmation=e.target.elements.owner_confirmation.checked;
+  body.network=selectedNetwork;body.target_id=shopeeTarget[selectedNetwork];
+  try{
+    await call('/api/shopee/coupons',{method:'POST',body:JSON.stringify(body)});
+    notice('Cupom Shopee salvo na oferta deste destino. A elegibilidade depende das condições no carrinho.',false,'shopee-coupon-feedback');
+    await refreshShopee();
+  }catch(error){notice(error.message,true,'shopee-coupon-feedback');}
 });
 $('coupon-kind').addEventListener('change',()=>{
   const isCode=$('coupon-kind').value==='code';
