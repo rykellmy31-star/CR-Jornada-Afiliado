@@ -14,6 +14,7 @@ const SCHEMA=[
 ];
 const timestamp=()=>Math.floor(Date.now()/1000);
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
+async function safeFirst(env,sql,...args){try{return await env.DB.prepare(sql).bind(...args).first();}catch{return null;}}
 export async function ensureAutomationCenter(env){
   for(const stmt of SCHEMA)await env.DB.prepare(stmt).run();
 }
@@ -216,9 +217,9 @@ async function alreadySentByOriginal(env,platform,offer,r){
   if(platform==='mercadolivre'){
     if(r.destination_scope==='mercadolivre'&&r.network==='telegram'&&r.destination_id===1)return true;
     if(r.destination_scope==='mercadolivre'&&r.network==='whatsapp'&&r.destination_id===1){
-      const directMode=await env.DB.prepare('SELECT delivery_mode FROM offer_delivery_routing WHERE offer_id=?').bind(offer.id).first().catch(()=>null);
+      const directMode=await safeFirst(env,'SELECT delivery_mode FROM offer_delivery_routing WHERE offer_id=?',offer.id);
       if(!directMode||directMode.delivery_mode==='both')return true;
-      const sent=await env.DB.prepare("SELECT 1 AS found FROM whatsapp_deliveries WHERE offer_id=? AND status IN ('sent','sending','needs_review')").bind(offer.id).first().catch(()=>null);
+      const sent=await safeFirst(env,"SELECT 1 AS found FROM whatsapp_deliveries WHERE offer_id=? AND status IN ('sent','sending','needs_review')",offer.id);
       if(sent)return true;
     }
   }else if(platform==='shopee'&&r.destination_scope==='shopee'){
@@ -236,7 +237,7 @@ export async function runCategoryRoutingScheduled(env){
   const cutoff=timestamp()-2*86400;
   const [ml,sh]=await Promise.all([
     env.DB.prepare("SELECT * FROM offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 30").bind(cutoff).all(),
-    env.DB.prepare("SELECT * FROM shopee_offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 30").bind(cutoff).all().catch(()=>({results:[]}))
+    (async()=>{try{return await env.DB.prepare("SELECT * FROM shopee_offers WHERE status='published' AND published_at>? ORDER BY published_at DESC LIMIT 30").bind(cutoff).all();}catch{return {results:[]};}})()
   ]);
   const out=[];
   for(const [platform,offers] of [['mercadolivre',ml.results],['shopee',sh.results]]){
