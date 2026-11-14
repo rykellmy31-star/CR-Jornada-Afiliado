@@ -204,7 +204,7 @@ export async function runShopeeScheduled(env){
   if(!env?.DB)return {skipped:'db'};
   if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
   await ensureShopeeTables(env);
-  const rows=await env.DB.prepare('SELECT * FROM shopee_targets WHERE enabled=1 AND permission_confirmed=1 ORDER BY id LIMIT 60').all();
+  const rows=await env.DB.prepare('SELECT * FROM shopee_targets WHERE (enabled=1 OR ?=1) AND permission_confirmed=1 ORDER BY id LIMIT 60').bind(env.MASTER_SCHEDULE_ENABLED===true?1:0).all();
   const out=[];
   for(const config of rows.results){
     const date=new Date(),t=nowSec(),local=localTimeParts(date);
@@ -217,8 +217,8 @@ export async function runShopeeScheduled(env){
     let base;
     try{base=await verifyTarget(env,config.network,config.target_id);}catch{continue;}
     if(!base.base_enabled||!base.base_registered||!categoryMatches(offer.category,base.category))continue;
-    const slot=await env.DB.prepare('UPDATE shopee_targets SET last_attempt_at=? WHERE id=? AND enabled=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
-      .bind(t,config.id,t-config.interval_minutes*60).run();
+    const slot=await env.DB.prepare('UPDATE shopee_targets SET last_attempt_at=? WHERE id=? AND (enabled=1 OR ?=1) AND (last_attempt_at=0 OR last_attempt_at<=?)')
+      .bind(t,config.id,env.MASTER_SCHEDULE_ENABLED===true?1:0,t-config.interval_minutes*60).run();
     if(slot.meta?.changes!==1)continue;
     if(config.network==='whatsapp'){
       try{await claimInstance(env,config.target_id,t);}
