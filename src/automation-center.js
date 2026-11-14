@@ -15,8 +15,47 @@ const SCHEMA=[
 const timestamp=()=>Math.floor(Date.now()/1000);
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 async function safeFirst(env,sql,...args){try{return await env.DB.prepare(sql).bind(...args).first();}catch{return null;}}
+// Categorias iniciais solicitadas; nunca substituem palavras-chave personalizadas nem criam rotas de envio.
+export const STARTER_GROUP_CATEGORIES=[
+  {
+    "name": "Casa e Utilidades",
+    "keywords": "organizador de cozinha, organizador de gaveta, organizador de armário, pote hermético, kit potes, jogo de panelas, frigideira, jogo de cama, lençol, travesseiro, toalha de banho, tapete de banheiro, luminária, varal, mop giratório, escorredor de louça, garrafa térmica, dispenser de detergente"
+  },
+  {
+    "name": "Beleza e Cuidados Pessoais",
+    "keywords": "perfume feminino, perfume masculino, body splash, hidratante corporal, protetor solar, sérum facial, vitamina c facial, shampoo, condicionador, máscara capilar, óleo capilar, secador de cabelo, chapinha, escova secadora, barbeador elétrico, aparador de pelos, kit maquiagem, batom, esmalte, cílios postiços"
+  },
+  {
+    "name": "Moda e Acessórios",
+    "keywords": "vestido feminino, blusa feminina, camiseta masculina, calça jeans, legging, roupa fitness, conjunto feminino, moletom, jaqueta, tênis feminino, tênis masculino, sandália feminina, chinelo, bolsa feminina, mochila, carteira masculina, relógio feminino, óculos de sol, boné, roupa infantil, lingerie"
+  },
+  {
+    "name": "Eletrônicos e Eletrodomésticos",
+    "keywords": "fone bluetooth, fone de ouvido, caixa de som, smartwatch, relógio inteligente, carregador rápido, cabo usb, power bank, suporte para celular, teclado gamer, mouse gamer, webcam, monitor gamer, roteador wifi, câmera de segurança, lâmpada inteligente, air fryer, cafeteira, liquidificador, aspirador robô"
+  },
+  {
+    "name": "Ferramentas e Peças Automotivas",
+    "keywords": "chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor"
+  }
+];
+const STARTER_CATEGORY_NAMES=new Set(STARTER_GROUP_CATEGORIES.map(c=>c.name.toLocaleLowerCase('pt-BR')));
+async function seedStarterGroupCategories(env){
+  const names=STARTER_GROUP_CATEGORIES.map(c=>c.name);
+  const rows=await env.DB.prepare('SELECT name,keywords FROM affiliate_group_categories WHERE name IN (?,?,?,?,?)').bind(...names).all();
+  const existing=new Map(rows.results.map(r=>[r.name.toLocaleLowerCase('pt-BR'),r]));
+  const now=timestamp();
+  for(const c of STARTER_GROUP_CATEGORIES){
+    const current=existing.get(c.name.toLocaleLowerCase('pt-BR'));
+    if(!current){
+      await env.DB.prepare('INSERT OR IGNORE INTO affiliate_group_categories(name,keywords,created_at,updated_at) VALUES(?,?,?,?)').bind(c.name,c.keywords,now,now).run();
+    }else if(!String(current.keywords||'').trim()){
+      await env.DB.prepare("UPDATE affiliate_group_categories SET keywords=?,updated_at=? WHERE name=? AND trim(keywords)=''").bind(c.keywords,now,current.name).run();
+    }
+  }
+}
 export async function ensureAutomationCenter(env){
   for(const stmt of SCHEMA)await env.DB.prepare(stmt).run();
+  await seedStarterGroupCategories(env);
 }
 export async function masterState(env){
   await ensureAutomationCenter(env);
@@ -64,6 +103,9 @@ export function classifyProduct(title,sourceCategory,categories){
   if(bySelected)return {category:bySelected,subcategory:inferSubcategory(title),classification:'selected'};
   const matches=categories.filter(c=>c.enabled&&keywordsOf(c).some(k=>includesPhrase(t,k)));
   if(matches.length===1)return {category:matches[0],subcategory:inferSubcategory(title),classification:'keywords'};
+  // Uma categoria personalizada mais específica prevalece sobre o modelo inicial, evitando ambiguidade.
+  const custom=matches.filter(c=>!STARTER_CATEGORY_NAMES.has(String(c.name).toLocaleLowerCase('pt-BR')));
+  if(custom.length===1)return {category:custom[0],subcategory:inferSubcategory(title),classification:'keywords'};
   return {category:null,subcategory:null,classification:'needs_review'};
 }
 export async function upsertProductCategory(env,platform,offer,categoriesGiven=null){
