@@ -129,8 +129,9 @@ export function renderPage() {
       </section>
       <div class="metric-grid"><div class="metric card"><span>Prontas para publicar</span><strong id="count-ready">0</strong></div><div class="metric card"><span>Publicadas</span><strong id="count-published">0</strong></div><div class="metric card"><span>Em revisão</span><strong id="count-needs_review">0</strong></div><div class="metric card"><span>Total cadastrado</span><strong id="count-total">0</strong></div></div>
       <div class="main-grid">
-        <section class="card settings"><div class="section-header"><div><h2>Automação</h2><p>O envio automático começa desligado por segurança.</p></div><div class="symbol">⚙</div></div>
+        <section class="card settings"><div class="section-header"><div><h2>Configurações do canal Telegram</h2><p>Cadastro e permissão ficam separados dos intervalos e da pausa da automação.</p></div><div class="symbol">⚙</div></div>
           <form id="settings-form">
+            <div class="settings-subsection destination-section"><h3>📣 Cadastro e permissões do destino</h3>
             <div id="channel-primary-category">
               <label>Categoria permitida neste canal
                 <select data-category-selector id="primary-channel-category" data-desired-category="Geral"><option value="Geral">Geral</option></select>
@@ -158,9 +159,12 @@ export function renderPage() {
             <p class="hint">Cole o link público do canal. O bot selecionado deve ser administrador com permissão para publicar. Ao trocar de destino, a automação será pausada até nova confirmação.</p>
             <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este canal público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
             <label class="check-row"><input type="checkbox" id="telegram_enabled"><span><b>Habilitar publicação no Telegram</b><small>Exige token do BotFather configurado como segredo.</small></span></label>
-            <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Iniciar automação</b><small>Usará apenas os links oficiais previamente cadastrados.</small></span></label>
+            </div>
+            <div class="settings-subsection automation-section"><h3>⚙️ Automação</h3>
+            <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Publicações automáticas neste canal (ativar ou pausar)</b><small>O botão Ligar/Desligar Robô não cancela uma pausa feita aqui.</small></span></label>
             <div class="field-grid"><label>Intervalo entre publicações no Telegram (minutos)<input id="interval_minutes" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
             <p class="hint">Digite qualquer intervalo inteiro entre 1 e 1440 minutos. Janela de publicação no horário da Bahia (UTC−3).</p>
+            </div>
             <div class="actions"><button class="primary" type="submit">Salvar configurações</button><button class="outline" type="button" id="test-telegram">Testar Telegram</button></div>
             <p id="token-state" class="hint"></p>
             <p id="telegram-test-feedback" class="feedback" role="status" aria-live="polite"></p>
@@ -555,8 +559,8 @@ export const CSS = `
   input:not([type=checkbox]),select,textarea{font-size:16px}
 }
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
-${CATEGORY_CSS}`;
-
+${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}
+`;
 export const CLIENT_JS = `
 'use strict';
 const $ = id => document.getElementById(id);
