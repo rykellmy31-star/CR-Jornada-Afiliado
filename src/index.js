@@ -1,5 +1,6 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
+import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks} from './whatsapp-link-monitor.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
@@ -203,6 +204,16 @@ async function router(request, env) {
   if (method === 'GET' && u.pathname === '/') return html(renderPage());
   if (method === 'GET' && u.pathname === '/app.js') return new Response(CLIENT_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' } });
   if (method === 'GET' && u.pathname === '/styles.css') return new Response(CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' } });
+  // Rota de entrada restrita para eventos da Evolution. Não modifica webhooks nem instâncias.
+  const receiver=u.pathname.match(/^\/hooks\/wa-links\/([A-Za-z0-9_-]{24,128})$/);
+  if(receiver&&method==='POST'){
+    if(typeof env.MONITOR_WEBHOOK_TOKEN!=='string'||env.MONITOR_WEBHOOK_TOKEN.length<24||
+      !await secureEqual(receiver[1],env.MONITOR_WEBHOOK_TOKEN))return fail('Não encontrado.',404);
+    if(!request.headers.get('content-type')?.startsWith('application/json'))return fail('Envie JSON.',415);
+    if(Number(request.headers.get('content-length')||0)>20000)return fail('Conteúdo muito extenso.',413);
+    const event=await getBody(request);
+    return json(await ingestMonitorEvent(env,event));
+  }
   if (!u.pathname.startsWith('/api/')) return fail('Não encontrado.', 404);
   requireConfigured(env);
   if (method !== 'GET' && method !== 'HEAD') {
@@ -219,6 +230,15 @@ async function router(request, env) {
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
+  if(u.pathname==='/api/monitor/state'&&method==='GET')return json(await monitorState(env));
+  if(u.pathname==='/api/monitor/settings'&&method==='POST')return json(await saveMonitorSettings(env,await getBody(request)));
+  if(u.pathname==='/api/monitor/evolution-groups'&&method==='GET')return json(await monitorEvolutionGroups(env,u.searchParams.get('instance')));
+  if(u.pathname==='/api/monitor/groups'&&method==='POST')return json(await addMonitorGroup(env,await getBody(request)),201);
+  const monitorGroup=u.pathname.match(/^\/api\/monitor\/groups\/(\d+)$/);
+  if(monitorGroup&&method==='POST')return json(await updateMonitorGroup(env,monitorGroup[1],await getBody(request)));
+  const monitorCategory=u.pathname.match(/^\/api\/monitor\/links\/(\d+)\/category$/);
+  if(monitorCategory&&method==='POST')return json(await updateMonitorLinkCategory(env,monitorCategory[1],await getBody(request)));
+  if(u.pathname==='/api/monitor/batches'&&method==='POST')return json(await prepareMonitorBatch(env,await getBody(request)),201);
   if(u.pathname==='/api/link-batches'&&method==='GET')return json(await listLinkBatches(env));
   if(u.pathname==='/api/link-batches'&&method==='POST')return json(await createLinkBatch(env,await getBody(request)),201);
   const singleBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)$/);
@@ -556,6 +576,7 @@ export default {
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     start(runShopeeScheduled,'Shopee e categorias',true);
+    if(env.DB)ctx.waitUntil(resolveMonitorShortlinks(env).catch(error=>console.error('Resolver links do monitor:',String(error?.message||error).slice(0,120))));
   }
 };
 export { runScheduled, router };
