@@ -576,7 +576,8 @@ export default {
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     start(runShopeeScheduled,'Shopee e categorias',true);
-    if(env.DB)ctx.waitUntil(resolveMonitorShortlinks(env).catch(error=>console.error('Resolver links do monitor:',String(error?.message||error).slice(0,120))));
+    if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24)
+      ctx.waitUntil(resolveMonitorShortlinks(env).catch(error=>console.error('Resolver links do monitor:',String(error?.message||error).slice(0,120))));
   }
 };
 export { runScheduled, router };
