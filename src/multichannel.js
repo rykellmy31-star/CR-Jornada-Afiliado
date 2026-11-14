@@ -347,7 +347,7 @@ async function sendOfferWithImage(env,token,chat,offer){
 }
 export async function publishChannelOffer(env,id,offerId){
   const c=await row(env,id);
-  if((!c.telegram_enabled&&env.MASTER_SCHEDULE_ENABLED!==true)||!c.channel_registered)throw bad('Habilite e autorize o canal antes de publicar.');
+  if(!c.telegram_enabled||!c.channel_registered)throw bad('Habilite e autorize o canal antes de publicar.');
   const token=await globalToken(env,c);
   await verifyChannel(token,c.telegram_chat_id);
   const offer=await env.DB.prepare(OFFERS_SQL+' WHERE o.channel_id=? AND o.id=?').bind(c.id,Number(offerId)).first();
@@ -374,7 +374,7 @@ export async function runMultiChannelScheduled(env){
   if(!env?.DB)return {skipped:'db'};
   if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
   await ensureMultiChannelTables(env);
-  const channels=await env.DB.prepare("SELECT * FROM telegram_channels WHERE (automation_enabled=1 OR ?=1) AND (telegram_enabled=1 OR ?=1) AND channel_registered=1 ORDER BY id LIMIT 30").bind(env.MASTER_SCHEDULE_ENABLED===true?1:0,env.MASTER_SCHEDULE_ENABLED===true?1:0).all();
+  const channels=await env.DB.prepare("SELECT * FROM telegram_channels WHERE automation_enabled=1 AND telegram_enabled=1 AND channel_registered=1 ORDER BY id LIMIT 30").all();
   const results=[];
   for(const c of channels.results){
     const now=new Date(),day=localTimeParts(now).day;
@@ -382,12 +382,12 @@ export async function runMultiChannelScheduled(env){
       env.DB.prepare("SELECT COUNT(*) AS total FROM channel_offers WHERE channel_id=? AND status='published' AND published_day=?").bind(c.id,day).first(),
       env.DB.prepare("SELECT MAX(published_at) AS time FROM channel_offers WHERE channel_id=? AND status='published'").bind(c.id).first()
     ]);
-    if(!shouldSend(env.MASTER_SCHEDULE_ENABLED===true?{...c,automation_enabled:1,telegram_enabled:1}:c,now,counts?.total||0,latest?.time?latest.time*1000:null))continue;
+    if(!shouldSend(c,now,counts?.total||0,latest?.time?latest.time*1000:null))continue;
     const offer=await env.DB.prepare("SELECT id FROM channel_offers WHERE channel_id=? AND status='ready' AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at,id LIMIT 1").bind(c.id,c.category,c.category).first();
     if(!offer)continue;
     const stamp=epoch();
-    const slot=await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND (automation_enabled=1 OR ?=1) AND (telegram_enabled=1 OR ?=1) AND channel_registered=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
-      .bind(stamp,c.id,env.MASTER_SCHEDULE_ENABLED===true?1:0,env.MASTER_SCHEDULE_ENABLED===true?1:0,stamp-c.interval_minutes*60).run();
+    const slot=await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND automation_enabled=1 AND telegram_enabled=1 AND channel_registered=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
+      .bind(stamp,c.id,stamp-c.interval_minutes*60).run();
     if(slot.meta?.changes!==1)continue;
     try{
       results.push({channel_id:c.id,...await publishChannelOffer(env,c.id,offer.id)});
