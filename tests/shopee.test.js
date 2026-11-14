@@ -138,7 +138,7 @@ test('destinos Shopee Telegram e WhatsApp têm IDs próprios e configuração in
    assert.deepEqual(dest.map(x=>x.name),['Canal Infantil Shopee','Shopee Feminino','Grupo Infantil Shopee']);
    assert.equal(dest[0].base_enabled,false);
    assert.equal(dest[2].instance_name,SHARED);
-   assert.equal(DB.prepare('SELECT COUNT(*) total FROM telegram_channels').first().total,0);
+   assert.equal(DB.prepare("SELECT COUNT(*) total FROM sqlite_master WHERE type='table' AND name='telegram_channels'").first().total,0);
    assert.equal(DB.prepare("SELECT COUNT(*) total FROM sqlite_master WHERE type='table' AND name='whatsapp_groups'").first().total,0);
    assert.equal(DB.prepare("SELECT COUNT(*) total FROM sqlite_master WHERE type='table' AND name='whatsapp_settings'").first().total,0);
  }finally{DB.close();}
