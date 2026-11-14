@@ -17,6 +17,7 @@ const epoch=()=>Math.floor(Date.now()/1000);
 const GROUP=/^\d{6,30}(?:-\d{6,20})?@g\.us$/;
 const INSTANCE=/^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/;
 const HOSTS=new Set(['www.mercadolivre.com.br','mercadolivre.com.br','produto.mercadolivre.com.br']);
+const SHORT_HOSTS=new Set(['meli.la','melila.me']); // melila.me é de terceiros; nunca publicar como link de afiliado próprio.
 export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
@@ -46,7 +47,7 @@ export function parseMonitorEvent(event){
 function urlCandidate(input){
  let u;try{u=new URL(input);}catch{return null;}
  if(u.protocol!=='https:'||u.username||u.password||u.port)return null;
- if(u.hostname.toLowerCase()==='meli.la'&&/^\/[A-Za-z0-9_-]{5,50}\/?$/.test(u.pathname)){
+ if(SHORT_HOSTS.has(u.hostname.toLowerCase())&&/^\/[A-Za-z0-9_-]{5,50}\/?$/.test(u.pathname)){
    u.search='';u.hash='';return {kind:'short',url:u.href};
  }
  if(!HOSTS.has(u.hostname.toLowerCase()))return null;
@@ -213,19 +214,55 @@ export async function prepareMonitorBatch(env,body){
  if(changes.some(x=>x.meta?.changes!==1))throw fail('Um produto mudou durante a criação do lote. Revise os lotes salvos.',409);
  return batch;
 }
-async function redirectSource(value){
+// Páginas de deep link podem mostrar o produto em uma referência HTML, em vez de usar HTTP 302.
+// A página não é confiável: limita o corpo e só admite um único código MLB/MLBU em URL oficial.
+async function productFromShortPage(response){
+ const contentType=(response.headers.get('content-type')||'').toLowerCase();
+ if(!/^text\/html(?:;|$)/.test(contentType))return null;
+ const declared=Number(response.headers.get('content-length')||0);
+ if(declared>32768)return null;
+ const reader=response.body?.getReader();
+ if(!reader)return null;
+ let size=0;const chunks=[];
+ try{
+  for(;;){
+   const part=await reader.read();
+   if(part.done)break;
+   size+=part.value.byteLength;
+   if(size>32768){await reader.cancel();return null;}
+   chunks.push(part.value);
+  }
+ }catch{return null;}
+ const bytes=new Uint8Array(size);
+ let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+ const html=new TextDecoder().decode(bytes).replace(/\\\//g,'/').replace(/&amp;/gi,'&');
+ const links=html.match(/https:\/\/(?:www\.|produto\.)?mercadolivre\.com\.br\/[^\s"'<>\\]{1,700}/gi)||[];
+ const unique=new Map();
+ for(const raw of links.slice(0,30)){
+   const c=urlCandidate(raw);
+   if(c?.kind==='product')unique.set(c.product_id,c);
+   if(unique.size>1)return null;
+ }
+ return unique.size===1?[...unique.values()][0]:null;
+}
+export async function redirectSource(value){
  let current=value;
  for(let hop=0;hop<5;hop++){
    let u;
    try{u=new URL(current);}catch{return null;}
-   if(u.protocol!=='https:'||u.username||u.password||u.port||(!HOSTS.has(u.hostname.toLowerCase())&&u.hostname.toLowerCase()!=='meli.la'))return null;
+   if(u.protocol!=='https:'||u.username||u.password||u.port||(!HOSTS.has(u.hostname.toLowerCase())&&!SHORT_HOSTS.has(u.hostname.toLowerCase())))return null;
    const known=urlCandidate(u.href);
    if(known?.kind==='product')return known;
    const response=await fetch(current,{redirect:'manual',method:'GET',signal:AbortSignal.timeout(4000)});
-   if(![301,302,303,307,308].includes(response.status))return null;
-   const to=response.headers.get('location');
-   if(!to)return null;
-   current=new URL(to,current).href;
+   if([301,302,303,307,308].includes(response.status)){
+     const to=response.headers.get('location');
+     if(!to)return null;
+     current=new URL(to,current).href;
+     continue;
+   }
+   if(response.status===200&&SHORT_HOSTS.has(u.hostname.toLowerCase()))
+     return productFromShortPage(response);
+   return null;
  }
  return null;
 }
