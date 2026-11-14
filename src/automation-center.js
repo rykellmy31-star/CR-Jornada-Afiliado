@@ -136,14 +136,16 @@ export async function updateGroupCategory(env,id,data){
 }
 export async function listCategoryDestinations(env){
   await ensureAutomationCenter(env);
-  // Destinos previamente cadastrados; a autorização é checada novamente no momento do envio.
+  // Alguns módulos antigos só criam suas tabelas quando o administrador os configura.
+  const safeAll=async sql=>{try{return await env.DB.prepare(sql).all();}catch{return {results:[]};}};
+  const safeFirst=async sql=>{try{return await env.DB.prepare(sql).first();}catch{return null;}};
   const raw=await Promise.all([
-    env.DB.prepare('SELECT id,name,telegram_chat_id,telegram_enabled,channel_registered FROM telegram_channels ORDER BY id').all().catch(()=>({results:[]})),
-    env.DB.prepare('SELECT id,name,group_jid,enabled,public_registered FROM whatsapp_groups ORDER BY id').all().catch(()=>({results:[]})),
-    env.DB.prepare('SELECT id,name,telegram_chat_id,enabled,channel_registered FROM shopee_telegram_channels ORDER BY id').all().catch(()=>({results:[]})),
-    env.DB.prepare('SELECT id,name,group_jid,enabled,public_registered FROM shopee_whatsapp_groups ORDER BY id').all().catch(()=>({results:[]})),
+    safeAll('SELECT id,name,telegram_chat_id,telegram_enabled,channel_registered FROM telegram_channels ORDER BY id'),
+    safeAll('SELECT id,name,group_jid,enabled,public_registered FROM whatsapp_groups ORDER BY id'),
+    safeAll('SELECT id,name,telegram_chat_id,enabled,channel_registered FROM shopee_telegram_channels ORDER BY id'),
+    safeAll('SELECT id,name,group_jid,enabled,public_registered FROM shopee_whatsapp_groups ORDER BY id'),
     env.DB.prepare('SELECT telegram_chat_id,telegram_enabled,channel_registered FROM settings WHERE id=1').first(),
-    env.DB.prepare('SELECT group_jid,enabled,public_registered FROM whatsapp_settings WHERE id=1').first().catch(()=>null)
+    safeFirst('SELECT group_jid,enabled,public_registered FROM whatsapp_settings WHERE id=1')
   ]);
   const [tele,wa,st,sw,primaryTelegram,primaryWhatsapp]=raw;
   const destinations=[];
@@ -240,6 +242,8 @@ export async function runCategoryRoutingScheduled(env){
       const routes=await env.DB.prepare('SELECT * FROM affiliate_category_routes WHERE group_category_id=? AND '+(platform==='shopee'?'allow_shopee=1':'allow_mercadolivre=1')+' ORDER BY id LIMIT 40').bind(category.id).all();
       for(const route of routes.results){
         if(out.length>=10)return {results:out,remaining:true};
+        // Nunca redistribui automaticamente uma oferta antiga quando o administrador cria uma rota nova.
+        if((offer.published_at||0)<route.created_at)continue;
         if(await alreadySentByOriginal(env,platform,offer,route))continue;
         const prior=await env.DB.prepare('SELECT status FROM affiliate_category_deliveries WHERE platform=? AND affiliate_url=? AND destination_scope=? AND network=? AND destination_id=?')
           .bind(platform,offer.affiliate_url,route.destination_scope,route.network,route.destination_id).first();
