@@ -755,7 +755,7 @@ async function refreshShopee(){
     $('shopee-whatsapp-destination').classList.toggle('hidden',isTelegram);
     if(isTelegram){
       $('shopee-tele-name').value=base.name;
-      $('shopee-tele-category').value=base.category||'Geral';
+      setCategoryFieldValue('shopee-tele-category',base.category||'Geral');
       $('shopee-tele-chat').value=base.telegram_chat_id||base.handle||'';
       $('shopee-tele-token').value='';
       $('shopee-tele-registered').checked=!!base.base_registered;
@@ -763,7 +763,7 @@ async function refreshShopee(){
       $('shopee-tele-test').disabled=!base.base_enabled;
     }else{
       $('shopee-wa-name').value=base.name;
-      $('shopee-wa-category').value=base.category||'Geral';
+      setCategoryFieldValue('shopee-wa-category',base.category||'Geral');
       $('shopee-wa-instance').textContent='Número Shopee: '+base.instance_name+
         (base.instance_mode==='dedicated'?' (exclusivo deste grupo)':' (compartilhado apenas entre grupos Shopee)');
       $('shopee-wa-registered').checked=!!base.base_registered;
@@ -780,7 +780,7 @@ async function refreshShopee(){
     }
     $('shopee-target-title').textContent=(selectedNetwork==='telegram'?'Canal Telegram: ':'Grupo WhatsApp: ')+base.name;
     $('channel-label').textContent='Destino Shopee: '+base.name;
-    $('shopee-category').value=settings.category||base.category||'Geral';
+    setCategoryFieldValue('shopee-category',settings.category||base.category||'Geral');
     $('shopee-interval').value=String(settings.interval_minutes||60);
     $('shopee-max-daily').value=String(settings.max_daily||12);
     $('shopee-start').value=String(settings.start_hour??8);
@@ -793,7 +793,7 @@ async function refreshShopee(){
       :'⚠ Configure e autorize primeiro este canal/grupo da própria Shopee acima.';
     const offerCategory=$('shopee-offer-category');
     offerCategory.readOnly=(settings.category||'Geral').toLowerCase()!=='geral';
-    offerCategory.value=offerCategory.readOnly?settings.category:'';
+    setCategoryFieldValue(offerCategory,offerCategory.readOnly?settings.category:'Geral');
     const counts=Object.fromEntries(result.counts.map(x=>[x.status,x.total]));
     $('shopee-offers-rows').innerHTML=result.offers.length?result.offers.map(o=>{
       const action=o.status==='ready'
@@ -943,10 +943,10 @@ async function refreshWhatsApp(){
     $('wa-registered').checked=!!d.config.public_registered;
     $('wa-enabled').checked=!!d.config.enabled;
     $('wa-interval').value=String(d.schedule?.interval_minutes||60);
-    $('wa-category').value=d.category||'Geral';
+    setCategoryFieldValue('wa-category',d.category||'Geral');
     const directCategory=$('wa-direct-category');
     if(d.category&&d.category.toLowerCase()!=='geral'){
-      directCategory.value=d.category;
+      setCategoryFieldValue(directCategory,d.category);
       directCategory.readOnly=true;
     }else directCategory.readOnly=false;
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
@@ -993,7 +993,7 @@ async function refreshManagedWhatsApp(){
     const g=result2.group;
     $('wa-multi-instance').textContent=(g.instance_mode==='shared'?'Número Evolution principal: ':'Número exclusivo: ')+g.instance_name;
     $('wa-multi-name').value=g.name;
-    $('wa-multi-category').value=g.category;
+    setCategoryFieldValue('wa-multi-category',g.category);
     $('wa-multi-interval').value=String(g.interval_minutes);
     $('wa-multi-daily').value=String(g.max_daily);
     $('wa-multi-start').value=String(g.start_hour);
@@ -1009,7 +1009,7 @@ async function refreshManagedWhatsApp(){
     groupSelect.value=g.group_jid||'';
     await loadAdditionalGroupNames(currentWaGroupId);
     const cat=$('wa-multi-offer-category');
-    cat.value=g.category==='Geral'?'':g.category;
+    setCategoryFieldValue(cat,g.category||'Geral');
     cat.readOnly=g.category!=='Geral';
     $('wa-multi-test').disabled=!g.public_registered;
     const coupons=$('wa-multi-coupon-offer');
@@ -1062,21 +1062,21 @@ async function refresh(){
     if(isExtra)$('offer-delivery-mode').value='telegram';
 
     $('channel-primary-category').classList.toggle('hidden',isExtra);
-    if(!isExtra)$('primary-channel-category').value=s.category||'Geral';
+    if(!isExtra)setCategoryFieldValue('primary-channel-category',s.category||'Geral');
     if(isExtra){
       $('channel-name').value=s.name||'';
-      $('channel-category').value=s.category||'Geral';
+      setCategoryFieldValue('channel-category',s.category||'Geral');
       $('channel-bot-mode').value=s.bot_mode||'shared';
       $('channel-bot-token-wrap').classList.toggle('hidden',s.bot_mode!=='dedicated');
       $('channel-bot-token').value='';
     }
     const categoryInput=$('offer-form').elements.category;
     if(s.category&&s.category.toLowerCase()!=='geral'){
-      categoryInput.value=s.category;
+      setCategoryFieldValue(categoryInput,s.category);
       categoryInput.readOnly=true;
     }else{
       categoryInput.readOnly=false;
-      if(categoryInput.value&&isExtra)categoryInput.value='';
+      if(categoryInput.value&&isExtra)setCategoryFieldValue(categoryInput,'Geral');
     }
     $('channel-label').textContent='Destino Telegram: '+(s.telegram_chat_id||'não configurado');
     for(const k of ['channel_registered','telegram_enabled','automation_enabled']) $(k).checked=!!s[k];
