@@ -18,7 +18,7 @@ test('Automação tem regras distintas de visibilidade para cada plataforma',()=
   assert.match(CSS,/data-view="shopee-automation"/);
   assert.match(CSS,/data-view="affiliate"/);
   assert.match(CSS,/shopee-queue-heading/);
-  assert.match(CLIENT_JS,/selectedTab=['"]automation['"]/);
+  assert.match(CLIENT_JS,/selectedTab===['"]automation['"]/);
   assert.match(CLIENT_JS,/automation-tab/);
   assert.match(CLIENT_JS,/automation-network-select/);
   assert.match(CLIENT_JS,/auto-wa-form/);
