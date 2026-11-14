@@ -268,8 +268,10 @@ async function routePolicy(env,r){
       interval=item?.interval_minutes||60;limit=item?.max_daily||12;
     }
   }else{
-    const item=await env.DB.prepare('SELECT interval_minutes,max_daily FROM shopee_targets WHERE network=? AND target_id=?').bind(r.network,r.destination_id).first();
-    interval=item?.interval_minutes||60;limit=item?.max_daily||12;
+    // A pausa individual da Shopee também vale nas redistribuições por categoria.
+    const item=await env.DB.prepare('SELECT interval_minutes,max_daily,enabled,permission_confirmed FROM shopee_targets WHERE network=? AND target_id=?').bind(r.network,r.destination_id).first();
+    if(!item?.enabled||!item?.permission_confirmed)return null;
+    interval=item.interval_minutes||60;limit=item.max_daily||12;
   }
   return {interval:Math.max(1,Math.min(1440,interval)),limit:Math.max(1,Math.min(48,limit))};
 }
