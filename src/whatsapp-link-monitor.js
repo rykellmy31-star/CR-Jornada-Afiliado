@@ -12,7 +12,8 @@ const SCHEMA=[
  "CREATE INDEX IF NOT EXISTS idx_ml_monitor_links_queue ON ml_monitor_links(status,category,id)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_shortlinks(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',short_url TEXT NOT NULL UNIQUE,message_hint TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','review','resolved')),tries INTEGER NOT NULL DEFAULT 0,reason TEXT,created_at INTEGER NOT NULL)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),events_received INTEGER NOT NULL DEFAULT 0,events_while_off INTEGER NOT NULL DEFAULT 0,messages_with_links INTEGER NOT NULL DEFAULT 0,authorized_messages INTEGER NOT NULL DEFAULT 0,links_recognized INTEGER NOT NULL DEFAULT 0,last_event_at INTEGER,last_authorized_at INTEGER,last_link_at INTEGER)",
- "INSERT OR IGNORE INTO ml_monitor_diagnostics(id) VALUES(1)"
+ "INSERT OR IGNORE INTO ml_monitor_diagnostics(id) VALUES(1)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_url_observations(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),domain TEXT NOT NULL,reason TEXT NOT NULL,message_format TEXT NOT NULL,created_at INTEGER NOT NULL)"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -23,26 +24,52 @@ const SHORT_HOSTS=new Set(['meli.la','melila.me']); // melila.me é de terceiros
 export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
- return [...new Set((text.slice(0,8000).match(/https:\/\/[^\s<>"'()[\]{}]+/gi)||[])
-  .map(s=>s.replace(/[.,;!?]+$/g,'')))].slice(0,30);
+ // Links de legendas encaminhadas podem conter caracteres invisíveis ou
+ // quebra de linha logo depois da barra do encurtador.
+ const normalized=text.slice(0,8000)
+  .replace(/[\u200b-\u200d\u2060\ufeff]/g,'')
+  .replace(/(https:\/\/(?:melila\.me|meli\.la)\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,50}(?:\b|\/|[?#]|$))/gi,'$1');
+ return [...new Set((normalized.match(/https:\/\/[^\s<>"'()[\]{}]+/gi)||[])
+  .map(url=>url.replace(/[.,;!?]+$/g,'')))].slice(0,30);
 }
-export function parseMonitorEvent(event){
+function extractMessageText(message){
+ if(!message||typeof message!=='object')return {text:'',format:'outro'};
+ let current=message,format='outro';
+ // Formatos Evolution/Baileys: mensagens encaminhadas, efêmeras,
+ // visualização única e documentos com legendas.
+ for(let depth=0;depth<6;depth++){
+  const wrappers=['ephemeralMessage','viewOnceMessage','viewOnceMessageV2',
+   'viewOnceMessageV2Extension','documentWithCaptionMessage','editedMessage'];
+  const wrapping=wrappers.find(k=>current?.[k]?.message);
+  if(!wrapping)break;
+  current=current[wrapping].message;
+ }
+ const fields=[
+  ['conversation',current.conversation],
+  ['extendedTextMessage',current.extendedTextMessage?.text],
+  ['imageMessage',current.imageMessage?.caption],
+  ['videoMessage',current.videoMessage?.caption],
+  ['documentMessage',current.documentMessage?.caption],
+  ['buttonsResponseMessage',current.buttonsResponseMessage?.selectedDisplayText],
+  ['interactiveMessage',current.interactiveMessage?.body?.text]
+ ];
+ const matches=fields.filter(([,value])=>typeof value==='string'&&value);
+ if(matches.length)format=matches[0][0];
+ return {text:matches.map(([,value])=>value).join('\n').slice(0,8000),format};
+}
+export function parseMonitorEvent(event,{includeNoLinks=false}={}){
  if(!event||typeof event!=='object'||!['messages.upsert','MESSAGES_UPSERT','messages-upsert'].includes(event.event))return [];
  const instance=typeof event.instance==='string'?event.instance:'';
  if(!INSTANCE.test(instance))return [];
  const input=Array.isArray(event.data)?event.data:Array.isArray(event.data?.messages)?event.data.messages:[event.data];
  const result=[];
  for(const entry of input.slice(0,25)){
-   if(!entry||entry.key?.fromMe!==false||typeof entry.key.remoteJid!=='string'||!GROUP.test(entry.key.remoteJid))continue;
-   const msg=entry.message?.ephemeralMessage?.message||entry.message?.viewOnceMessage?.message||entry.message||{};
-   const text=[msg.conversation,msg.extendedTextMessage?.text,msg.imageMessage?.caption,
-     msg.videoMessage?.caption,msg.documentMessage?.caption,msg.buttonsResponseMessage?.selectedDisplayText]
-     .filter(v=>typeof v==='string'&&v).join('\n').slice(0,8000);
-   const urls=extractUrls(text);
-   if(!urls.length)continue;
-   // Guarde apenas a descrição curta da oferta, sem conteúdo de conversas ou links de rastreamento.
-   const hint=urls.length===1?text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180):'';
-   result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,urls});
+  if(!entry||entry.key?.fromMe!==false||typeof entry.key.remoteJid!=='string'||!GROUP.test(entry.key.remoteJid))continue;
+  const {text,format}=extractMessageText(entry.message||{});
+  const urls=extractUrls(text);
+  if(!urls.length&&!includeNoLinks)continue;
+  const hint=text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180);
+  result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,urls,format});
  }
  return result;
 }
@@ -72,7 +99,7 @@ function productTitle(url,hint,id){
 }
 export async function monitorState(env){
  await ensureMonitor(env);
- const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
@@ -81,7 +108,8 @@ export async function monitorState(env){
   env.DB.prepare("SELECT COUNT(l.id) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id").first(),
   env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all(),
   env.DB.prepare("SELECT events_received,events_while_off,messages_with_links,authorized_messages,links_recognized,last_event_at,last_authorized_at,last_link_at FROM ml_monitor_diagnostics WHERE id=1").first(),
-  env.DB.prepare("SELECT s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status IN ('pending','review') ORDER BY s.id DESC LIMIT 8").all()
+  env.DB.prepare("SELECT s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status IN ('pending','review') ORDER BY s.id DESC LIMIT 8").all(),
+  env.DB.prepare("SELECT o.domain,o.reason,o.message_format,o.created_at,g.group_name FROM ml_monitor_url_observations o JOIN ml_monitor_groups g ON g.id=o.group_id ORDER BY o.id DESC LIMIT 12").all()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -94,6 +122,7 @@ export async function monitorState(env){
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
    recent_shortlinks:latestShortlinks.results,
+   recent_domains:observations.results,
    groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||normalizedCounts(null)})),
    links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),
    shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
@@ -168,17 +197,26 @@ export async function ingestMonitorEvent(env,payload){
    await env.DB.prepare("UPDATE ml_monitor_diagnostics SET events_while_off=events_while_off+1 WHERE id=1").run();
    return {ok:true,ignored:'monitor_off'};
  }
- const messages=parseMonitorEvent(payload);
+ const messages=parseMonitorEvent(payload,{includeNoLinks:true});
  if(!messages.length)return {ok:true,accepted:0};
  const groupList=(await env.DB.prepare('SELECT id,instance_name,group_jid FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').all()).results;
- let captured=0,pending=0,authorized=0,recognized=0;
+ let captured=0,pending=0,authorized=0,recognized=0,withLinks=0;
+ const observations=[];
  for(const msg of messages){
    const group=groupList.find(x=>x.instance_name===msg.instance&&x.group_jid===msg.group_jid);
    if(!group)continue;
    authorized++;
+   if(msg.urls.length)withLinks++;
+   if(!msg.urls.length)observations.push([group.id,'—','nenhum_link_na_legenda',msg.format,receivedAt]);
    const entry={...msg,group_id:group.id};
    for(const raw of msg.urls){
      const candidate=urlCandidate(raw);
+     let domain='inválido';
+     try{domain=new URL(raw).hostname.toLowerCase().slice(0,85);}catch{}
+     const reason=candidate?(candidate.kind==='short'?'encurtador_aceito':'produto_direto'):
+      SHORT_HOSTS.has(domain)?'encurtador_formato_invalido':
+      HOSTS.has(domain)?'produto_sem_codigo_valido':'dominio_nao_permitido';
+     observations.push([group.id,domain,reason,msg.format,receivedAt]);
      if(!candidate)continue;
      recognized++;
      if(candidate.kind==='short'){
@@ -193,7 +231,13 @@ export async function ingestMonitorEvent(env,payload){
    }
  }
  await env.DB.prepare("UPDATE ml_monitor_diagnostics SET messages_with_links=messages_with_links+?,authorized_messages=authorized_messages+?,links_recognized=links_recognized+?,last_authorized_at=CASE WHEN ?>0 THEN ? ELSE last_authorized_at END,last_link_at=CASE WHEN ?>0 THEN ? ELSE last_link_at END WHERE id=1")
-   .bind(messages.length,authorized,recognized,authorized,receivedAt,recognized,receivedAt).run();
+   .bind(messages.filter(m=>m.urls.length>0).length,authorized,recognized,authorized,receivedAt,recognized,receivedAt).run();
+ if(observations.length){
+   const inserts=observations.slice(0,40).map(row=>env.DB.prepare("INSERT INTO ml_monitor_url_observations(group_id,domain,reason,message_format,created_at) VALUES(?,?,?,?,?)").bind(...row));
+   await env.DB.batch(inserts);
+   // Telemetria pequena e temporária: nenhum texto de mensagem, URL ou contato armazenado.
+   await env.DB.prepare("DELETE FROM ml_monitor_url_observations WHERE id NOT IN (SELECT id FROM ml_monitor_url_observations ORDER BY id DESC LIMIT 120)").run();
+ }
  return {ok:true,captured,pending};
 }
 export async function updateMonitorLinkCategory(env,id,body){

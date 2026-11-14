@@ -343,3 +343,75 @@ test('diagnóstico não registra webhook com token inválido e expõe razões de
   assert.equal(unauth.status,401);
  }finally{DB.close();}
 });
+
+
+test('oferta com imagem/legenda, dois links e quebra de linha é capturada sem confundir convite do grupo',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo BRUXO',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const caption='ACHADINHOS DA CAAH\nKit De Prato Raso Em Porcelana Arbo 6 Peças\nDE 108 | POR 88,08\n'+
+   'CUPOM: DESCONTAOMELI\n🔗 https://melila.me/\nWMkKW9qiqmsu\n'+
+   'Participe do Grupo: https://chat.whatsapp.com/ABCD1234567890';
+  const payload={event:'messages.upsert',instance:INSTANCE,data:{key:{remoteJid:GROUP,fromMe:false,id:'IMAGE44'},
+    message:{imageMessage:{caption}}}};
+  const parsed=parseMonitorEvent(payload);
+  assert.equal(parsed.length,1);
+  assert.equal(parsed[0].format,'imageMessage');
+  assert.equal(parsed[0].urls.length,2);
+  assert.equal(parsed[0].urls[0],'https://melila.me/WMkKW9qiqmsu');
+  assert.equal(parsed[0].urls[1],'https://chat.whatsapp.com/ABCD1234567890');
+  assert.match(parsed[0].hint,/Kit De Prato Raso/);
+  const result=await ingestMonitorEvent(env,payload);
+  assert.equal(result.pending,1);
+  const state=await monitorState(env);
+  assert.equal(state.diagnostics.links_recognized,1);
+  assert.equal(state.diagnostics.authorized_messages,1);
+  assert.equal(state.shortlinks.find(x=>x.status==='pending').total,1);
+  assert.deepEqual(state.recent_domains.slice(0,2).map(x=>[x.domain,x.reason]),[
+   ['chat.whatsapp.com','dominio_nao_permitido'],['melila.me','encurtador_aceito']
+  ]);
+  assert.ok(state.recent_domains.every(x=>!JSON.stringify(x).includes('ABCD1234567890')));
+  assert.equal(DB.prepare('SELECT short_url FROM ml_monitor_shortlinks').first().short_url,'https://melila.me/WMkKW9qiqmsu');
+ }finally{DB.close();}
+});
+
+test('legenda de imagem de visualização única V2 e zero width reconhecem melila.me',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Perfumes',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const url='https://melila.me/RO2Z3oktIctt';
+  const payload={event:'messages.upsert',instance:INSTANCE,data:{key:{remoteJid:GROUP,fromMe:false,id:'IMAGE45'},
+    message:{viewOnceMessageV2:{message:{imageMessage:{caption:'Perfume Galactic Men - R$ 109. Compre aqui: https://melila.me/\u200bRO2Z3oktIctt'}}}}}};
+  const result=await ingestMonitorEvent(env,payload);
+  assert.equal(result.pending,1);
+  assert.equal(DB.prepare('SELECT short_url FROM ml_monitor_shortlinks').first().short_url,url);
+  const state=await monitorState(env);
+  assert.equal(state.recent_domains[0].message_format,'imageMessage');
+  assert.equal(state.recent_domains[0].reason,'encurtador_aceito');
+  assert.equal(state.diagnostics.links_recognized,1);
+ }finally{DB.close();}
+});
+
+test('mensagem do grupo sem URLs produz diagnóstico sem guardar mensagens pessoais',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo cadastrado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const secretText='Oferta nova: telefone secreto 5511999999999';
+  const payload={event:'messages.upsert',instance:INSTANCE,data:{
+    key:{remoteJid:GROUP,fromMe:false,id:'MESSAGE46'},message:{imageMessage:{caption:secretText}}}};
+  assert.deepEqual(parseMonitorEvent(payload),[]);
+  await ingestMonitorEvent(env,payload);
+  const state=await monitorState(env);
+  assert.equal(state.diagnostics.messages_with_links,0);
+  assert.equal(state.diagnostics.authorized_messages,1);
+  assert.equal(state.diagnostics.links_recognized,0);
+  assert.equal(state.recent_domains[0].reason,'nenhum_link_na_legenda');
+  assert.equal(state.recent_domains[0].message_format,'imageMessage');
+  assert.equal(state.recent_domains[0].domain,'—');
+  assert.ok(!JSON.stringify(state).includes('5511999999999'));
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+ }finally{DB.close();}
+});
