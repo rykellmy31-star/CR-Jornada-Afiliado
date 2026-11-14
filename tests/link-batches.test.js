@@ -111,7 +111,7 @@ test('interface apresenta as quatro etapas sem misturar nomes nos links copiados
  assert.match(html,/Etapa 3 • Cole os links convertidos/);
  assert.match(html,/Etapa 4 • Colocar cada link na categoria e na fila correta/);
  assert.match(html,/id="ml-batch-links-only" readonly/);
- assert.match(html,/id="ml-batch-final-step" class="ml-batch-phase hidden"/);
+ assert.match(html,/class="ml-batch-phase hidden" id="ml-batch-final-step"/);
  assert.match(CLIENT_JS,/\$\('ml-batch-links-only'\)\.value=mlBatchUrlList\(\)/);
  assert.match(CLIENT_JS,/const text=\$\('ml-batch-links-only'\)\.value/);
  assert.match(CLIENT_JS,/\$\('ml-batch-final-step'\)\.classList\.remove\('hidden'\)/);
