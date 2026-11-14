@@ -82,3 +82,58 @@ test('HEAD não suportado: confirma imagem por GET parcial com Content-Range',as
   assert.equal(result,'https://http2.mlstatic.com/D_NQ_NP_333-MLB444-F.jpg');
   assert.ok(seen.some(c=>c.method==='GET'&&c.range==='bytes=0-1023'));
 });
+
+
+test('resolve meli.la passando por /sec/ e domínio oficial de produto, com foto JSON-LD', async () => {
+  assert.equal(trustedProductPage('https://mercadolivre.com/sec/exemplo'), true);
+  assert.equal(trustedProductPage('https://produto.mercadolivre.com.br/MLB-123'), true);
+  assert.equal(trustedProductPage('https://produto.mercadolivre.com.br.evil.test/MLB-123'), false);
+  const short = 'https://meli.la/2zqWmTq';
+  const bridge = 'https://mercadolivre.com/sec/exemplo';
+  const detail = 'https://produto.mercadolivre.com.br/MLB-123456';
+  const photo = 'https://http2.mlstatic.com/D_NQ_NP_777-MLB123-P.webp';
+  const calls = [];
+  const result = await findProductImage(short, async (url, opts={}) => {
+    calls.push(String(url));
+    if (url === short) return new Response(null, {status:302, headers:{location:bridge}});
+    if (url === bridge) return new Response(null, {status:302, headers:{location:detail}});
+    if (url === detail) return new Response(
+      '<html><script type="application/ld+json">'+JSON.stringify({
+        '@context':'https://schema.org', '@type':'Product', name:'Lavadora WAP',
+        image:[photo]
+      })+'</script></html>',
+      {headers:{'content-type':'text/html'}}
+    );
+    if (url === 'https://http2.mlstatic.com/D_NQ_NP_777-MLB123-F.jpg' && opts.method === 'HEAD')
+      return new Response(null, {status:200,headers:{'content-type':'image/jpeg','content-length':'500000'}});
+    throw new Error('URL inesperada: '+url);
+  });
+  assert.equal(result,'https://http2.mlstatic.com/D_NQ_NP_777-MLB123-F.jpg');
+  assert.deepEqual(calls.slice(0,3),[short,bridge,detail]);
+});
+
+test('foto em JSON-LD não aceita domínio externo nem imagem de conteúdo não Produto', () => {
+  const invalid = '<script type="application/ld+json">'+JSON.stringify({
+    '@type':'Product',image:'https://example.com/imagem.jpg'
+  })+'</script>';
+  const other = '<script type="application/ld+json">'+JSON.stringify({
+    '@type':'WebPage',image:'https://http2.mlstatic.com/D_NQ_NP_777-MLB123-F.jpg'
+  })+'</script>';
+  assert.equal(extractProductImage(invalid), null);
+  assert.equal(extractProductImage(other), null);
+});
+
+test('CDN que nega HEAD mas aceita GET parcial ainda fornece foto válida', async () => {
+  const photo = 'https://http2.mlstatic.com/D_NQ_NP_555-MLB123-P.webp';
+  const result = await findProductImage('https://meli.la/2bsHW5y', async (url,opts={}) => {
+    if (url === 'https://meli.la/2bsHW5y')
+      return new Response('<meta property="og:image" content="'+photo+'">',{headers:{'content-type':'text/html'}});
+    if (String(url).endsWith('-F.jpg') && opts.method === 'HEAD') return new Response(null,{status:403});
+    if (String(url).endsWith('-F.jpg') && opts.method === 'GET')
+      return new Response(new Uint8Array([0xff,0xd8]),{status:206,headers:{
+        'content-type':'image/jpeg','content-range':'bytes 0-1/650000'
+      }});
+    return new Response(null,{status:404});
+  });
+  assert.equal(result,'https://http2.mlstatic.com/D_NQ_NP_555-MLB123-F.jpg');
+});
