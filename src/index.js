@@ -13,7 +13,7 @@ import {
  requeueManagedWhatsAppOffer,managedWhatsAppConnection,listManagedWhatsAppGroupOptions,
  testManagedWhatsAppGroup,publishManagedWhatsAppOffer,runManagedWhatsAppScheduled
 } from './whatsapp-groups.js';
-import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
+import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,saveShopeeCoupon,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
 import {getShopeeAccount,saveShopeeProfile,saveShopeeCredentials,clearShopeeCredentials,verifyShopeeApi} from './shopee-account.js';
 import {
  createShopeeOwnDestination,saveShopeeOwnTelegram,saveShopeeOwnWhatsApp,
@@ -186,7 +186,8 @@ async function runScheduled(env) {
     env.DB.prepare("SELECT MAX(published_at) AS published_at FROM offers WHERE status='published'").first()
   ]);
   if(env.MASTER_SCHEDULE_ENABLED===false)return;
-  const effective=env.MASTER_SCHEDULE_ENABLED===true?{...settings,automation_enabled:1,telegram_enabled:settings.channel_registered&&!!env.TELEGRAM_BOT_TOKEN?1:settings.telegram_enabled}:settings;
+  // O controle geral não ignora a pausa ou a autorização individual do destino.
+  const effective=settings;
   if (!shouldSend(effective, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
   if (!env.TELEGRAM_BOT_TOKEN) return;
   await ensureCouponTable(env);
@@ -282,6 +283,8 @@ async function router(request, env) {
     await upsertProductCategory(env,'shopee',payload);
     return json(result,201);
   }
+  if(u.pathname==='/api/shopee/coupons'&&method==='POST')
+    return json(await saveShopeeCoupon(env,await getBody(request)),201);
   const shopeeAction=u.pathname.match(/^\/api\/shopee\/offers\/(\d+)\/(publish|requeue)$/);
   if(shopeeAction&&method==='POST'){
     const data=await getBody(request);

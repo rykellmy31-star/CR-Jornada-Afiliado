@@ -7,7 +7,7 @@ import { ensureWhatsAppTables } from '../src/whatsapp.js';
 import { ensureShopeeTables } from '../src/shopee.js';
 import {
   ensureAutomationCenter,masterState,setMasterState,listCategories,createGroupCategory,STARTER_GROUP_CATEGORIES,
-  saveCategoryRoutes,upsertProductCategory,classifyProduct,runCategoryRoutingScheduled
+  saveCategoryRoutes,listCategoryDestinations,upsertProductCategory,classifyProduct,runCategoryRoutingScheduled
 } from '../src/automation-center.js';
 import { renderPage,CLIENT_JS } from '../src/ui.js';
 
@@ -207,4 +207,21 @@ test('distribuição real simulada permite ML e Shopee no mesmo grupo sem duplic
     assert.equal(third.results.length,0);
     assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM affiliate_category_deliveries WHERE status='sent'").first().total,2);
   }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+test('rotas por categoria respeitam a pausa individual do Telegram mesmo com robô geral ligado',async()=>{
+  const {env,DB}=setup();
+  try{
+    await ensureAutomationCenter(env);
+    DB.prepare("UPDATE settings SET telegram_chat_id='@canalativo',channel_registered=1,telegram_enabled=1,automation_enabled=0 WHERE id=1").run();
+    let destinations=await listCategoryDestinations(env);
+    assert.equal(destinations.find(x=>x.scope==='mercadolivre'&&x.network==='telegram'&&x.id===1).active,false,
+      'Um canal pausado nunca pode ser reativado pelo botão geral ou por rotas de categoria');
+    DB.prepare("UPDATE settings SET automation_enabled=1 WHERE id=1").run();
+    destinations=await listCategoryDestinations(env);
+    assert.equal(destinations.find(x=>x.scope==='mercadolivre'&&x.network==='telegram'&&x.id===1).active,true);
+    DB.prepare("UPDATE settings SET telegram_enabled=0 WHERE id=1").run();
+    destinations=await listCategoryDestinations(env);
+    assert.equal(destinations.find(x=>x.scope==='mercadolivre'&&x.network==='telegram'&&x.id===1).active,false);
+  }finally{DB.close();}
 });

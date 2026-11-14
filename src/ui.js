@@ -27,9 +27,13 @@ export function renderPage() {
           <div class="platform-network-tabs" role="group" aria-label="Escolher canal de divulgação">
             <button type="button" class="platform-network-button active" data-network="telegram">✈️ Telegram</button>
             <button type="button" class="platform-network-button" data-network="whatsapp">🟢 WhatsApp</button>
+            <button type="button" class="platform-network-button" id="coupons-tab" data-coupons-tab="true">🎟️ Cupons</button>
           </div>
         </div>
-        <label class="platform-target-label">Selecionar canal ou grupo para configurar
+        <label class="platform-target-label hidden" id="coupon-network-wrap">Modalidade do destino para vincular cupons
+          <select id="coupon-target-network"><option value="telegram">Telegram</option><option value="whatsapp">WhatsApp</option></select>
+        </label>
+        <label class="platform-target-label" id="platform-target-label">Selecionar canal ou grupo para configurar
           <select id="platform-target-select" aria-label="Canal ou grupo da plataforma"></select>
         </label>
       </section>
@@ -125,8 +129,9 @@ export function renderPage() {
       </section>
       <div class="metric-grid"><div class="metric card"><span>Prontas para publicar</span><strong id="count-ready">0</strong></div><div class="metric card"><span>Publicadas</span><strong id="count-published">0</strong></div><div class="metric card"><span>Em revisão</span><strong id="count-needs_review">0</strong></div><div class="metric card"><span>Total cadastrado</span><strong id="count-total">0</strong></div></div>
       <div class="main-grid">
-        <section class="card settings"><div class="section-header"><div><h2>Automação</h2><p>O envio automático começa desligado por segurança.</p></div><div class="symbol">⚙</div></div>
+        <section class="card settings"><div class="section-header"><div><h2>Configurações do canal Telegram</h2><p>Cadastro e permissão ficam separados dos intervalos e da pausa da automação.</p></div><div class="symbol">⚙</div></div>
           <form id="settings-form">
+            <div class="settings-subsection destination-section"><h3>📣 Cadastro e permissões do destino</h3>
             <div id="channel-primary-category">
               <label>Categoria permitida neste canal
                 <select data-category-selector id="primary-channel-category" data-desired-category="Geral"><option value="Geral">Geral</option></select>
@@ -154,9 +159,12 @@ export function renderPage() {
             <p class="hint">Cole o link público do canal. O bot selecionado deve ser administrador com permissão para publicar. Ao trocar de destino, a automação será pausada até nova confirmação.</p>
             <label class="check-row"><input type="checkbox" id="channel_registered"><span><b>Canal registrado e permitido</b><small>Confirmo que este canal público está cadastrado na Central de Afiliados e atende às regras de divulgação.</small></span></label>
             <label class="check-row"><input type="checkbox" id="telegram_enabled"><span><b>Habilitar publicação no Telegram</b><small>Exige token do BotFather configurado como segredo.</small></span></label>
-            <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Iniciar automação</b><small>Usará apenas os links oficiais previamente cadastrados.</small></span></label>
+            </div>
+            <div class="settings-subsection automation-section"><h3>⚙️ Automação</h3>
+            <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Publicações automáticas neste canal (ativar ou pausar)</b><small>O botão Ligar/Desligar Robô não cancela uma pausa feita aqui.</small></span></label>
             <div class="field-grid"><label>Intervalo entre publicações no Telegram (minutos)<input id="interval_minutes" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
             <p class="hint">Digite qualquer intervalo inteiro entre 1 e 1440 minutos. Janela de publicação no horário da Bahia (UTC−3).</p>
+            </div>
             <div class="actions"><button class="primary" type="submit">Salvar configurações</button><button class="outline" type="button" id="test-telegram">Testar Telegram</button></div>
             <p id="token-state" class="hint"></p>
             <p id="telegram-test-feedback" class="feedback" role="status" aria-live="polite"></p>
@@ -310,24 +318,6 @@ export function renderPage() {
             </div>
             <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Link criado pela minha Central de Afiliados</b></span></label>
             <button type="submit" class="primary">Adicionar à fila deste grupo</button>
-          </form>
-          <div class="section-header" style="margin-top:21px"><div><h2>Cupom opcional da oferta</h2></div></div>
-          <form id="wa-multi-coupon-form" class="wa-multi-form">
-            <div class="field-grid">
-              <label>Oferta na fila<select name="offer_id" id="wa-multi-coupon-offer" required></select></label>
-              <label>Tipo<select name="kind" id="wa-multi-coupon-kind"><option value="code">Código</option><option value="activation">Ativação</option></select></label>
-              <label>Código<input name="code" id="wa-multi-coupon-code"></label>
-              <label>Desconto<select name="discount_type"><option value="percent">Porcentagem</option><option value="fixed">Valor fixo (R$)</option></select></label>
-              <label>Valor<input name="discount_value" type="number" min="1" step="1" required></label>
-              <label>Compra mínima (R$)<input name="min_cart" type="number" min="0" step="0.01"></label>
-              <label>Teto desconto (R$)<input name="max_discount" type="number" min="0.01" step="0.01"></label>
-              <label>Início<input name="start_day" type="date" required></label>
-              <label>Fim<input name="end_day" type="date" required></label>
-              <label>Fonte oficial do cupom<input name="source_url" type="url" required placeholder="https://www.mercadolivre.com.br/..."></label>
-            </div>
-            <label>Restrições<input name="notes" maxlength="220"></label>
-            <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Conferi a origem e as condições do cupom</b></span></label>
-            <button class="outline" type="submit">Salvar cupom</button>
           </form>
           <div class="section-header" style="margin-top:21px"><div><h2>Fila e histórico do grupo</h2></div></div>
           <div class="table-scroll"><table><thead><tr><th>Oferta</th><th>Estado</th><th>Ação</th></tr></thead><tbody id="wa-multi-offers"><tr><td colspan="3">Sem ofertas.</td></tr></tbody></table></div>
@@ -487,8 +477,52 @@ export function renderPage() {
         <div id="shopee-logs" class="logs"></div>
         </div>
       </section>
+      <section class="card coupon-panel hidden" id="shopee-coupon-panel">
+        <div class="section-header"><div><h2>🎟️ Cupons • Shopee</h2><p>Cadastro independente dos cupons do Mercado Livre. Selecione o canal ou grupo Shopee acima.</p></div></div>
+        <p class="hint">Cupons informados manualmente: confira valores, elegibilidade e validade na fonte oficial. A busca automática aguarda liberação da API.</p>
+        <form id="shopee-coupon-form">
+          <div class="field-grid">
+            <label>Oferta Shopee ainda na fila<select name="offer_id" id="shopee-coupon-offer" required><option value="">Selecione uma oferta Shopee...</option></select></label>
+            <label>Tipo de cupom<select name="kind" id="shopee-coupon-kind"><option value="code">Código do cupom</option><option value="activation">Cupom para ativar</option></select></label>
+            <label>Código<input name="code" id="shopee-coupon-code" maxlength="40" placeholder="Ex.: SHOPEE10"></label>
+            <label>Desconto<select name="discount_type" id="shopee-coupon-discount-type"><option value="percent">Porcentagem (%)</option><option value="fixed">Valor fixo (R$)</option></select></label>
+            <label>Valor do desconto<input name="discount_value" id="shopee-coupon-discount-value" type="number" min="1" step="1" required></label>
+            <label>Compra mínima (R$)<input name="min_cart" type="number" min="0" step="0.01"></label>
+            <label>Teto de desconto (R$), se houver<input name="max_discount" type="number" min="0.01" step="0.01"></label>
+            <label>Início<input name="start_day" type="date" required></label>
+            <label>Vencimento<input name="end_day" type="date" required></label>
+            <label>Fonte oficial Shopee<input name="source_url" type="url" required placeholder="https://shopee.com.br/..."></label>
+          </div>
+          <label>Restrições (opcional)<input name="notes" maxlength="220" placeholder="Ex.: pedidos selecionados"></label>
+          <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Conferi a fonte oficial e as condições do cupom Shopee</b></span></label>
+          <button class="primary" type="submit">Salvar cupom Shopee</button>
+          <p id="shopee-coupon-feedback" class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <section class="card coupon-panel hidden" id="ml-whatsapp-coupon-panel">
+        <div class="section-header"><div><h2>🎟️ Cupons do grupo WhatsApp • Mercado Livre</h2><p>Selecione uma oferta ainda na fila do grupo. Os cupons são independentes da Shopee.</p></div></div>
+          <div class="section-header" style="margin-top:21px"><div><h2>Cupom opcional da oferta</h2></div></div>
+          <form id="wa-multi-coupon-form" class="wa-multi-form">
+            <div class="field-grid">
+              <label>Oferta na fila<select name="offer_id" id="wa-multi-coupon-offer" required></select></label>
+              <label>Tipo<select name="kind" id="wa-multi-coupon-kind"><option value="code">Código</option><option value="activation">Ativação</option></select></label>
+              <label>Código<input name="code" id="wa-multi-coupon-code"></label>
+              <label>Desconto<select name="discount_type"><option value="percent">Porcentagem</option><option value="fixed">Valor fixo (R$)</option></select></label>
+              <label>Valor<input name="discount_value" type="number" min="1" step="1" required></label>
+              <label>Compra mínima (R$)<input name="min_cart" type="number" min="0" step="0.01"></label>
+              <label>Teto desconto (R$)<input name="max_discount" type="number" min="0.01" step="0.01"></label>
+              <label>Início<input name="start_day" type="date" required></label>
+              <label>Fim<input name="end_day" type="date" required></label>
+              <label>Fonte oficial do cupom<input name="source_url" type="url" required placeholder="https://www.mercadolivre.com.br/..."></label>
+            </div>
+            <label>Restrições<input name="notes" maxlength="220"></label>
+            <label class="check-row"><input type="checkbox" name="owner_confirmation" required><span><b>Conferi a origem e as condições do cupom</b></span></label>
+            <button class="outline" type="submit">Salvar cupom</button>
+          </form>
+      </section>
       <section class="card coupon-panel">
-        <div class="section-header"><div><h2>🎟️ Cupons vinculados às ofertas</h2><p>O robô inclui o cupom na publicação automaticamente quando estiver dentro da validade informada.</p></div></div>
+        <div class="section-header"><div><h2>🎟️ Cupons • Mercado Livre</h2><p>Cupons separados da Shopee, vinculados a ofertas ainda na fila.</p></div></div>
+        <p class="hint" id="ml-coupon-target-hint">Para os canais Telegram, selecione acima o canal desejado. Os cupons dos grupos WhatsApp adicionais são cadastrados na área de cada grupo.</p>
         <p class="hint">Este painel não pesquisa contas de compradores e não testa cupons no checkout. Cadastre apenas cupons e condições que você conferiu na fonte oficial.</p>
         <form id="coupon-form">
           <div class="field-grid">
@@ -525,8 +559,8 @@ export const CSS = `
   input:not([type=checkbox]),select,textarea{font-size:16px}
 }
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
-${CATEGORY_CSS}`;
-
+${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}
+`;
 export const CLIENT_JS = `
 'use strict';
 const $ = id => document.getElementById(id);
@@ -543,6 +577,7 @@ let currentChannelId=1;
 let currentWaGroupId=1;
 let selectedPlatform='mercadolivre';
 let selectedNetwork='telegram';
+let selectedTab='telegram';
 let selectedPage='platform';
 const lastNetwork={mercadolivre:'telegram',shopee:'telegram'};
 const shopeeTarget={telegram:null,whatsapp:null};
@@ -565,6 +600,7 @@ function restoreNavigationState(){
     selectedNetwork=state.network==='telegram'||state.network==='whatsapp'
       ?state.network:lastNetwork[selectedPlatform];
     lastNetwork[selectedPlatform]=selectedNetwork;
+    selectedTab=state.tab==='coupons'?'coupons':selectedNetwork;
     currentChannelId=validNavigationId(state.channelId)||1;
     currentWaGroupId=validNavigationId(state.whatsappGroupId)||1;
     shopeeTarget.telegram=validNavigationId(state.shopeeTelegram,1000);
@@ -574,7 +610,7 @@ function restoreNavigationState(){
 function rememberNavigation(){
   try{
     sessionStorage.setItem(NAV_KEY,JSON.stringify({
-      platform:selectedPlatform,network:selectedNetwork,page:selectedPage,
+      platform:selectedPlatform,network:selectedNetwork,tab:selectedTab,page:selectedPage,
       lastNetwork:{mercadolivre:lastNetwork.mercadolivre,shopee:lastNetwork.shopee},
       channelId:currentChannelId,whatsappGroupId:currentWaGroupId,
       shopeeTelegram:shopeeTarget.telegram,shopeeWhatsApp:shopeeTarget.whatsapp
@@ -674,20 +710,28 @@ async function refreshShopeeAccount(){
 function applyPlatformView(){
   const isML=selectedPlatform==='mercadolivre',telegram=selectedNetwork==='telegram';
   // Exibe páginas secundárias sem misturar configurações de plataformas diferentes.
-  $('shopee-account-panel').classList.toggle('hidden',isML);
-  $('channels-panel').classList.toggle('hidden',!isML||!telegram);
-  $('shopee-panel').classList.toggle('hidden',isML);
-  document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram);
-  document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram);
-  for(const cls of ['coupon-panel','list-panel']){
-    document.querySelector('#dashboard > .'+cls).classList.toggle('hidden',!isML||!telegram);
-  }
-  $('wa-multichannel').classList.toggle('hidden',!isML||telegram);
-  $('whatsapp').classList.toggle('hidden',!isML||telegram||currentWaGroupId!==1);
+  const coupons=selectedTab==='coupons';
+  $('shopee-account-panel').classList.toggle('hidden',isML||coupons);
+  $('channels-panel').classList.toggle('hidden',!isML||!telegram||coupons);
+  $('shopee-panel').classList.toggle('hidden',isML||coupons);
+  $('shopee-coupon-panel').classList.toggle('hidden',isML||!coupons);
+  $('ml-whatsapp-coupon-panel').classList.toggle('hidden',!isML||!coupons||telegram||currentWaGroupId===1);
+  $('coupon-network-wrap').classList.toggle('hidden',!coupons);
+  $('coupon-target-network').value=selectedNetwork;
+  $('ml-coupon-target-hint').textContent=selectedNetwork==='telegram'
+    ?'Selecione acima o canal Telegram do Mercado Livre para vincular um cupom à oferta.'
+    :'No WhatsApp, escolha seu grupo acima. Para o principal, cupons de ofertas compartilhadas são vinculados à fila principal do Mercado Livre; ofertas exclusivas diretas não possuem cupons nesta versão.';
+  document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram||coupons);
+  document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram||coupons);
+  document.querySelector('#dashboard > .coupon-panel').classList.toggle('hidden',!isML||!coupons||(!telegram&&currentWaGroupId!==1));
+  document.querySelector('#dashboard > .list-panel').classList.toggle('hidden',!isML||!telegram||coupons);
+  $('wa-multichannel').classList.toggle('hidden',!isML||telegram||coupons);
+  $('whatsapp').classList.toggle('hidden',!isML||telegram||coupons||currentWaGroupId!==1);
   for(const el of document.querySelectorAll('[data-platform]'))
     el.classList.toggle('active',el.dataset.platform===selectedPlatform);
   for(const el of document.querySelectorAll('[data-network]'))
-    el.classList.toggle('active',el.dataset.network===selectedNetwork);
+    el.classList.toggle('active',!coupons&&el.dataset.network===selectedNetwork);
+  $('coupons-tab').classList.toggle('active',coupons);
   $('platform-heading').textContent=isML?'Mercado Livre':'Shopee';
   $('platform-description').textContent=isML
     ?'Configure as publicações do Mercado Livre em cada canal ou grupo.'
@@ -705,6 +749,17 @@ function applyPlatformView(){
   for(const button of document.querySelectorAll('[data-platform]'))
     button.classList.toggle('active',selectedPage==='platform'&&button.dataset.platform===selectedPlatform);
   updatePlatformIdentity();
+}
+async function refreshMainWhatsappCoupons(){
+  if(selectedPlatform!=='mercadolivre'||selectedTab!=='coupons'||selectedNetwork!=='whatsapp'||currentWaGroupId!==1)return;
+  // O WhatsApp principal compartilha cupons das ofertas principais do Mercado Livre.
+  const data=await call('/api/state');
+  const select=$('coupon-offer'),old=select.value;
+  const waiting=data.offers.filter(o=>o.status==='ready');
+  select.innerHTML='<option value="">Selecione uma oferta principal...</option>'+
+    waiting.map(o=>'<option value="'+Number(o.id)+'">'+escape(o.title)+'</option>').join('');
+  if(waiting.some(o=>String(o.id)===old))select.value=old;
+  select.disabled=!waiting.length;
 }
 async function refreshPlatformTargets(){
   let entries=[],selected;
@@ -809,6 +864,11 @@ async function refreshShopee(){
     offerCategory.readOnly=(settings.category||'Geral').toLowerCase()!=='geral';
     setCategoryFieldValue(offerCategory,offerCategory.readOnly?settings.category:'Geral');
     const counts=Object.fromEntries(result.counts.map(x=>[x.status,x.total]));
+    const shoCoupons=$('shopee-coupon-offer'),prior=shoCoupons.value;
+    const available=result.offers.filter(o=>o.status==='ready');
+    shoCoupons.innerHTML='<option value="">Selecione uma oferta Shopee...</option>'+available.map(o=>'<option value="'+Number(o.id)+'">'+escape(o.title)+'</option>').join('');
+    if(available.some(o=>String(o.id)===prior))shoCoupons.value=prior;
+    shoCoupons.disabled=!available.length;
     $('shopee-offers-rows').innerHTML=result.offers.length?result.offers.map(o=>{
       const action=o.status==='ready'
         ?'<button type="button" class="mini" data-shopee-action="publish" data-id="'+Number(o.id)+'">Publicar</button>'
@@ -843,6 +903,7 @@ async function switchPlatform(platform,network){
   selectedPlatform=platform;
   selectedPage='platform';
   selectedNetwork=network||lastNetwork[platform]||'telegram';
+  selectedTab=selectedNetwork;
   lastNetwork[platform]=selectedNetwork;
   rememberNavigation();
   applyPlatformView();
@@ -1424,6 +1485,17 @@ for(const button of document.querySelectorAll('[data-panel]')){
 for(const button of document.querySelectorAll('[data-network]')){
   button.addEventListener('click',()=>switchPlatform(selectedPlatform,button.dataset.network));
 }
+$('coupons-tab').addEventListener('click',async()=>{
+  selectedPage='platform';selectedTab='coupons';rememberNavigation();applyPlatformView();
+  if(selectedPlatform==='shopee')await refreshShopee();
+  else await refreshMainWhatsappCoupons();
+});
+$('coupon-target-network').addEventListener('change',async()=>{
+  const network=$('coupon-target-network').value;
+  await switchPlatform(selectedPlatform,network);
+  selectedTab='coupons';rememberNavigation();applyPlatformView();
+  await refreshMainWhatsappCoupons();
+});
 $('platform-target-select').addEventListener('change',async()=>{
   const id=Number($('platform-target-select').value)||1;
   if(selectedPlatform==='shopee'){
@@ -1439,6 +1511,7 @@ $('platform-target-select').addEventListener('change',async()=>{
      rememberNavigation();
     await refreshManagedWhatsApp();
     applyPlatformView();
+    await refreshMainWhatsappCoupons();
   }
 });
 $('shopee-settings-form').addEventListener('submit',async e=>{
@@ -1642,6 +1715,30 @@ $('wa-deliveries').addEventListener('click',async e=>{
   try{await call('/api/whatsapp/retry',{method:'POST',body:JSON.stringify({offer_id:Number(b.dataset.waRetry)})});notice('Oferta liberada para nova tentativa no próximo ciclo.',false,'wa-feedback');await refreshWhatsApp();}
   catch(error){notice(error.message,true,'wa-feedback');}
 });
+$('shopee-coupon-kind').addEventListener('change',()=>{
+  const isCode=$('shopee-coupon-kind').value==='code';
+  $('shopee-coupon-code').required=isCode;
+  $('shopee-coupon-code').disabled=!isCode;
+});
+$('shopee-coupon-kind').dispatchEvent(new Event('change'));
+$('shopee-coupon-discount-type').addEventListener('change',()=>{
+  const fixed=$('shopee-coupon-discount-type').value==='fixed';
+  $('shopee-coupon-discount-value').step=fixed?'0.01':'1';
+  $('shopee-coupon-discount-value').min=fixed?'0.01':'1';
+});
+$('shopee-coupon-discount-type').dispatchEvent(new Event('change'));
+$('shopee-coupon-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(selectedPlatform!=='shopee')return;
+  const body=Object.fromEntries(new FormData(e.target));
+  body.owner_confirmation=e.target.elements.owner_confirmation.checked;
+  body.network=selectedNetwork;body.target_id=shopeeTarget[selectedNetwork];
+  try{
+    await call('/api/shopee/coupons',{method:'POST',body:JSON.stringify(body)});
+    notice('Cupom Shopee salvo na oferta deste destino. A elegibilidade depende das condições no carrinho.',false,'shopee-coupon-feedback');
+    await refreshShopee();
+  }catch(error){notice(error.message,true,'shopee-coupon-feedback');}
+});
 $('coupon-kind').addEventListener('change',()=>{
   const isCode=$('coupon-kind').value==='code';
   $('coupon-code').required=isCode;
@@ -1659,9 +1756,11 @@ $('coupon-form').addEventListener('submit',async e=>{
   const body=Object.fromEntries(new FormData(e.target));
   body.owner_confirmation=e.target.elements.owner_confirmation.checked;
   try{
-    await call(currentChannelId===1?'/api/coupons':'/api/channels/'+currentChannelId+'/coupons',{method:'POST',body:JSON.stringify(body)});
+    const primaryWhatsApp=selectedPlatform==='mercadolivre'&&selectedTab==='coupons'&&selectedNetwork==='whatsapp'&&currentWaGroupId===1;
+    await call(primaryWhatsApp||currentChannelId===1?'/api/coupons':'/api/channels/'+currentChannelId+'/coupons',{method:'POST',body:JSON.stringify(body)});
     notice('Cupom salvo. A validade será verificada automaticamente antes da publicação; a elegibilidade deve ser conferida no carrinho.',false,'coupon-feedback');
     await refresh();
+    await refreshMainWhatsappCoupons();
   }catch(error){notice(error.message,true,'coupon-feedback');}
 });
 $('test-telegram').addEventListener('click',async()=>{

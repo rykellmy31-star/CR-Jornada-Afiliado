@@ -10,13 +10,16 @@ function validDay(day) {
   const d=new Date(day+'T12:00:00Z');
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0,10)===day;
 }
-function officialSource(value) {
+function officialSource(value,platform='mercadolivre') {
   try {
     const u=new URL(value);
-    return u.protocol==='https:' && !u.username && !u.password && !u.port && ['mercadolivre.com.br','www.mercadolivre.com.br','meli.la'].includes(u.hostname.toLowerCase());
+    const hosts=platform==='shopee'
+      ? ['shopee.com.br','www.shopee.com.br','s.shopee.com.br','affiliate.shopee.com.br','shp.ee','br.shp.ee']
+      : ['mercadolivre.com.br','www.mercadolivre.com.br','meli.la'];
+    return u.protocol==='https:' && !u.username && !u.password && !u.port && hosts.includes(u.hostname.toLowerCase());
   }catch{return false;}
 }
-export function normalizeCoupon(data) {
+export function normalizeCoupon(data,platform='mercadolivre') {
   if(data?.owner_confirmation!==true) throw new Error('Confirme a origem oficial e as condições do cupom.');
   const offer_id=Number(data.offer_id);
   if(!Number.isSafeInteger(offer_id)||offer_id<1) throw new Error('Selecione uma oferta da fila.');
@@ -35,7 +38,7 @@ export function normalizeCoupon(data) {
   const start_day=data.start_day, end_day=data.end_day;
   if(!validDay(start_day)||!validDay(end_day)||end_day<start_day||end_day<'2020-01-01'||end_day>'2100-12-31') throw new Error('Informe datas de início e fim válidas.');
   const source_url=String(data.source_url||'').trim();
-  if(source_url.length>1200||!officialSource(source_url)) throw new Error('Informe uma página oficial do Mercado Livre sobre o cupom.');
+  if(source_url.length>1200||!officialSource(source_url,platform)) throw new Error('Informe uma página oficial '+(platform==='shopee'?'da Shopee':'do Mercado Livre')+' sobre o cupom.');
   const notes=String(data.notes||'').trim().slice(0,220);
   return {offer_id,kind,code,discount_type,discount_value,min_cart_cents,max_discount_cents,start_day,end_day,source_url,notes};
 }
