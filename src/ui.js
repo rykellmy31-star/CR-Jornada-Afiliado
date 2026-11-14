@@ -494,11 +494,11 @@ export function renderPage() {
             </form>
           </section>
         </div>
-        <div class="section-header" style="margin-top:22px">
+        <div class="section-header" id="shopee-queue-heading" style="margin-top:22px">
           <div><h2>Fila de ofertas Shopee</h2><p>Histórico exclusivo deste canal ou grupo.</p></div>
           <button id="shopee-refresh" type="button" class="outline">Atualizar</button>
         </div>
-        <div class="table-scroll">
+        <div class="table-scroll" id="shopee-queue-table">
           <table><thead><tr><th>Produto</th><th>Categoria</th><th>Status</th><th>Ação</th></tr></thead>
           <tbody id="shopee-offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table>
         </div>
@@ -1053,7 +1053,7 @@ async function switchPlatform(platform,network,tabOverride=null){
       void Promise.allSettled([refreshWhatsApp(),refreshManagedWhatsApp()]);
     }else if(platform==='mercadolivre'&&selectedNetwork==='telegram'){
       // O Telegram também é atualizado quando o usuário volta de outra plataforma.
-      void refresh();
+      void Promise.allSettled([refresh(),...(selectedTab==='automation'?[refreshWhatsApp()]:[])]);
     }
   }catch(error){
     if(revision===navigationRevision)notice('Destinos: '+error.message,true);
