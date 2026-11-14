@@ -216,6 +216,8 @@ async function router(request, env) {
     return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SEC}${secure}` });
   }
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
+  // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
+  if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
   if(u.pathname==='/api/master'&&method==='GET')return json(await masterState(env));
   if(u.pathname==='/api/master'&&method==='POST')return json(await setMasterState(env,(await getBody(request)).enabled));
   if(u.pathname==='/api/categories'&&method==='GET')return json(await listCategories(env));

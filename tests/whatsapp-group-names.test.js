@@ -91,8 +91,8 @@ test('painel consulta nomes automaticamente em Mercado Livre principal, multigru
   assert.match(html,/id="wa-group"/);
   assert.match(html,/id="wa-multi-jid"/);
   assert.match(html,/id="shopee-wa-group"/);
-  assert.match(CLIENT_JS,/if\(connection\?\.state==='open'\)await loadWhatsAppGroupNames\(\)/);
-  assert.match(CLIENT_JS,/await loadAdditionalGroupNames\(currentWaGroupId\)/);
+  assert.match(CLIENT_JS,/if\(connection\?\.state==='open'&&selectedPlatform==='mercadolivre'&&selectedNetwork==='whatsapp'\)/);
+  assert.match(CLIENT_JS,/Promise\.allSettled\(\[loadAdditionalGroupNames\(currentWaGroupId\),refreshManagedWhatsAppConnection\(false\)\]\)/);
   assert.match(CLIENT_JS,/await loadShopeeGroupNames\(shopeeTarget\.whatsapp\)/);
   assert.match(CLIENT_JS,/function renderWhatsAppGroupOptions\(/);
   assert.doesNotMatch(CLIENT_JS,/textContent='Grupo salvo: '\+/);

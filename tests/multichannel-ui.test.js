@@ -19,7 +19,7 @@ test('todos os controles novos do painel multicanal estão presentes no HTML',()
 
 test('interface compartilha o contexto de canal entre configurações, ofertas, cupons e histórico',()=>{
   assert.match(CLIENT_JS,/let currentChannelId=1;/);
-  assert.match(CLIENT_JS,/\/api\/channels\/'\+currentChannelId\+'\/state/);
+  assert.match(CLIENT_JS,/\/api\/channels\/'\+initialId\+'\/state/);
   assert.match(CLIENT_JS,/\/api\/channels\/'\+currentChannelId\+'\/offers/);
   assert.match(CLIENT_JS,/\/api\/channels\/'\+currentChannelId\+'\/coupons/);
   assert.match(CLIENT_JS,/\/api\/channels\/'\+currentChannelId\+'\/test/);
@@ -97,7 +97,7 @@ test('Cupons começam ocultos e aparecem somente ao selecionar a aba Cupons da p
 
 
 test('Trocas rápidas descartam resposta antiga que misturaria grupo WhatsApp no seletor do Telegram',async()=>{
-  const from=CLIENT_JS.indexOf('async function refreshPlatformTargets(){');
+  const from=CLIENT_JS.indexOf('async function refreshPlatformTargets(');
   const to=CLIENT_JS.indexOf('async function refreshShopee(){',from);
   assert.ok(from>=0&&to>from);
   const select={dataset:{},innerHTML:'',value:'',disabled:true};

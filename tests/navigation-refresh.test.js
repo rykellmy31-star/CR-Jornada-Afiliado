@@ -111,3 +111,49 @@ test('esconde login e painel até validar sessão e carregar a aba',()=>{
   assert.match(CLIENT_JS,/err\.status=r\.status/);
   assert.match(CLIENT_JS,/rememberNavigation\(\)/);
 });
+
+
+test('consultas GET simultâneas usam um pedido e não guardam resultados antigos',async()=>{
+  const from=CLIENT_JS.indexOf('const pendingReads=new Map();');
+  const to=CLIENT_JS.indexOf('let authenticated=false;',from);
+  assert.ok(from>=0&&to>from,'Camada de consultas deve estar isolada');
+  let requests=0;
+  const responders=[];
+  const fakeFetch=()=>{requests++;return new Promise(resolve=>responders.push(resolve));};
+  const call=new Function('fetch','AbortSignal',CLIENT_JS.slice(from,to)+';return call;')
+    (fakeFetch,{timeout:()=>({})});
+  const a=call('/api/wa-groups');
+  const b=call('/api/wa-groups');
+  assert.equal(requests,1,'Dois pedidos GET em paralelo não devem duplicar consulta');
+  responders.shift()({ok:true,json:async()=>({groups:[{name:'Grupo'}]})});
+  const [first,second]=await Promise.all([a,b]);
+  assert.deepEqual(first,second);
+  await Promise.resolve();
+  const c=call('/api/wa-groups');
+  assert.equal(requests,2,'Depois de concluída, uma nova leitura deve consultar o servidor');
+  responders.shift()({ok:true,json:async()=>({groups:[]})});
+  assert.deepEqual(await c,{groups:[]});
+  const postA=call('/api/master',{method:'POST',body:'{"enabled":false}'});
+  const postB=call('/api/master',{method:'POST',body:'{"enabled":false}'});
+  assert.equal(requests,4,'POST nunca pode ser agrupado ou servido de cache');
+  responders.shift()({ok:true,json:async()=>({ok:true})});
+  responders.shift()({ok:true,json:async()=>({ok:true})});
+  await Promise.all([postA,postB]);
+});
+
+test('bootstrap autentica rapidamente e só carrega integração da aba aberta',()=>{
+  const from=CLIENT_JS.indexOf('async function bootstrap(){');
+  const to=CLIENT_JS.lastIndexOf('bootstrap();');
+  assert.ok(from>=0&&to>from);
+  const source=CLIENT_JS.slice(from,to);
+  assert.match(source,/await call\('\/api\/session',\{\},8000\)/);
+  assert.ok(source.indexOf('view(true);')<source.indexOf('if(selectedPage'), 'Painel deve ficar visível antes de hidratar integrações');
+  assert.match(source,/platform==='mercadolivre'&&selectedNetwork==='whatsapp'/);
+  assert.match(source,/refreshShopeeAccount\(\),refreshShopee\(\)/);
+  const refreshSource=CLIENT_JS.slice(CLIENT_JS.indexOf('async function refresh(){'),CLIENT_JS.indexOf('for(let h=0;h<=24;h++)'));
+  assert.match(refreshSource,/await Promise\.all\(\[/,'Dados de canal e estado devem carregar em paralelo');
+  assert.match(refreshSource,/initialId=currentChannelId/);
+  assert.match(refreshSource,/isWhatsApp\?refreshWhatsApp\(\)/);
+  assert.doesNotMatch(refreshSource,/\s+await refreshWhatsApp\(\)/);
+  assert.match(CLIENT_JS,/const pendingReads=new Map\(\)/);
+});

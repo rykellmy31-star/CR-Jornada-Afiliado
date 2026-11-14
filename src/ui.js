@@ -653,21 +653,37 @@ window.addEventListener('pagehide',()=>{
 let shoAccountState=null;
 let mlTopStatus='Robô desligado';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
+// Requisições GET simultâneas à mesma rota compartilham o mesmo pedido.
+// Não há cache persistente: login, pausas e alterações refletem no servidor imediatamente.
+const pendingReads=new Map();
 async function call(path, opts={},timeoutMs=20000) {
-  const init = {...opts, credentials: 'same-origin',signal:opts.signal||AbortSignal.timeout(timeoutMs)};
-  if(opts.body) init.headers = {'content-type':'application/json'};
-  let r;
-  try{r=await fetch(path,init);}
-  catch(error){throw new Error(error?.name==='TimeoutError'||error?.name==='AbortError'?'A consulta demorou demais. Tente atualizar.':error?.message||'Falha de conexão');}
-  const data=await r.json().catch(()=>({error:'Resposta inválida do servidor'}));
-  if(!r.ok) {const err=new Error(data.error || 'Falha na requisição');err.status=r.status;throw err;}
-  return data;
+  const method=String(opts.method||'GET').toUpperCase();
+  // Uma escrita invalida qualquer leitura pendente antes da atualização.
+  if(method!=='GET')pendingReads.clear();
+  const key=method==='GET'&&!opts.signal ? path+'|'+timeoutMs : null;
+  if(key&&pendingReads.has(key))return pendingReads.get(key);
+  const task=(async()=>{
+    const init = {...opts, credentials: 'same-origin',signal:opts.signal||AbortSignal.timeout(timeoutMs)};
+    if(opts.body) init.headers = {'content-type':'application/json'};
+    let r;
+    try{r=await fetch(path,init);}
+    catch(error){throw new Error(error?.name==='TimeoutError'||error?.name==='AbortError'?'A consulta demorou demais. Tente atualizar.':error?.message||'Falha de conexão');}
+    const data=await r.json().catch(()=>({error:'Resposta inválida do servidor'}));
+    if(!r.ok) {const err=new Error(data.error || 'Falha na requisição');err.status=r.status;throw err;}
+    return data;
+  })();
+  if(!key)return task;
+  pendingReads.set(key,task);
+  try{return await task;}
+  finally{if(pendingReads.get(key)===task)pendingReads.delete(key);}
 }
 let authenticated=false;
+let authGeneration=0;
 let destinationRequestRevision=0;
 let navigationRevision=0;
 let shopeeStateRequestRevision=0;
 function view(auth) {
+  if(!auth)authGeneration++; // Respostas antigas não podem reabrir a tela após sair.
   authenticated=auth;
   $('initial-loading').classList.add('hidden');
   $('dashboard').classList.toggle('hidden',!auth);
@@ -794,14 +810,14 @@ async function refreshMainWhatsappCoupons(){
   if(waiting.some(o=>String(o.id)===old))select.value=old;
   select.disabled=!waiting.length;
 }
-async function refreshPlatformTargets(){
+async function refreshPlatformTargets(prefetchedChannels=null){
   // Cada consulta é fixada à plataforma/rede de início: respostas antigas são descartadas.
   const platform=selectedPlatform,network=selectedNetwork;
   const requestRevision=++destinationRequestRevision;
   let entries=[],selected;
   if(platform==='mercadolivre'){
     if(network==='telegram'){
-      const data=await call('/api/channels');
+      const data=prefetchedChannels||await call('/api/channels');
       entries=data.channels.map(c=>({id:c.id,name:c.name,category:c.category||'Geral'}));
       selected=currentChannelId;
     }else{
@@ -967,6 +983,9 @@ async function switchPlatform(platform,network,tabOverride=null){
       void Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
     }else if(selectedNetwork==='whatsapp'){
       void Promise.allSettled([refreshWhatsApp(),refreshManagedWhatsApp()]);
+    }else if(platform==='mercadolivre'&&selectedNetwork==='telegram'){
+      // O Telegram também é atualizado quando o usuário volta de outra plataforma.
+      void refresh();
     }
   }catch(error){
     if(revision===navigationRevision)notice('Destinos: '+error.message,true);
@@ -1086,8 +1105,12 @@ async function refreshWhatsApp(){
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
     $('whatsapp-server-status').textContent=d.server_configured?'✅ Endereço e chave Evolution presentes no servidor (autenticação ainda não confirmada).':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
     if(d.server_configured){
-      const connection=await refreshWhatsAppConnection();
-      if(connection?.state==='open')await loadWhatsAppGroupNames();
+      // Evolution é consulta externa opcional e não atrasa formulário nem fila.
+      if(selectedPlatform==='mercadolivre'&&selectedNetwork==='whatsapp')
+        void refreshWhatsAppConnection().then(connection=>{
+          if(connection?.state==='open'&&selectedPlatform==='mercadolivre'&&selectedNetwork==='whatsapp')
+            return loadWhatsAppGroupNames();
+        });
     }else $('wa-connection-state').textContent='⚠ Falta cadastrar o Secret EVOLUTION_API_KEY na Cloudflare.';
     $('wa-test').disabled=!d.config.public_registered||!d.server_configured;
     if(d.config.last_error)notice(d.config.last_error,true,'wa-feedback');
@@ -1142,7 +1165,7 @@ async function refreshManagedWhatsApp(){
       groupSelect.add(option);
     }
     groupSelect.value=g.group_jid||'';
-    await loadAdditionalGroupNames(currentWaGroupId);
+    // Nomes externos não bloqueiam a renderização das ofertas.
     const cat=$('wa-multi-offer-category');
     setCategoryFieldValue(cat,g.category||'Geral');
     cat.readOnly=g.category!=='Geral';
@@ -1158,7 +1181,7 @@ async function refreshManagedWhatsApp(){
        o.status==='needs_review'?'<button class="mini" type="button" data-wa-group-action="requeue" data-id="'+Number(o.id)+'">Reenfileirar</button>':'—')+
       '</td></tr>').join(''):'<tr><td colspan="3">Nenhuma oferta cadastrada neste grupo.</td></tr>';
     $('wa-multi-logs').innerHTML=result2.logs.map(x=>'<div><span>'+escape(x.event)+' • '+escape(x.detail||'')+'</span><time>'+toDate(x.created_at)+'</time></div>').join('');
-    await refreshManagedWhatsAppConnection(false);
+    void Promise.allSettled([loadAdditionalGroupNames(currentWaGroupId),refreshManagedWhatsAppConnection(false)]);
   }catch(err){notice('Grupos WhatsApp: '+err.message,true,'wa-multi-feedback');}
 }
 async function refreshManagedWhatsAppConnection(showErrors=true){
@@ -1180,14 +1203,26 @@ async function refreshManagedWhatsAppConnection(showErrors=true){
   }
 }
 async function refresh(){
+  const ticket=authGeneration;
   try{
-    const channelList=await call('/api/channels',{},10000);
+    // Busca lista e estado em paralelo; se um canal foi excluído, recua para o principal.
+    const initialId=currentChannelId;
+    const [channelList,initialState]=await Promise.all([
+      call('/api/channels',{},10000),
+      call(initialId===1?'/api/state':'/api/channels/'+initialId+'/state',{},10000)
+        .then(data=>({data}),error=>({error}))
+    ]);
+    if(ticket!==authGeneration)return;
     const channels=channelList.channels||[];
-    if(!channels.some(c=>c.id===currentChannelId))currentChannelId=1;
+    const channelIsValid=channels.some(c=>c.id===initialId);
+    if(!channelIsValid)currentChannelId=1;
     const options=$('channel-select');
     options.innerHTML=channels.map(c=>'<option value="'+Number(c.id)+'">'+escape(c.name)+' • '+escape(c.telegram_chat_id)+(c.id===1?' (atual)':'')+'</option>').join('');
     options.value=String(currentChannelId);
-    const data=await call(currentChannelId===1?'/api/state':'/api/channels/'+currentChannelId+'/state',{},10000);
+    if(channelIsValid&&initialState.error)throw initialState.error;
+    const data=channelIsValid&&initialState.data?initialState.data:
+      await call('/api/state',{},10000);
+    if(ticket!==authGeneration)return;
     const s=data.settings;
     $('telegram_chat_id').value=s.telegram_chat_id||'';
     const isExtra=currentChannelId!==1;
@@ -1242,16 +1277,21 @@ async function refresh(){
     applyPlatformView();
     view(true);
     restoreScrollAfterRefresh();
+    // Não consultar Evolution/Shopee enquanto uma aba diferente estiver aberta.
+    const isPlatform=selectedPage==='platform';
+    const isWhatsApp=isPlatform&&selectedPlatform==='mercadolivre'&&selectedNetwork==='whatsapp';
+    const isShopee=isPlatform&&selectedPlatform==='shopee';
     void Promise.allSettled([
-      refreshWhatsApp(),
-      refreshManagedWhatsApp(),
-      refreshPlatformTargets(),
       fetchCategoryOptions(),
       loadMasterState(),
       selectedPage==='categories'?refreshCategories():Promise.resolve(),
       selectedPage==='activity'?refreshActivity():Promise.resolve(),
-      selectedPlatform==='shopee'?refreshShopeeAccount():Promise.resolve(),
-      selectedPlatform==='shopee'?refreshShopee():Promise.resolve()
+      isPlatform?refreshPlatformTargets(channelList).then(valid=>{
+        if(valid&&isShopee&&selectedPlatform==='shopee')
+          return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
+      }):Promise.resolve(),
+      isWhatsApp?refreshWhatsApp():Promise.resolve(),
+      isWhatsApp?refreshManagedWhatsApp():Promise.resolve()
     ]);
   }catch(e){
     if(e.status===401){
@@ -1655,10 +1695,15 @@ $('channel-create-form').addEventListener('submit',async e=>{
 });
 $('login-form').addEventListener('submit',async e=>{
   e.preventDefault();notice('',false,'login-error');
-  try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await refresh();}
+  try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await bootstrap();}
   catch(err){notice(err.message,true,'login-error');}
 });
-$('logout').addEventListener('click',async()=>{try{await call('/api/logout',{method:'POST',body:'{}'})}catch{}view(false);});
+$('logout').addEventListener('click',async()=>{
+  // Oculta imediatamente; consultas antigas não reaproveitam dados da sessão anterior.
+  view(false);
+  pendingReads.clear();
+  try{await call('/api/logout',{method:'POST',body:'{}'});}catch{}
+});
 $('settings-form').addEventListener('submit',async e=>{
   e.preventDefault();const body={telegram_chat_id:$('telegram_chat_id').value};for(const k of ['channel_registered','telegram_enabled','automation_enabled']) body[k]=$(k).checked;
   for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) body[k]=Number($(k).value);
@@ -1860,5 +1905,36 @@ $('offers-rows').addEventListener('click',async e=>{
 });
 $('refresh').addEventListener('click',refresh);
 ${CATEGORY_CLIENT_JS}
-refresh();
+// Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
+async function bootstrap(){
+  const ticket=authGeneration;
+  try{
+    await call('/api/session',{},8000);
+    if(ticket!==authGeneration)return;
+    applyPlatformView();
+    view(true);
+    restoreScrollAfterRefresh();
+    if(selectedPage==='platform'&&selectedPlatform==='mercadolivre'&&selectedNetwork==='telegram'){
+      void refresh(); // Dados completos do Telegram continuam sendo atualizados.
+      return;
+    }
+    const tasks=[loadMasterState(),fetchCategoryOptions()];
+    if(selectedPage==='categories')tasks.push(refreshCategories());
+    else if(selectedPage==='activity')tasks.push(refreshActivity());
+    else if(selectedPage==='platform'){
+      const platform=selectedPlatform;
+      tasks.push(refreshPlatformTargets().then(valid=>{
+        if(valid&&platform==='shopee'&&selectedPlatform==='shopee')
+          return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
+      }));
+      if(platform==='mercadolivre'&&selectedNetwork==='whatsapp')
+        tasks.push(refreshWhatsApp(),refreshManagedWhatsApp());
+    }
+    void Promise.allSettled(tasks);
+  }catch(e){
+    view(false);
+    if(e.status!==401)notice('Não foi possível verificar o login: '+e.message,true,'login-error');
+  }
+}
+bootstrap();
 `;
