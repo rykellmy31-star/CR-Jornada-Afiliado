@@ -58,7 +58,8 @@ export function inferSubcategory(title){
 export function classifyProduct(title,sourceCategory,categories){
   const t=normalize(title),cat=normalize(sourceCategory);
   if(!t)return {category:null,subcategory:null,classification:'needs_review'};
-  const bySelected=categories.find(c=>normalize(c.name)===cat&&c.enabled);
+  // "Geral" não é classificação de produto: primeiro tenta reconhecer a categoria real por palavras-chave.
+  const bySelected=cat&&cat!=='geral'?categories.find(c=>normalize(c.name)===cat&&c.enabled):null;
   if(bySelected)return {category:bySelected,subcategory:inferSubcategory(title),classification:'selected'};
   const matches=categories.filter(c=>c.enabled&&keywordsOf(c).some(k=>includesPhrase(t,k)));
   if(matches.length===1)return {category:matches[0],subcategory:inferSubcategory(title),classification:'keywords'};
