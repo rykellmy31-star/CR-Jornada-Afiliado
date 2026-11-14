@@ -806,14 +806,14 @@ async function refreshMainWhatsappCoupons(){
   if(waiting.some(o=>String(o.id)===old))select.value=old;
   select.disabled=!waiting.length;
 }
-async function refreshPlatformTargets(){
+async function refreshPlatformTargets(prefetchedChannels=null){
   // Cada consulta é fixada à plataforma/rede de início: respostas antigas são descartadas.
   const platform=selectedPlatform,network=selectedNetwork;
   const requestRevision=++destinationRequestRevision;
   let entries=[],selected;
   if(platform==='mercadolivre'){
     if(network==='telegram'){
-      const data=await call('/api/channels');
+      const data=prefetchedChannels||await call('/api/channels');
       entries=data.channels.map(c=>({id:c.id,name:c.name,category:c.category||'Geral'}));
       selected=currentChannelId;
     }else{
@@ -979,6 +979,9 @@ async function switchPlatform(platform,network,tabOverride=null){
       void Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
     }else if(selectedNetwork==='whatsapp'){
       void Promise.allSettled([refreshWhatsApp(),refreshManagedWhatsApp()]);
+    }else if(platform==='mercadolivre'&&selectedNetwork==='telegram'){
+      // O Telegram também é atualizado quando o usuário volta de outra plataforma.
+      void refresh();
     }
   }catch(error){
     if(revision===navigationRevision)notice('Destinos: '+error.message,true);
@@ -1276,7 +1279,7 @@ async function refresh(){
       loadMasterState(),
       selectedPage==='categories'?refreshCategories():Promise.resolve(),
       selectedPage==='activity'?refreshActivity():Promise.resolve(),
-      isPlatform?refreshPlatformTargets().then(valid=>{
+      isPlatform?refreshPlatformTargets(channelList).then(valid=>{
         if(valid&&isShopee&&selectedPlatform==='shopee')
           return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
       }):Promise.resolve(),
@@ -1685,7 +1688,7 @@ $('channel-create-form').addEventListener('submit',async e=>{
 });
 $('login-form').addEventListener('submit',async e=>{
   e.preventDefault();notice('',false,'login-error');
-  try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await refresh();}
+  try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await bootstrap();}
   catch(err){notice(err.message,true,'login-error');}
 });
 $('logout').addEventListener('click',async()=>{try{await call('/api/logout',{method:'POST',body:'{}'})}catch{}view(false);});
@@ -1890,5 +1893,34 @@ $('offers-rows').addEventListener('click',async e=>{
 });
 $('refresh').addEventListener('click',refresh);
 ${CATEGORY_CLIENT_JS}
-refresh();
+// Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
+async function bootstrap(){
+  try{
+    await call('/api/session',{},8000);
+    applyPlatformView();
+    view(true);
+    restoreScrollAfterRefresh();
+    if(selectedPage==='platform'&&selectedPlatform==='mercadolivre'&&selectedNetwork==='telegram'){
+      void refresh(); // Dados completos do Telegram continuam sendo atualizados.
+      return;
+    }
+    const tasks=[loadMasterState(),fetchCategoryOptions()];
+    if(selectedPage==='categories')tasks.push(refreshCategories());
+    else if(selectedPage==='activity')tasks.push(refreshActivity());
+    else if(selectedPage==='platform'){
+      const platform=selectedPlatform;
+      tasks.push(refreshPlatformTargets().then(valid=>{
+        if(valid&&platform==='shopee'&&selectedPlatform==='shopee')
+          return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
+      }));
+      if(platform==='mercadolivre'&&selectedNetwork==='whatsapp')
+        tasks.push(refreshWhatsApp(),refreshManagedWhatsApp());
+    }
+    void Promise.allSettled(tasks);
+  }catch(e){
+    view(false);
+    if(e.status!==401)notice('Não foi possível verificar o login: '+e.message,true,'login-error');
+  }
+}
+bootstrap();
 `;
