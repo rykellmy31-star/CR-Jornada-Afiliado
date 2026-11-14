@@ -44,7 +44,7 @@ test('categoria de grupo registra palavras-chave e classifica produtos e subcate
     assert.ok(categories.groups.some(c=>c.name==='Geral'));
     assert.ok(categories.groups.some(c=>c.name==='Ferramentas'));
     await assert.rejects(createGroupCategory(env,{name:'Ferramentas',keywords:''}),/já existe/);
-    const match=classifyProduct('Chave de fenda com ponta magnética','',categories.groups);
+    const match=classifyProduct('Chave de fenda com ponta magnética','Geral',categories.groups);
     assert.equal(match.category.name,'Ferramentas');
     assert.equal(match.subcategory,'Chaves de fenda');
     const inserted=await upsertProductCategory(env,'mercadolivre',{
