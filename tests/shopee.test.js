@@ -6,7 +6,7 @@ import worker from '../src/index.js';
 import {
   ensureShopeeTables,validateShopeeAffiliateUrl,normalizeShopeeOffer,
   shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,
-  publishShopeeOffer,runShopeeScheduled
+  publishShopeeOffer,runShopeeScheduled,saveShopeeCoupon
 } from '../src/shopee.js';
 import {
   createShopeeOwnDestination,saveShopeeOwnTelegram,saveShopeeOwnWhatsApp,
@@ -262,4 +262,43 @@ test('interface da Shopee tem criação separada para canais e grupos, além de 
  assert.doesNotThrow(()=>new Function(CLIENT_JS));
  assert.match(CLIENT_JS,/\/api\/shopee\/destinations\/create/);
  assert.match(CLIENT_JS,/shopeeTarget=\{telegram:null,whatsapp:null\}/);
+});
+
+test('cupom Shopee é independente, usa fonte oficial e só aparece dentro da vigência',async()=>{
+  const DB=makeDb(),env=envFor(DB);
+  try{
+    mockExternal();
+    const dest=await createTele(env);
+    await activateTele(env,dest);
+    await saveShopeeTarget(env,config(dest,'Infantil'));
+    await addShopeeOffer(env,offer(dest,url,'Infantil'));
+    await addShopeeOffer(env,offer(dest,other,'Infantil'));
+    const offers=(await shopeeState(env,dest.network,dest.id)).offers;
+    const base={network:dest.network,target_id:dest.id,offer_id:offers.find(x=>x.affiliate_url===url).id,
+      kind:'code',code:'SHOPEE10',discount_type:'percent',discount_value:'10',
+      min_cart:'50.00',start_day:'2020-01-01',end_day:'2099-12-31',
+      source_url:'https://shopee.com.br/m/cupons',owner_confirmation:true};
+    await assert.rejects(saveShopeeCoupon(env,{...base,source_url:'https://mercadolivre.com.br/cupons'}),/Shopee/);
+    await assert.rejects(saveShopeeCoupon(env,{...base,owner_confirmation:false}),/Confirme/);
+    await assert.rejects(saveShopeeCoupon(env,{...base,offer_id:99999}),/não encontrada/);
+    assert.equal((await saveShopeeCoupon(env,base)).ok,true);
+    await saveShopeeCoupon(env,{...base,offer_id:offers.find(x=>x.affiliate_url===other).id,
+      code:'VENCIDO',start_day:'2020-01-01',end_day:'2020-01-02'});
+    const current=(await shopeeState(env,dest.network,dest.id)).offers;
+    assert.equal(current.find(x=>x.affiliate_url===url).coupon_code,'SHOPEE10');
+    assert.equal(DB.prepare("SELECT COUNT(*) total FROM sqlite_master WHERE name='offer_coupons'").first().total,0);
+    await publishShopeeOffer(env,dest.network,dest.id,base.offer_id);
+    assert.match(posted[0].text,/SHOPEE10/);
+    assert.match(posted[0].text,/Compra mínima/);
+    await publishShopeeOffer(env,dest.network,dest.id,offers.find(x=>x.affiliate_url===other).id);
+    assert.doesNotMatch(posted[1].text,/VENCIDO/);
+    assert.equal(DB.prepare('SELECT COUNT(*) total FROM shopee_offer_coupons').first().total,2);
+  }finally{globalThis.fetch=actualFetch;DB.close();}
+});
+test('aba de cupons Shopee tem cadastro e API próprios',()=>{
+  const html=renderPage();
+  assert.match(html,/id="coupons-tab"/);
+  assert.match(html,/id="shopee-coupon-panel"/);
+  assert.match(html,/id="shopee-coupon-form"/);
+  assert.match(CLIENT_JS,/\/api\/shopee\/coupons/);
 });
