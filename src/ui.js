@@ -590,10 +590,12 @@ window.addEventListener('pagehide',()=>{
 let shoAccountState=null;
 let mlTopStatus='Robô desligado';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
-async function call(path, opts={}) {
-  const init = {...opts, credentials: 'same-origin'};
+async function call(path, opts={},timeoutMs=20000) {
+  const init = {...opts, credentials: 'same-origin',signal:opts.signal||AbortSignal.timeout(timeoutMs)};
   if(opts.body) init.headers = {'content-type':'application/json'};
-  const r=await fetch(path,init);
+  let r;
+  try{r=await fetch(path,init);}
+  catch(error){throw new Error(error?.name==='TimeoutError'||error?.name==='AbortError'?'A consulta demorou demais. Tente atualizar.':error?.message||'Falha de conexão');}
   const data=await r.json().catch(()=>({error:'Resposta inválida do servidor'}));
   if(!r.ok) {const err=new Error(data.error || 'Falha na requisição');err.status=r.status;throw err;}
   return data;
@@ -1046,13 +1048,13 @@ async function refreshManagedWhatsAppConnection(showErrors=true){
 }
 async function refresh(){
   try{
-    const channelList=await call('/api/channels');
+    const channelList=await call('/api/channels',{},10000);
     const channels=channelList.channels||[];
     if(!channels.some(c=>c.id===currentChannelId))currentChannelId=1;
     const options=$('channel-select');
     options.innerHTML=channels.map(c=>'<option value="'+Number(c.id)+'">'+escape(c.name)+' • '+escape(c.telegram_chat_id)+(c.id===1?' (atual)':'')+'</option>').join('');
     options.value=String(currentChannelId);
-    const data=await call(currentChannelId===1?'/api/state':'/api/channels/'+currentChannelId+'/state');
+    const data=await call(currentChannelId===1?'/api/state':'/api/channels/'+currentChannelId+'/state',{},10000);
     const s=data.settings;
     $('telegram_chat_id').value=s.telegram_chat_id||'';
     const isExtra=currentChannelId!==1;
@@ -1102,13 +1104,22 @@ async function refresh(){
       return '<tr><td><a rel="noopener noreferrer" target="_blank" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+(o.coupon_kind?'<small>🎟️ Cupom informado: '+escape(o.coupon_code||'ativação no app')+' • até '+escape(o.coupon_end_day)+' (sujeito às condições)</small>':'')+ (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td><span class="tag '+escape(o.status)+'">'+statusLabel(o.status)+'</span></td><td>'+toDate(o.created_at)+'</td><td>'+action+'</td></tr>';
     }).join(''):'<tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr>';
     $('log-list').innerHTML=data.logs.length?data.logs.map(l=>'<div><span><b>'+escape(l.event)+'</b> '+escape(l.detail||'')+'</span><time>'+toDate(l.created_at)+'</time></div>').join(''):'Ainda não há eventos.';
-    await refreshWhatsApp();
-    await refreshManagedWhatsApp();
-    await refreshPlatformTargets();
+    // Exibe o painel e a aba salva assim que a sessão e os dados principais respondem.
+    // Evolution, grupos e Shopee não podem bloquear o carregamento do F5.
     applyPlatformView();
-    if(selectedPlatform==='shopee'){await refreshShopeeAccount();await refreshShopee();}
     view(true);
     restoreScrollAfterRefresh();
+    void Promise.allSettled([
+      refreshWhatsApp(),
+      refreshManagedWhatsApp(),
+      refreshPlatformTargets(),
+      fetchCategoryOptions(),
+      loadMasterState(),
+      selectedPage==='categories'?refreshCategories():Promise.resolve(),
+      selectedPage==='activity'?refreshActivity():Promise.resolve(),
+      selectedPlatform==='shopee'?refreshShopeeAccount():Promise.resolve(),
+      selectedPlatform==='shopee'?refreshShopee():Promise.resolve()
+    ]);
   }catch(e){
     if(e.status===401){
       view(false);
