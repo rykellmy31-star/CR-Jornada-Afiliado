@@ -229,10 +229,14 @@ export async function getWhatsAppState(env) {
 }
 export async function listWhatsAppGroups(env,instance) {
   const data=await evoFetch(env,instance,'/group/fetchAllGroups',{method:'GET'});
-  const groups=Array.isArray(data)?data:Array.isArray(data.groups)?data.groups:Array.isArray(data.data)?data.data:[];
+  // Variações de formato retornadas por versões da Evolution API.
+  const groups=Array.isArray(data)?data
+    :Array.isArray(data.groups)?data.groups
+    :Array.isArray(data.data)?data.data
+    :Array.isArray(data.data?.groups)?data.data.groups:[];
   return groups.map(g=>({
-    id:String(g.id||g.jid||g.groupJid||''),
-    name:String(g.subject||g.name||'Grupo sem nome').slice(0,100)
+    id:String(g?.id||g?.jid||g?.groupJid||g?.group?.id||''),
+    name:String(g?.subject||g?.name||g?.groupMetadata?.subject||g?.metadata?.subject||'Grupo sem nome').slice(0,100)
   })).filter(g=>GROUP_RE.test(g.id)).slice(0,250);
 }
 export async function updateWhatsAppSettings(env,body) {

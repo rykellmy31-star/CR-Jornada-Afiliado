@@ -686,11 +686,12 @@ async function refreshShopee(){
       const selector=$('shopee-wa-group');
       if(base.group_jid&&!Array.from(selector.options).some(o=>o.value===base.group_jid)){
         const opt=document.createElement('option');
-        opt.value=base.group_jid;opt.textContent='Grupo salvo: '+base.group_jid;selector.add(opt);
+        opt.value=base.group_jid;opt.textContent='Grupo salvo — nome indisponível';opt.title='ID técnico: '+base.group_jid;selector.add(opt);
       }
       selector.value=base.group_jid||'';
       $('shopee-wa-test').disabled=!base.base_enabled;
       await refreshShopeeWaConnection(false);
+      await loadShopeeGroupNames(shopeeTarget.whatsapp);
     }
     $('shopee-target-title').textContent=(selectedNetwork==='telegram'?'Canal Telegram: ':'Grupo WhatsApp: ')+base.name;
     $('channel-label').textContent='Destino Shopee: '+base.name;
@@ -776,6 +777,71 @@ async function refreshWhatsAppConnection(showErrors=false){
     return null;
   }
 }
+
+function renderWhatsAppGroupOptions(select,groups,saved,placeholder='Selecione um grupo...'){
+  // IDs técnicos permanecem exclusivamente nos values; o texto visível usa
+  // o nome retornado pela Evolution API (subject).
+  select.innerHTML='';
+  const blank=document.createElement('option');
+  blank.value='';blank.textContent=placeholder;select.add(blank);
+  for(const item of groups||[]){
+    const option=document.createElement('option');
+    option.value=String(item.id);
+    option.textContent=String(item.name||'Grupo sem nome');
+    option.title=String(item.id);
+    select.add(option);
+  }
+  if(saved){
+    const found=(groups||[]).some(g=>g.id===saved);
+    if(!found){
+      const missing=document.createElement('option');
+      missing.value=saved;
+      missing.textContent='Grupo salvo — nome indisponível';
+      missing.title='ID técnico: '+saved;
+      select.add(missing);
+    }
+    select.value=saved;
+  }else select.value='';
+  return !saved||(groups||[]).some(g=>g.id===saved);
+}
+async function loadWhatsAppGroupNames(silent=true){
+  const select=$('wa-group'),selected=select.value;
+  try{
+    const data=await call('/api/whatsapp/groups?instance='+encodeURIComponent('cr-jornada-afiliados'));
+    if(select.value!==selected)return;
+    const found=renderWhatsAppGroupOptions(select,data.groups,selected);
+    if(!silent){
+      notice(found
+        ?data.groups.length+' grupo(s) encontrado(s). Os nomes foram atualizados pela Evolution API.'
+        :'A Evolution não encontrou o grupo salvo nessa instância. O ID foi preservado; confira se o número ainda participa dele.',
+        !found,'wa-feedback');
+    }
+  }catch(error){
+    if(!silent)notice('Não foi possível obter os nomes dos grupos: '+error.message,true,'wa-feedback');
+  }
+}
+async function loadAdditionalGroupNames(groupId,silent=true){
+  const select=$('wa-multi-jid'),selected=select.value;
+  try{
+    const response=await call('/api/wa-groups/'+groupId+'/options');
+    if(currentWaGroupId!==groupId||select.value!==selected)return;
+    const found=renderWhatsAppGroupOptions(select,response.groups,selected);
+    if(!silent)notice(found?'Nomes atualizados pela Evolution API.':'O grupo salvo não foi encontrado na instância; o ID foi preservado.',!found,'wa-multi-feedback');
+  }catch(error){
+    if(!silent)notice('Não foi possível obter os nomes dos grupos: '+error.message,true,'wa-multi-feedback');
+  }
+}
+async function loadShopeeGroupNames(groupId,silent=true){
+  const select=$('shopee-wa-group'),selected=select.value;
+  try{
+    const response=await call('/api/shopee/whatsapp/groups?target_id='+groupId);
+    if(shopeeTarget.whatsapp!==groupId||select.value!==selected)return;
+    const found=renderWhatsAppGroupOptions(select,response.groups,selected);
+    if(!silent)notice(found?'Nomes de grupos Shopee atualizados.':'O grupo Shopee salvo não foi encontrado na instância.',!found,'shopee-feedback');
+  }catch(error){
+    if(!silent)notice('Não foi possível obter o nome dos grupos Shopee: '+error.message,true,'shopee-feedback');
+  }
+}
 async function refreshWhatsApp(){
   try{
     const d=await call('/api/whatsapp/state');
@@ -784,7 +850,7 @@ async function refreshWhatsApp(){
     const jid=d.config.group_jid||'';
     const list=$('wa-group');
     if(jid&&!Array.from(list.options).some(o=>o.value===jid)){
-      const option=document.createElement('option');option.value=jid;option.textContent='Grupo salvo: '+jid;list.add(option);
+      const option=document.createElement('option');option.value=jid;option.textContent='Grupo salvo — nome indisponível';option.title='ID técnico: '+jid;list.add(option);
     }
     list.value=jid;
     $('wa-registered').checked=!!d.config.public_registered;
@@ -798,8 +864,10 @@ async function refreshWhatsApp(){
     }else directCategory.readOnly=false;
     $('whatsapp-badge').textContent=d.config.enabled?'WhatsApp ligado':'WhatsApp desligado';
     $('whatsapp-server-status').textContent=d.server_configured?'✅ Endereço e chave Evolution presentes no servidor (autenticação ainda não confirmada).':'⚠ Configure somente EVOLUTION_API_KEY nos Secrets da Cloudflare. O endereço da Evolution já está definido.';
-    if(d.server_configured)await refreshWhatsAppConnection();
-    else $('wa-connection-state').textContent='⚠ Falta cadastrar o Secret EVOLUTION_API_KEY na Cloudflare.';
+    if(d.server_configured){
+      const connection=await refreshWhatsAppConnection();
+      if(connection?.state==='open')await loadWhatsAppGroupNames();
+    }else $('wa-connection-state').textContent='⚠ Falta cadastrar o Secret EVOLUTION_API_KEY na Cloudflare.';
     $('wa-test').disabled=!d.config.public_registered||!d.server_configured;
     if(d.config.last_error)notice(d.config.last_error,true,'wa-feedback');
     $('wa-direct-offers').innerHTML=d.direct_offers?.length?d.direct_offers.map(o=>{
@@ -848,10 +916,11 @@ async function refreshManagedWhatsApp(){
     const groupSelect=$('wa-multi-jid');
     if(!Array.from(groupSelect.options).some(o=>o.value===g.group_jid)&&g.group_jid){
       const option=document.createElement('option');
-      option.value=g.group_jid;option.textContent='Grupo salvo: '+g.group_jid;
+      option.value=g.group_jid;option.textContent='Grupo salvo — nome indisponível';option.title='ID técnico: '+g.group_jid;
       groupSelect.add(option);
     }
     groupSelect.value=g.group_jid||'';
+    await loadAdditionalGroupNames(currentWaGroupId);
     const cat=$('wa-multi-offer-category');
     cat.value=g.category==='Geral'?'':g.category;
     cat.readOnly=g.category!=='Geral';
@@ -1013,13 +1082,7 @@ $('wa-multi-groups').addEventListener('click',async()=>{
  if(currentWaGroupId===1)return;
  const btn=$('wa-multi-groups');btn.disabled=true;
  try{
-   const result=await call('/api/wa-groups/'+currentWaGroupId+'/options');
-   const current=$('wa-multi-jid').value;
-   const sel=$('wa-multi-jid');
-   sel.innerHTML='<option value="">Selecione um grupo público...</option>'+result.groups.map(g=>
-      '<option value="'+escape(g.id)+'">'+escape(g.name)+'</option>').join('');
-   if(result.groups.some(g=>g.id===current))sel.value=current;
-   notice(result.groups.length+' grupos encontrados. Escolha um grupo autorizado.',false,'wa-multi-feedback');
+   await loadAdditionalGroupNames(currentWaGroupId,false);
  }catch(err){notice(err.message,true,'wa-multi-feedback');}
  finally{btn.disabled=false;}
 });
@@ -1157,12 +1220,7 @@ $('shopee-wa-connect').addEventListener('click',async()=>{
 $('shopee-wa-search').addEventListener('click',async()=>{
   const btn=$('shopee-wa-search');btn.disabled=true;
   try{
-    const response=await call('/api/shopee/whatsapp/groups?target_id='+shopeeTarget.whatsapp);
-    const group=$('shopee-wa-group'),old=group.value;
-    group.innerHTML='<option value="">Selecione um grupo público da Shopee...</option>'+
-      response.groups.map(g=>'<option value="'+escape(g.id)+'">'+escape(g.name)+'</option>').join('');
-    if(response.groups.some(g=>g.id===old))group.value=old;
-    notice('Grupos conectados ao número Shopee: '+response.groups.length,false,'shopee-feedback');
+    await loadShopeeGroupNames(shopeeTarget.whatsapp,false);
   }catch(error){notice(error.message,true,'shopee-feedback');}
   finally{btn.disabled=false;}
 });
@@ -1417,12 +1475,7 @@ setInterval(()=>{
 $('wa-groups').addEventListener('click',async()=>{
   const b=$('wa-groups');b.disabled=true;b.textContent='Consultando...';
   try{
-    const name='cr-jornada-afiliados';
-    const data=await call('/api/whatsapp/groups?instance='+encodeURIComponent(name));
-    const list=$('wa-group'),selected=list.value;
-    list.innerHTML='<option value="">Selecione um grupo...</option>'+data.groups.map(g=>'<option value="'+escape(g.id)+'">'+escape(g.name)+'</option>').join('');
-    if(data.groups.some(g=>g.id===selected))list.value=selected;
-    notice(data.groups.length+' grupo(s) localizado(s). Selecione o grupo público cadastrado no Mercado Livre.',false,'wa-feedback');
+    await loadWhatsAppGroupNames(false);
   }catch(error){notice(error.message,true,'wa-feedback');}
   finally{b.disabled=false;b.textContent='Buscar meus grupos';}
 });
