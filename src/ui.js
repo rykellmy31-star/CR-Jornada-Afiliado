@@ -746,6 +746,17 @@ function applyPlatformView(){
     button.classList.toggle('active',selectedPage==='platform'&&button.dataset.platform===selectedPlatform);
   updatePlatformIdentity();
 }
+async function refreshMainWhatsappCoupons(){
+  if(selectedPlatform!=='mercadolivre'||selectedTab!=='coupons'||selectedNetwork!=='whatsapp'||currentWaGroupId!==1)return;
+  // O WhatsApp principal compartilha cupons das ofertas principais do Mercado Livre.
+  const data=await call('/api/state');
+  const select=$('coupon-offer'),old=select.value;
+  const waiting=data.offers.filter(o=>o.status==='ready');
+  select.innerHTML='<option value="">Selecione uma oferta principal...</option>'+
+    waiting.map(o=>'<option value="'+Number(o.id)+'">'+escape(o.title)+'</option>').join('');
+  if(waiting.some(o=>String(o.id)===old))select.value=old;
+  select.disabled=!waiting.length;
+}
 async function refreshPlatformTargets(){
   let entries=[],selected;
   if(selectedPlatform==='mercadolivre'){
@@ -1473,11 +1484,13 @@ for(const button of document.querySelectorAll('[data-network]')){
 $('coupons-tab').addEventListener('click',async()=>{
   selectedPage='platform';selectedTab='coupons';rememberNavigation();applyPlatformView();
   if(selectedPlatform==='shopee')await refreshShopee();
+  else await refreshMainWhatsappCoupons();
 });
 $('coupon-target-network').addEventListener('change',async()=>{
   const network=$('coupon-target-network').value;
   await switchPlatform(selectedPlatform,network);
   selectedTab='coupons';rememberNavigation();applyPlatformView();
+  await refreshMainWhatsappCoupons();
 });
 $('platform-target-select').addEventListener('change',async()=>{
   const id=Number($('platform-target-select').value)||1;
@@ -1494,6 +1507,7 @@ $('platform-target-select').addEventListener('change',async()=>{
      rememberNavigation();
     await refreshManagedWhatsApp();
     applyPlatformView();
+    await refreshMainWhatsappCoupons();
   }
 });
 $('shopee-settings-form').addEventListener('submit',async e=>{
@@ -1738,9 +1752,11 @@ $('coupon-form').addEventListener('submit',async e=>{
   const body=Object.fromEntries(new FormData(e.target));
   body.owner_confirmation=e.target.elements.owner_confirmation.checked;
   try{
-    await call(currentChannelId===1?'/api/coupons':'/api/channels/'+currentChannelId+'/coupons',{method:'POST',body:JSON.stringify(body)});
+    const primaryWhatsApp=selectedPlatform==='mercadolivre'&&selectedTab==='coupons'&&selectedNetwork==='whatsapp'&&currentWaGroupId===1;
+    await call(primaryWhatsApp||currentChannelId===1?'/api/coupons':'/api/channels/'+currentChannelId+'/coupons',{method:'POST',body:JSON.stringify(body)});
     notice('Cupom salvo. A validade será verificada automaticamente antes da publicação; a elegibilidade deve ser conferida no carrinho.',false,'coupon-feedback');
     await refresh();
+    await refreshMainWhatsappCoupons();
   }catch(error){notice(error.message,true,'coupon-feedback');}
 });
 $('test-telegram').addEventListener('click',async()=>{
