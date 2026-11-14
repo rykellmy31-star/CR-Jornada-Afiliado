@@ -1,7 +1,7 @@
 import {CATEGORY_PAGE_HTML,CATEGORY_CSS,CATEGORY_CLIENT_JS} from './ui-categories.js';
 export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
-  <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><button id="master-toggle" type="button" class="pill master-toggle" aria-pressed="false">Ligar robô</button><span id="top-status" class="hidden">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
+  <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><button id="master-toggle" type="button" class="pill master-toggle hidden" aria-pressed="false" hidden disabled>Ligar robô</button><span id="top-status" class="hidden">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
   <main>
     <section id="initial-loading" class="login card" role="status" aria-live="polite"><strong>Carregando o painel...</strong></section>
     <section id="login" class="login card hidden" hidden><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
@@ -657,6 +657,13 @@ function view(auth) {
   $('login').classList.toggle('hidden',auth);
   $('login').hidden=auth;
   $('logout').classList.toggle('hidden',!auth);
+  // O controle mestre só será mostrado depois que a sessão e /api/master forem validados.
+  if(!auth){
+    const master=$('master-toggle');
+    master.hidden=true;
+    master.disabled=true;
+    master.classList.add('hidden');
+  }
   document.body.classList.toggle('app-has-sidebar',auth);
 }
 function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'Publicado',needs_review:'Revisar'})[s]||s;}
