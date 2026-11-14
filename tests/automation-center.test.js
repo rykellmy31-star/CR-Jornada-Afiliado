@@ -187,6 +187,25 @@ test('interface tem botão mestre, navegação lateral e categoria em dropdown',
   assert.match(CLIENT_JS,/Destino '\+type\+': '\+dest/);
 });
 
+test('botão mestre começa invisível e API recusa ativação sem senha',async()=>{
+  const html=renderPage();
+  assert.match(html, /id="master-toggle"[^>]*class="pill master-toggle hidden"[^>]*hidden disabled/);
+  assert.match(CLIENT_JS,/master\.hidden=true/);
+  assert.match(CLIENT_JS,/master\.disabled=true/);
+  assert.match(CLIENT_JS,/\$\('master-toggle'\)/);
+  const {env,DB}=setup();
+  try{
+    await setMasterState(env,false);
+    const bad=await worker.fetch(new Request('https://afiliados.test/api/master',{
+      method:'POST',
+      headers:{'content-type':'application/json','origin':'https://afiliados.test'},
+      body:JSON.stringify({enabled:true})
+    }),env);
+    assert.equal(bad.status,401,'Sem cookie de sessão não pode ligar o robô');
+    assert.equal((await masterState(env)).enabled,false,'Tentativa sem autenticação não modifica o robô');
+  }finally{DB.close();}
+});
+
 test('API mestre exige login; agendador desligado mantém cinco filas intactas',async()=>{
   const {env,DB}=setup();
   try{
