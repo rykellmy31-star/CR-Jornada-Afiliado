@@ -105,4 +105,6 @@ test('interface possui duas etapas e não publica automaticamente ao copiar',()=
  assert.match(CLIENT_JS,/navigator.clipboard.writeText/);
  assert.match(CLIENT_JS,/ml-batch-import/);
  assert.match(CLIENT_JS,/refreshMLLinkBatches/);
+ assert.match(CLIENT_JS,/item\.id==='ml-link-batches'/);
+ assert.match(CLIENT_JS,/selectedPage!=='platform'\|\|!isML\|\|!automation/);
 });

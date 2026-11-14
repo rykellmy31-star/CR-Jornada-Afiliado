@@ -889,6 +889,7 @@ function applyPlatformView(){
     if(item.id==='platform-sidebar')continue;
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
+    if(item.id==='ml-link-batches'){item.classList.toggle('hidden',selectedPage!=='platform'||!isML||!automation);continue;}
      if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate'||!isML);continue;}
      if(item.id==='shopee-account-panel'){item.classList.toggle('hidden',selectedPage!=='affiliate'||isML);continue;}
     if(selectedPage!=='platform')item.classList.add('hidden');
