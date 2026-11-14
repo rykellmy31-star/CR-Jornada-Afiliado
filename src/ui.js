@@ -676,10 +676,12 @@ async function call(path, opts={},timeoutMs=20000) {
   finally{if(pendingReads.get(key)===task)pendingReads.delete(key);}
 }
 let authenticated=false;
+let authGeneration=0;
 let destinationRequestRevision=0;
 let navigationRevision=0;
 let shopeeStateRequestRevision=0;
 function view(auth) {
+  if(!auth)authGeneration++; // Respostas antigas não podem reabrir a tela após sair.
   authenticated=auth;
   $('initial-loading').classList.add('hidden');
   $('dashboard').classList.toggle('hidden',!auth);
@@ -1199,6 +1201,7 @@ async function refreshManagedWhatsAppConnection(showErrors=true){
   }
 }
 async function refresh(){
+  const ticket=authGeneration;
   try{
     // Busca lista e estado em paralelo; se um canal foi excluído, recua para o principal.
     const initialId=currentChannelId;
@@ -1207,6 +1210,7 @@ async function refresh(){
       call(initialId===1?'/api/state':'/api/channels/'+initialId+'/state',{},10000)
         .then(data=>({data}),error=>({error}))
     ]);
+    if(ticket!==authGeneration)return;
     const channels=channelList.channels||[];
     const channelIsValid=channels.some(c=>c.id===initialId);
     if(!channelIsValid)currentChannelId=1;
@@ -1216,6 +1220,7 @@ async function refresh(){
     if(channelIsValid&&initialState.error)throw initialState.error;
     const data=channelIsValid&&initialState.data?initialState.data:
       await call('/api/state',{},10000);
+    if(ticket!==authGeneration)return;
     const s=data.settings;
     $('telegram_chat_id').value=s.telegram_chat_id||'';
     const isExtra=currentChannelId!==1;
@@ -1691,7 +1696,12 @@ $('login-form').addEventListener('submit',async e=>{
   try{ await call('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';await bootstrap();}
   catch(err){notice(err.message,true,'login-error');}
 });
-$('logout').addEventListener('click',async()=>{try{await call('/api/logout',{method:'POST',body:'{}'})}catch{}view(false);});
+$('logout').addEventListener('click',async()=>{
+  // Oculta imediatamente; consultas antigas não reaproveitam dados da sessão anterior.
+  view(false);
+  pendingReads.clear();
+  try{await call('/api/logout',{method:'POST',body:'{}'});}catch{}
+});
 $('settings-form').addEventListener('submit',async e=>{
   e.preventDefault();const body={telegram_chat_id:$('telegram_chat_id').value};for(const k of ['channel_registered','telegram_enabled','automation_enabled']) body[k]=$(k).checked;
   for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) body[k]=Number($(k).value);
@@ -1895,8 +1905,10 @@ $('refresh').addEventListener('click',refresh);
 ${CATEGORY_CLIENT_JS}
 // Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
 async function bootstrap(){
+  const ticket=authGeneration;
   try{
     await call('/api/session',{},8000);
+    if(ticket!==authGeneration)return;
     applyPlatformView();
     view(true);
     restoreScrollAfterRefresh();
