@@ -312,6 +312,7 @@ export async function publishManagedWhatsAppOffer(env,id,offerId){
 }
 export async function runManagedWhatsAppScheduled(env){
  if(!env?.DB)return {skipped:'db'};
+  if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
  await ensureWhatsAppGroupTables(env);
  const rows=await env.DB.prepare('SELECT * FROM whatsapp_groups WHERE enabled=1 AND public_registered=1 AND group_jid<>? ORDER BY id LIMIT 40').bind('').all();
  const results=[];
