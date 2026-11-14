@@ -658,6 +658,8 @@ function notice(text, isError=false, target='notice') { $(target).textContent = 
 const pendingReads=new Map();
 async function call(path, opts={},timeoutMs=20000) {
   const method=String(opts.method||'GET').toUpperCase();
+  // Uma escrita invalida qualquer leitura pendente antes da atualização.
+  if(method!=='GET')pendingReads.clear();
   const key=method==='GET'&&!opts.signal ? path+'|'+timeoutMs : null;
   if(key&&pendingReads.has(key))return pendingReads.get(key);
   const task=(async()=>{
