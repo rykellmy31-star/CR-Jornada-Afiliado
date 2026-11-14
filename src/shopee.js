@@ -202,6 +202,7 @@ export async function publishShopeeOffer(env,network,target,offerId){
 }
 export async function runShopeeScheduled(env){
   if(!env?.DB)return {skipped:'db'};
+  if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
   await ensureShopeeTables(env);
   const rows=await env.DB.prepare('SELECT * FROM shopee_targets WHERE enabled=1 AND permission_confirmed=1 ORDER BY id LIMIT 60').all();
   const out=[];
