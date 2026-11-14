@@ -1,4 +1,5 @@
 import {CATEGORY_PAGE_HTML,CATEGORY_CSS,CATEGORY_CLIENT_JS} from './ui-categories.js';
+import {LINK_BATCH_HTML,LINK_BATCH_CSS,LINK_BATCH_CLIENT_JS} from './ui-link-batches.js';
 export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
   <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><button id="master-toggle" type="button" class="pill master-toggle hidden" aria-pressed="false" hidden disabled>Ligar robô</button><span id="top-status" class="hidden">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
@@ -196,6 +197,7 @@ export function renderPage() {
           <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
           <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
+      ${LINK_BATCH_HTML}
       <section class="card whatsapp-automation hidden" id="ml-wa-automation-panel">
         <div class="section-header"><div><h2>🟢 Automação do WhatsApp principal</h2>
           <p>Grupos e conexões ficam no WhatsApp. Configure aqui o intervalo e a ativação.</p></div></div>
@@ -659,6 +661,7 @@ export const CSS = `
 }
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill:not(#master-toggle){display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 ${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}
+${LINK_BATCH_CSS}
 `;
 export const CLIENT_JS = `
 'use strict';
@@ -1074,6 +1077,7 @@ async function switchPlatform(platform,network,tabOverride=null){
   $('shopee-destination-create').classList.add('hidden');
   rememberNavigation();
   applyPlatformView();
+  if(selectedPlatform==='mercadolivre'&&selectedTab==='automation')void refreshMLLinkBatches();
   try{
     const valid=await refreshPlatformTargets();
     if(!valid||revision!==navigationRevision)return;
@@ -2056,6 +2060,7 @@ $('offers-rows').addEventListener('click',async e=>{
   catch(err){notice(err.message,true);await refresh();}
 });
 $('refresh').addEventListener('click',refresh);
+${LINK_BATCH_CLIENT_JS}
 ${CATEGORY_CLIENT_JS}
 // Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
 async function bootstrap(){
@@ -2076,6 +2081,7 @@ async function bootstrap(){
     else if(selectedPage==='affiliate'&&selectedPlatform==='shopee')tasks.push(refreshShopeeAccount());
     else if(selectedPage==='platform'){
       const platform=selectedPlatform;
+      if(platform==='mercadolivre'&&selectedTab==='automation')tasks.push(refreshMLLinkBatches());
       tasks.push(refreshPlatformTargets().then(valid=>{
         if(valid&&platform==='shopee'&&selectedPlatform==='shopee')
           return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);

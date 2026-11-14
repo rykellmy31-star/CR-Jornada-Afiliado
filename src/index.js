@@ -1,4 +1,5 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
+import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
@@ -218,6 +219,12 @@ async function router(request, env) {
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
+  if(u.pathname==='/api/link-batches'&&method==='GET')return json(await listLinkBatches(env));
+  if(u.pathname==='/api/link-batches'&&method==='POST')return json(await createLinkBatch(env,await getBody(request)),201);
+  const singleBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)$/);
+  if(singleBatch&&method==='GET')return json(await readLinkBatch(env,singleBatch[1]));
+  const importBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)\/import$/);
+  if(importBatch&&method==='POST')return json(await importLinkBatch(env,importBatch[1],await getBody(request)));
   if(u.pathname==='/api/master'&&method==='GET')return json(await masterState(env));
   if(u.pathname==='/api/master'&&method==='POST')return json(await setMasterState(env,(await getBody(request)).enabled));
   if(u.pathname==='/api/categories'&&method==='GET')return json(await listCategories(env));
