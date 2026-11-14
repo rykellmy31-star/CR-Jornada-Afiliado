@@ -1,4 +1,4 @@
-import {CATEGORY_PAGE_HTML,CATEGORY_CSS} from './ui-categories.js';
+import {CATEGORY_PAGE_HTML,CATEGORY_CSS,CATEGORY_CLIENT_JS} from './ui-categories.js';
 export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
   <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><button id="master-toggle" type="button" class="pill master-toggle" aria-pressed="false">Ligar robô</button><span id="top-status" class="hidden">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
@@ -531,6 +531,7 @@ let currentChannelId=1;
 let currentWaGroupId=1;
 let selectedPlatform='mercadolivre';
 let selectedNetwork='telegram';
+let selectedPage='platform';
 const lastNetwork={mercadolivre:'telegram',shopee:'telegram'};
 const shopeeTarget={telegram:null,whatsapp:null};
 const NAV_KEY='cr-jornada-afiliados:navegacao:v1';
@@ -544,6 +545,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
+    if(['platform','categories','activity'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -560,7 +562,7 @@ function restoreNavigationState(){
 function rememberNavigation(){
   try{
     sessionStorage.setItem(NAV_KEY,JSON.stringify({
-      platform:selectedPlatform,network:selectedNetwork,
+      platform:selectedPlatform,network:selectedNetwork,page:selectedPage,
       lastNetwork:{mercadolivre:lastNetwork.mercadolivre,shopee:lastNetwork.shopee},
       channelId:currentChannelId,whatsappGroupId:currentWaGroupId,
       shopeeTelegram:shopeeTarget.telegram,shopeeWhatsApp:shopeeTarget.whatsapp
@@ -656,13 +658,13 @@ async function refreshShopeeAccount(){
 }
 function applyPlatformView(){
   const isML=selectedPlatform==='mercadolivre',telegram=selectedNetwork==='telegram';
-  // Shopee não compartilha canais, grupos ou bots com Mercado Livre.
+  // Exibe páginas secundárias sem misturar configurações de plataformas diferentes.
   $('shopee-account-panel').classList.toggle('hidden',isML);
   $('channels-panel').classList.toggle('hidden',!isML||!telegram);
   $('shopee-panel').classList.toggle('hidden',isML);
   document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram);
   document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram);
-  for(const cls of ['coupon-panel','list-panel','history']){
+  for(const cls of ['coupon-panel','list-panel']){
     document.querySelector('#dashboard > .'+cls).classList.toggle('hidden',!isML||!telegram);
   }
   $('wa-multichannel').classList.toggle('hidden',!isML||telegram);
@@ -675,6 +677,18 @@ function applyPlatformView(){
   $('platform-description').textContent=isML
     ?'Configure as publicações do Mercado Livre em cada canal ou grupo.'
     :'Escolha Telegram ou WhatsApp e configure onde serão publicadas as ofertas da Shopee.';
+  // A aba Atividade e a aba Categorias são páginas próprias do menu lateral.
+  for(const item of $('dashboard').children){
+    if(item.id==='platform-sidebar')continue;
+    if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
+    if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
+    if(selectedPage!=='platform')item.classList.add('hidden');
+    else if(item.id==='platform-context'||item.id==='notice'||item.classList.contains('intro')||item.tagName==='FOOTER')item.classList.remove('hidden');
+  }
+  for(const button of document.querySelectorAll('[data-panel]'))
+    button.classList.toggle('active',button.dataset.panel===selectedPage);
+  for(const button of document.querySelectorAll('[data-platform]'))
+    button.classList.toggle('active',selectedPage==='platform'&&button.dataset.platform===selectedPlatform);
   updatePlatformIdentity();
 }
 async function refreshPlatformTargets(){
@@ -811,6 +825,7 @@ async function refreshShopeeWaConnection(showFeedback=true){
 async function switchPlatform(platform,network){
   if(platform!=='mercadolivre'&&platform!=='shopee')return;
   selectedPlatform=platform;
+  selectedPage='platform';
   selectedNetwork=network||lastNetwork[platform]||'telegram';
   lastNetwork[platform]=selectedNetwork;
   rememberNavigation();
@@ -1372,6 +1387,15 @@ $('shopee-api-clear').addEventListener('click',async()=>{
 for(const button of document.querySelectorAll('[data-platform]')){
   button.addEventListener('click',()=>switchPlatform(button.dataset.platform));
 }
+for(const button of document.querySelectorAll('[data-panel]')){
+  button.addEventListener('click',async()=>{
+    selectedPage=button.dataset.panel;
+    rememberNavigation();
+    applyPlatformView();
+    if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
+    if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
+  });
+}
 for(const button of document.querySelectorAll('[data-network]')){
   button.addEventListener('click',()=>switchPlatform(selectedPlatform,button.dataset.network));
 }
@@ -1648,5 +1672,6 @@ $('offers-rows').addEventListener('click',async e=>{
   catch(err){notice(err.message,true);await refresh();}
 });
 $('refresh').addEventListener('click',refresh);
+${CATEGORY_CLIENT_JS}
 refresh();
 `;
