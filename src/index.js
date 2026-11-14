@@ -523,20 +523,21 @@ export default {
     catch (error) { console.error('CR Jornada Afiliados:', error?.message); return fail(error?.message || 'Falha interna.', error?.status || (error instanceof SyntaxError ? 400 : 500)); }
   },
   async scheduled(_controller, env, ctx) {
-    const job=(async()=>{
-      const master=await masterState(env);
-      if(master.enabled===false)return;
-      const configured={...env,MASTER_SCHEDULE_ENABLED:master.enabled};
-      await Promise.allSettled([
-        runScheduled(configured),
-        runWhatsAppScheduled(configured),
-        runMultiChannelScheduled(configured),
-        runManagedWhatsAppScheduled(configured),
-        runShopeeScheduled(configured)
-      ]);
-      if(master.enabled===true)await runCategoryRoutingScheduled(configured);
-    })();
-    ctx.waitUntil(job.catch(error=>console.error('Agendador de afiliados:',error?.message)));
+    const master=env.DB?masterState(env):Promise.resolve({enabled:null});
+    function start(fn,label,route=false){
+      ctx.waitUntil((async()=>{
+        const state=await master;
+        if(state.enabled===false)return;
+        const configured={...env,MASTER_SCHEDULE_ENABLED:state.enabled};
+        await fn(configured);
+        if(route&&state.enabled===true)await runCategoryRoutingScheduled(configured);
+      })().catch(error=>console.error(label+':',error?.message)));
+    }
+    start(runScheduled,'Telegram');
+    start(runWhatsAppScheduled,'WhatsApp');
+    start(runMultiChannelScheduled,'Telegram multicanal');
+    start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
+    start(runShopeeScheduled,'Shopee e categorias',true);
   }
 };
 export { runScheduled, router };
