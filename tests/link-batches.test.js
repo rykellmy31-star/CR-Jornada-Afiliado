@@ -101,10 +101,14 @@ test('interface possui duas etapas e não publica automaticamente ao copiar',()=
  for(const id of ['ml-link-batches','ml-batch-prepare','ml-batch-copy','ml-batch-step2','ml-batch-converted',
    'ml-batch-preview','ml-batch-pair-confirmation','ml-batch-import'])
    assert.ok(html.includes('id="'+id+'"'),id);
- assert.match(CSS,/data-view="mercadolivre-automation"/);
+ assert.match(CSS,/data-view="linkbatches"/);
  assert.match(CLIENT_JS,/navigator.clipboard.writeText/);
  assert.match(CLIENT_JS,/ml-batch-import/);
  assert.match(CLIENT_JS,/refreshMLLinkBatches/);
  assert.match(CLIENT_JS,/item\.id==='ml-link-batches'/);
- assert.match(CLIENT_JS,/selectedPage!=='platform'\|\|!isML\|\|!automation/);
+ assert.match(CLIENT_JS,/selectedPage!=='linkbatches'/);
+ assert.match(html,/data-panel="linkbatches"/);
+ assert.match(html,/Conversão de Link em Lote/);
+ assert.match(CLIENT_JS,/selectedPage==='linkbatches'\)tasks.push\(refreshMLLinkBatches\(\)\)/);
+ assert.doesNotMatch(CSS,/#dashboard:not\(\[data-view="mercadolivre-automation"\]\) > #ml-link-batches/);
 });
