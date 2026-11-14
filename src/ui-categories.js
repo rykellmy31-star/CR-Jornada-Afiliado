@@ -122,15 +122,21 @@ async function refreshCategories(){
 }
 async function loadMasterState(){
   const state=await call('/api/master');
+  if(!authenticated)return; // Não exibir botão para quem saiu enquanto a consulta estava pendente.
   masterActive=state.enabled;
   const button=$('master-toggle');
   button.textContent=masterActive===true?'Desligar robô':'Ligar robô';
   button.classList.toggle('running',masterActive===true);
   button.classList.toggle('paused',masterActive===false);
   button.setAttribute('aria-pressed',masterActive===true?'true':'false');
+  button.hidden=false;
+  button.disabled=false;
+  button.classList.remove('hidden');
 }
 $('master-toggle').addEventListener('click',async()=>{
-  const b=$('master-toggle'),target=masterActive!==true;
+  const b=$('master-toggle');
+  if(!authenticated||b.hidden||b.disabled)return;
+  const target=masterActive!==true;
   if(!target&&!confirm('Desligar os envios automáticos do Mercado Livre e da Shopee? As ofertas e configurações serão preservadas.'))return;
   b.disabled=true;
   try{
