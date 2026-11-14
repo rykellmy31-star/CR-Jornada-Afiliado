@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/index.js';
 import { ensureWhatsAppTables } from '../src/whatsapp.js';
+import { ensureShopeeTables } from '../src/shopee.js';
 import {
   ensureAutomationCenter,masterState,setMasterState,listCategories,createGroupCategory,
   saveCategoryRoutes,upsertProductCategory,classifyProduct,runCategoryRoutingScheduled
@@ -117,4 +118,55 @@ test('API mestre exige login; agendador desligado mantém cinco filas intactas',
       assert.equal(calls.length,0);
     }finally{globalThis.fetch=original;}
   }finally{DB.close();}
+});
+
+
+test('distribuição real simulada permite ML e Shopee no mesmo grupo sem duplicar links',async()=>{
+  const {env,DB}=setup();
+  const originalFetch=globalThis.fetch;
+  const sent=[];
+  try{
+    await ensureWhatsAppTables(env);
+    await ensureShopeeTables(env);
+    await ensureAutomationCenter(env);
+    const cat=await createGroupCategory(env,{name:'Ferramentas',keywords:'chave de fenda, chave de boca'});
+    DB.prepare("UPDATE whatsapp_settings SET instance_name='afiliados',group_jid='120363888999777@g.us',enabled=1,public_registered=1 WHERE id=1").run();
+    await saveCategoryRoutes(env,cat.id,{routes:[{
+      scope:'mercadolivre',network:'whatsapp',id:1,mercadolivre:true,shopee:true
+    }]});
+    const now=Math.floor(Date.now()/1000);
+    // Duas ofertas novas, originadas de plataformas distintas, publicadas após a autorização.
+    const ml=DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,'published',?)")
+      .bind('Chave de fenda profissional','https://meli.la/MLCAT1','Ferramentas',now,now+1).run();
+    DB.prepare("INSERT INTO offer_delivery_routing(offer_id,delivery_mode) VALUES(?,'telegram')").bind(ml.meta.last_row_id).run();
+    DB.prepare("INSERT INTO shopee_targets(network,target_id,category,enabled,permission_confirmed,created_at,updated_at) VALUES('whatsapp',1000,'Ferramentas',1,1,?,?)").bind(now,now).run();
+    const sh=DB.prepare("SELECT id FROM shopee_targets WHERE target_id=1000").first();
+    DB.prepare("INSERT INTO shopee_offers(destination_id,title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,'published',?)")
+      .bind(sh.id,'Chave de boca profissional','https://s.shopee.com.br/SHOCAT1','Ferramentas',now,now+1).run();
+    globalThis.fetch=async(url,opts={})=>{
+      const u=String(url);
+      if(u==='https://evo.example.com/group/fetchAllGroups/afiliados?getParticipants=false')
+        return Response.json([{id:'120363888999777@g.us',subject:'Ferramentas'}]);
+      if(u==='https://evo.example.com/message/sendText/afiliados'){
+        sent.push(JSON.parse(opts.body));
+        return Response.json({key:{id:'WA_CAT_'+sent.length}});
+      }
+      throw Error('URL externa não prevista: '+u);
+    };
+    env.EVOLUTION_API_URL='https://evo.example.com';
+    env.EVOLUTION_API_KEY='TEST_ONLY_KEY';
+    const first=await runCategoryRoutingScheduled({...env,MASTER_SCHEDULE_ENABLED:true});
+    assert.equal(first.results.length,1);
+    assert.equal(sent.length,1);
+    assert.match(sent[0].text,/Ferramentas/);
+    DB.prepare("UPDATE affiliate_category_pacing SET last_attempt_at=0").run();
+    const second=await runCategoryRoutingScheduled({...env,MASTER_SCHEDULE_ENABLED:true});
+    assert.equal(second.results.length,1);
+    assert.equal(sent.length,2);
+    assert.ok(sent.some(x=>x.text.includes('https://meli.la/MLCAT1')));
+    assert.ok(sent.some(x=>x.text.includes('https://s.shopee.com.br/SHOCAT1')));
+    const third=await runCategoryRoutingScheduled({...env,MASTER_SCHEDULE_ENABLED:true});
+    assert.equal(third.results.length,0);
+    assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM affiliate_category_deliveries WHERE status='sent'").first().total,2);
+  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
