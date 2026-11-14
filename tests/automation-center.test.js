@@ -6,7 +6,7 @@ import worker from '../src/index.js';
 import { ensureWhatsAppTables } from '../src/whatsapp.js';
 import { ensureShopeeTables } from '../src/shopee.js';
 import {
-  ensureAutomationCenter,masterState,setMasterState,listCategories,createGroupCategory,
+  ensureAutomationCenter,masterState,setMasterState,listCategories,createGroupCategory,STARTER_GROUP_CATEGORIES,
   saveCategoryRoutes,upsertProductCategory,classifyProduct,runCategoryRoutingScheduled
 } from '../src/automation-center.js';
 import { renderPage,CLIENT_JS } from '../src/ui.js';
@@ -22,6 +22,36 @@ function setup(){
   };},close(){db.close();}};
   return {DB,db,env:{DB,ADMIN_PASSWORD:'fake_password_for_tests',SESSION_SECRET:'fake_testing_secret_2026_very_long'}};
 }
+
+test('cinco categorias iniciais são cadastradas sem duplicar nem sobrescrever configurações',async()=>{
+  const {env,DB}=setup();
+  try{
+    await ensureAutomationCenter(env);
+    const first=await listCategories(env);
+    assert.equal(STARTER_GROUP_CATEGORIES.length,5);
+    for(const preset of STARTER_GROUP_CATEGORIES){
+      assert.ok(preset.keywords.length>40&&preset.keywords.length<=350);
+      const row=first.groups.find(g=>g.name===preset.name);
+      assert.ok(row,'Categoria inicial ausente: '+preset.name);
+      assert.equal(row.keywords,preset.keywords);
+      assert.equal(row.enabled,1);
+    }
+    assert.equal(first.routes.length,0,'Criar categorias não autoriza envio a destinos');
+    assert.equal((await masterState(env)).enabled,null,'Não liga os robôs automaticamente');
+    const custom=first.groups.find(g=>g.name==='Casa e Utilidades');
+    DB.prepare('UPDATE affiliate_group_categories SET keywords=?,enabled=0 WHERE id=?').bind('palavra personalizada',custom.id).run();
+    const empty=first.groups.find(g=>g.name==='Moda e Acessórios');
+    DB.prepare('UPDATE affiliate_group_categories SET keywords=? WHERE id=?').bind('',empty.id).run();
+    await ensureAutomationCenter(env);
+    const second=await listCategories(env);
+    assert.equal(second.groups.filter(g=>STARTER_GROUP_CATEGORIES.some(p=>p.name===g.name)).length,5);
+    assert.equal(second.groups.find(g=>g.name===custom.name).keywords,'palavra personalizada');
+    assert.equal(second.groups.find(g=>g.name===custom.name).enabled,0);
+    assert.equal(second.groups.find(g=>g.name===empty.name).keywords,STARTER_GROUP_CATEGORIES.find(p=>p.name===empty.name).keywords);
+    const selected=classifyProduct('Furadeira parafusadeira 20v','Geral',second.groups);
+    assert.equal(selected.category.name,'Ferramentas e Peças Automotivas');
+  }finally{DB.close();}
+});
 
 test('controle geral começa legado e permite ligar/desligar sem apagar dados',async()=>{
   const {env,DB}=setup();
