@@ -72,22 +72,23 @@ export function extractProductImage(html) {
 }
 
 async function readLimitedHtml(response) {
-  const declaredSize = Number(response.headers.get('content-length') || 0);
-  if (declaredSize > MAX_HTML_BYTES) return '';
+  // O HTML do anúncio pode superar 1 MB, mas o og:image costuma vir no <head>.
+  // Lê só o início da resposta em vez de descartar a página pelo Content-Length total.
   if (!response.body?.getReader) return (await response.text()).slice(0, MAX_HTML_BYTES);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let text = ''; let size = 0;
   try {
-    while (size <= MAX_HTML_BYTES) {
+    while (size < MAX_HTML_BYTES) {
       const { done, value } = await reader.read();
       if (done) return text + decoder.decode();
-      size += value.byteLength;
-      if (size > MAX_HTML_BYTES) break;
-      text += decoder.decode(value, { stream: true });
+      const take = Math.min(value.byteLength, MAX_HTML_BYTES - size);
+      text += decoder.decode(value.subarray(0, take), { stream: true });
+      size += take;
+      if (take < value.byteLength) break;
     }
   } finally { try { await reader.cancel(); } catch {} }
-  return text;
+  return text + decoder.decode();
 }
 
 // A CDN do Mercado Livre documenta -F como variante de maior resolução.
