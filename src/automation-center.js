@@ -21,25 +21,34 @@ const LEGACY_AUTOMOTIVE_KEYWORDS="chave de fenda, chave de boca, chave catraca, 
 export const STARTER_GROUP_CATEGORIES=[
   {
     "name": "Casa e Utilidades",
-    "keywords": "organizador de cozinha, organizador de gaveta, organizador de armário, pote hermético, kit potes, jogo de panelas, frigideira, jogo de cama, lençol, travesseiro, toalha de banho, tapete de banheiro, luminária, varal, mop giratório, escorredor de louça, garrafa térmica, dispenser de detergente"
+    "keywords": "organizador de cozinha, organizador de gaveta, organizador de armário, pote hermético, kit potes, jogo de panelas, frigideira, jogo de cama, lençol, travesseiro, toalha de banho, tapete de banheiro, luminária, varal, mop giratório, escorredor de louça, garrafa térmica, dispenser de detergente, jogo de talheres, jogo de copos, panela de pressão, edredom casal, cortina blackout, porta temperos, lixeira inox, lixeira de cozinha, kit banheiro, prateleira adesiva, tapete antiderrapante, pote de vidro, forma de bolo, toalha de mesa, escova sanitária, varal de chão, cesto de roupa, kit organizador"
   },
   {
     "name": "Beleza e Cuidados Pessoais",
-    "keywords": "perfume feminino, perfume masculino, body splash, hidratante corporal, protetor solar, sérum facial, vitamina c facial, shampoo, condicionador, máscara capilar, óleo capilar, secador de cabelo, chapinha, escova secadora, barbeador elétrico, aparador de pelos, kit maquiagem, batom, esmalte, cílios postiços"
+    "keywords": "perfume feminino, perfume masculino, body splash, hidratante corporal, protetor solar, sérum facial, vitamina c facial, shampoo, condicionador, máscara capilar, óleo capilar, secador de cabelo, chapinha, escova secadora, barbeador elétrico, aparador de pelos, kit maquiagem, batom, esmalte, cílios postiços, água micelar, sabonete facial, esfoliante facial, máscara facial, delineador, base líquida, pó compacto, corretivo maquiagem, creme para pentear, kit skincare, protetor térmico capilar, hidratante labial, shampoo anticaspa, óleo de argan, escova modeladora, perfume infantil, fixador de maquiagem"
   },
   {
     "name": "Moda e Acessórios",
-    "keywords": "vestido feminino, blusa feminina, camiseta masculina, calça jeans, legging, roupa fitness, conjunto feminino, moletom, jaqueta, tênis feminino, tênis masculino, sandália feminina, chinelo, bolsa feminina, mochila, carteira masculina, relógio feminino, óculos de sol, boné, roupa infantil, lingerie"
+    "keywords": "vestido feminino, blusa feminina, camiseta masculina, calça jeans, legging, roupa fitness, conjunto feminino, moletom, jaqueta, tênis feminino, tênis masculino, sandália feminina, chinelo, bolsa feminina, mochila, carteira masculina, relógio feminino, óculos de sol, boné, roupa infantil, lingerie, vestido midi, saia jeans, camisa polo, bermuda masculina, short feminino, calça cargo, sapato social, bota feminina, bolsa transversal, cinto masculino, meia esportiva, pijama feminino, biquíni, sunga, conjunto infantil, body bebê, camiseta oversized, tênis corrida"
   },
   {
     "name": "Eletrônicos e Eletrodomésticos",
-    "keywords": "fone bluetooth, fone de ouvido, caixa de som, smartwatch, relógio inteligente, carregador rápido, cabo usb, power bank, suporte para celular, teclado gamer, mouse gamer, webcam, monitor gamer, roteador wifi, câmera de segurança, lâmpada inteligente, air fryer, cafeteira, liquidificador, aspirador robô"
+    "keywords": "fone bluetooth, fone de ouvido, caixa de som, smartwatch, relógio inteligente, carregador rápido, cabo usb, power bank, suporte para celular, teclado gamer, mouse gamer, webcam, monitor gamer, roteador wifi, câmera de segurança, lâmpada inteligente, air fryer, cafeteira, liquidificador, aspirador robô, smart tv, tv 4k, tablet, notebook, ssd nvme, memória ram, placa de vídeo, microfone sem fio, ventilador, micro-ondas, forno elétrico, ferro de passar, máquina de lavar, geladeira, cooktop, projetor portátil, impressora, controle bluetooth, headset gamer"
   },
   {
     "name": "Ferramentas e Peças Automotivas",
-    "keywords": "chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor, lavadora de alta pressão, lavadora wap, lava jato automotivo, shampoo automotivo, cera automotiva, limpa pneus, desengraxante automotivo, snow foam, canhão de espuma, pistola de lavagem, pano microfibra automotivo, aspirador automotivo, politriz automotiva, kit lavagem automotiva"
+    "keywords": "chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor, lavadora de alta pressão, lavadora wap, lava jato automotivo, shampoo automotivo, cera automotiva, limpa pneus, desengraxante automotivo, snow foam, canhão de espuma, pistola de lavagem, pano microfibra automotivo, aspirador automotivo, politriz automotiva, kit lavagem automotiva, chave de impacto, jogo de brocas, serra circular, alicate universal, martelo unha, trena laser, filtro de óleo, kit polimento, limpa estofado automotivo, pretinho pneu, escova detalhamento"
   }
 ];
+// Presets de antes da ampliação: migrar SOMENTE se o D1 ainda guardar exatamente esses textos.
+// Categorias editadas manualmente, inclusive desativadas, conservam suas configurações.
+export const PREVIOUS_STARTER_KEYWORDS=Object.freeze({
+  "Casa e Utilidades": "organizador de cozinha, organizador de gaveta, organizador de armário, pote hermético, kit potes, jogo de panelas, frigideira, jogo de cama, lençol, travesseiro, toalha de banho, tapete de banheiro, luminária, varal, mop giratório, escorredor de louça, garrafa térmica, dispenser de detergente",
+  "Beleza e Cuidados Pessoais": "perfume feminino, perfume masculino, body splash, hidratante corporal, protetor solar, sérum facial, vitamina c facial, shampoo, condicionador, máscara capilar, óleo capilar, secador de cabelo, chapinha, escova secadora, barbeador elétrico, aparador de pelos, kit maquiagem, batom, esmalte, cílios postiços",
+  "Moda e Acessórios": "vestido feminino, blusa feminina, camiseta masculina, calça jeans, legging, roupa fitness, conjunto feminino, moletom, jaqueta, tênis feminino, tênis masculino, sandália feminina, chinelo, bolsa feminina, mochila, carteira masculina, relógio feminino, óculos de sol, boné, roupa infantil, lingerie",
+  "Eletrônicos e Eletrodomésticos": "fone bluetooth, fone de ouvido, caixa de som, smartwatch, relógio inteligente, carregador rápido, cabo usb, power bank, suporte para celular, teclado gamer, mouse gamer, webcam, monitor gamer, roteador wifi, câmera de segurança, lâmpada inteligente, air fryer, cafeteira, liquidificador, aspirador robô",
+  "Ferramentas e Peças Automotivas": "chave de fenda, chave de boca, chave catraca, jogo de soquetes, kit ferramentas, furadeira, parafusadeira, serra tico tico, lixadeira, esmerilhadeira, compressor de ar, macaco hidráulico, calibrador de pneus, tapete automotivo, palheta limpador, retrovisor moto, capacete moto, bateria automotiva, lâmpada automotiva, óleo motor, lavadora de alta pressão, lavadora wap, lava jato automotivo, shampoo automotivo, cera automotiva, limpa pneus, desengraxante automotivo, snow foam, canhão de espuma, pistola de lavagem, pano microfibra automotivo, aspirador automotivo, politriz automotiva, kit lavagem automotiva"
+});
 const STARTER_CATEGORY_NAMES=new Set(STARTER_GROUP_CATEGORIES.map(c=>c.name.toLocaleLowerCase('pt-BR')));
 async function seedStarterGroupCategories(env){
   const names=STARTER_GROUP_CATEGORIES.map(c=>c.name);
@@ -53,10 +62,16 @@ async function seedStarterGroupCategories(env){
     }else if(!String(current.keywords||'').trim()){
       await env.DB.prepare("UPDATE affiliate_group_categories SET keywords=?,updated_at=? WHERE name=? AND trim(keywords)=''").bind(c.keywords,now,current.name).run();
     }
-    else if(c.name==='Ferramentas e Peças Automotivas'&&current.keywords===LEGACY_AUTOMOTIVE_KEYWORDS){
-      // Atualiza apenas o preset intocado anterior; nunca troca palavras-chave escolhidas pelo usuário.
-      await env.DB.prepare('UPDATE affiliate_group_categories SET keywords=?,updated_at=? WHERE name=? AND keywords=?')
-        .bind(c.keywords,now,current.name,LEGACY_AUTOMOTIVE_KEYWORDS).run();
+    else {
+      // Atualiza presets oficiais intactos (incluindo o primeiro preset automotivo).
+      // Não toca em palavras-chave personalizadas, categoria desativada, destino ou automação.
+      const fromPreset=PREVIOUS_STARTER_KEYWORDS[c.name];
+      const original=current.keywords===fromPreset?fromPreset:
+        (c.name==='Ferramentas e Peças Automotivas'&&current.keywords===LEGACY_AUTOMOTIVE_KEYWORDS?LEGACY_AUTOMOTIVE_KEYWORDS:null);
+      if(original){
+        await env.DB.prepare('UPDATE affiliate_group_categories SET keywords=?,updated_at=? WHERE name=? AND keywords=?')
+          .bind(c.keywords,now,current.name,original).run();
+      }
     }
   }
 }

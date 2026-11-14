@@ -520,7 +520,7 @@ export function renderPage() {
             <button class="outline" type="submit">Salvar cupom</button>
           </form>
       </section>
-      <section class="card coupon-panel">
+      <section class="card coupon-panel hidden" id="ml-coupon-panel">
         <div class="section-header"><div><h2>🎟️ Cupons • Mercado Livre</h2><p>Cupons separados da Shopee, vinculados a ofertas ainda na fila.</p></div></div>
         <p class="hint" id="ml-coupon-target-hint">Para os canais Telegram, selecione acima o canal desejado. Os cupons dos grupos WhatsApp adicionais são cadastrados na área de cada grupo.</p>
         <p class="hint">Este painel não pesquisa contas de compradores e não testa cupons no checkout. Cadastre apenas cupons e condições que você conferiu na fonte oficial.</p>
@@ -723,7 +723,7 @@ function applyPlatformView(){
     :'No WhatsApp, escolha seu grupo acima. Para o principal, cupons de ofertas compartilhadas são vinculados à fila principal do Mercado Livre; ofertas exclusivas diretas não possuem cupons nesta versão.';
   document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram||coupons);
   document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram||coupons);
-  document.querySelector('#dashboard > .coupon-panel').classList.toggle('hidden',!isML||!coupons||(!telegram&&currentWaGroupId!==1));
+  $('ml-coupon-panel').classList.toggle('hidden',!isML||!coupons||(!telegram&&currentWaGroupId!==1));
   document.querySelector('#dashboard > .list-panel').classList.toggle('hidden',!isML||!telegram||coupons);
   $('wa-multichannel').classList.toggle('hidden',!isML||telegram||coupons);
   $('whatsapp').classList.toggle('hidden',!isML||telegram||coupons||currentWaGroupId!==1);
