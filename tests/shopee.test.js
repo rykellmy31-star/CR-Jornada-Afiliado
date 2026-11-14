@@ -92,7 +92,7 @@ test('Shopee tem catálogo de destinos Telegram e WhatsApp sem alterar dados ori
 test('Shopee não ativa destino sem permissão nem sem ativar o Telegram/WhatsApp original',async()=>{
   const DB=makeDb(),env=makeEnv(DB);
   try{
-    await assert.rejects(saveShopeeTarget(env,defaultConfig),/Ative e autorize/);
+    await assert.rejects(saveShopeeTarget(env,defaultConfig),/Confirme a autorização/);
     activateMainTelegram(DB);
     await assert.rejects(saveShopeeTarget(env,{...defaultConfig,permission_confirmed:false}),/Confirme a autorização/);
     assert.equal((await saveShopeeTarget(env,defaultConfig)).ok,true);
@@ -145,8 +145,8 @@ test('Shopee permite configurar grupos WhatsApp e canais extras com categorias i
     assert.equal((await shopeeState(env,'telegram',channel.id)).offers[0].category,'Moda');
     const result=await runShopeeScheduled(env);
     assert.equal(result.results.length,2);
-    assert.deepEqual(sent.map(x=>x.network),['telegram','whatsapp']);
-    assert.deepEqual(sent.map(x=>x.chat),['@shopeemodacr',GROUP]);
+    assert.deepEqual(sent.map(x=>x.network),['whatsapp','telegram']);
+    assert.deepEqual(sent.map(x=>x.chat),[GROUP,'@shopeemodacr']);
   }finally{globalThis.fetch=actualFetch;DB.close();}
 });
 test('Shopee rejeita categoria errada, duplicata e preserva suas ofertas de canal separado',async()=>{
