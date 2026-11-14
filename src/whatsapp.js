@@ -425,7 +425,7 @@ export async function runWhatsAppScheduled(env){
   if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
   await ensureWhatsAppTables(env);
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
-  if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
+  if((!cfg.enabled&&env.MASTER_SCHEDULE_ENABLED!==true)||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
   await ensureCouponTable(env);
   const cat=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
   const [mirrored,direct]=await Promise.all([
