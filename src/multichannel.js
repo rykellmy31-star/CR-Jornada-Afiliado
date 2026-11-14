@@ -1,5 +1,6 @@
 import { normalizeOffer, shouldSend, localTimeParts, telegramPayload } from './logic.js';
 import { findProductImage } from './images.js';
+import { resolveProductImage } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
 
 // Tabelas ADITIVAS: o canal 1 continua usando settings/offers/offer_coupons/logs.
@@ -327,10 +328,10 @@ export async function requeueChannelOffer(env,id,offerId){
   await log(env,c.id,'manual_requeue','Reenfileiramento após conferência.',Number(offerId));
   return {ok:true};
 }
-async function sendOfferWithImage(token,chat,offer){
+async function sendOfferWithImage(env,token,chat,offer){
   const payload=telegramPayload(offer,chat);
   let photo=null;
-  try{photo=await findProductImage(offer.affiliate_url);}
+  try{photo=await resolveProductImage(env,offer.affiliate_url,findProductImage);}
   catch(err){console.warn('Imagem indisponível para novo canal:',offer.id,String(err?.message||'').slice(0,80));}
   if(photo){
     try{
@@ -354,7 +355,7 @@ export async function publishChannelOffer(env,id,offerId){
   const claim=await env.DB.prepare("UPDATE channel_offers SET status='sending',last_error=NULL WHERE id=? AND channel_id=? AND status='ready'").bind(offer.id,c.id).run();
   if(claim.meta?.changes!==1)throw bad('Oferta já publicada ou em revisão.',409);
   try{
-    const result=await sendOfferWithImage(token,c.telegram_chat_id,offer);
+    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,offer);
     const now=epoch(),day=localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE channel_offers SET status='published',published_at=?,published_day=?,telegram_message_id=? WHERE id=? AND channel_id=? AND status='sending'")
       .bind(now,day,result.message.message_id,offer.id,c.id).run();
