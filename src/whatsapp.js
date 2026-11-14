@@ -422,6 +422,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source){
 }
 export async function runWhatsAppScheduled(env){
   if(!env.DB)return {skipped:'db'};
+  if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
   await ensureWhatsAppTables(env);
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
