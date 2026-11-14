@@ -1,5 +1,5 @@
 import {classifyProduct,ensureAutomationCenter} from './automation-center.js';
-import {createLinkBatch,productId,validateSourceUrl} from './link-batches.js';
+import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './link-batches.js';
 import {listWhatsAppGroups} from './whatsapp.js';
 import {ensureRepeatMeta,extractOfferPriceCents,canRequeueProduct} from './monitor-repeat-policy.js';
 
@@ -16,7 +16,7 @@ const epoch=()=>Math.floor(Date.now()/1000);
 const GROUP=/^\d{6,30}(?:-\d{6,20})?@g\.us$/;
 const INSTANCE=/^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/;
 const HOSTS=new Set(['www.mercadolivre.com.br','mercadolivre.com.br','produto.mercadolivre.com.br']);
-export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureRepeatMeta(env);}
+export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
  return [...new Set((text.slice(0,8000).match(/https:\/\/[^\s<>"'()[\]{}]+/gi)||[])
