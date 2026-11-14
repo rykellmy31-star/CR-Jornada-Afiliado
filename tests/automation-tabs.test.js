@@ -37,3 +37,15 @@ test('Fila WhatsApp existente é reaproveitada na aba Automação',()=>{
   assert.match(CLIENT_JS,/appendChild\(waHistory\)/);
   assert.match(CSS,/mercadolivre-whatsapp[^\n]+#wa-direct-card/);
 });
+
+test('Grupos adicionais mantêm seus cadastros e controles em Automação',()=>{
+  const html=renderPage();
+  for(const id of ['auto-wa-multi','auto-wa-multi-select','auto-wa-multi-settings-form',
+    'auto-wa-multi-interval','auto-wa-multi-daily','auto-wa-multi-start','auto-wa-multi-end',
+    'auto-wa-multi-offer-content','wa-multi-queue-table']){
+    assert.ok(html.includes('id="'+id+'"'),id+' precisa estar disponível');
+  }
+  assert.match(CLIENT_JS,/appendChild\(element\)/);
+  assert.match(CLIENT_JS,/auto-wa-multi-settings-form/);
+  assert.match(CLIENT_JS,/refreshManagedWhatsApp\(\)/);
+});
