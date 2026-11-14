@@ -623,12 +623,13 @@ function updatePlatformIdentity(){
   $('top-status').textContent=sh
     ?(shoAccountState?.api_status==='verified'?'API Shopee conectada':'API Shopee não conectada')
     :mlTopStatus;
+  const selectedOption=$('platform-target-select').selectedOptions?.[0];
+  const dest=selectedOption?.dataset.name||'';
+  const type=selectedNetwork==='whatsapp'?'WhatsApp':'Telegram';
   if(sh&&!Number.isInteger(shopeeTarget[selectedNetwork]))
-    $('channel-label').textContent='Shopee: nenhum '+(selectedNetwork==='telegram'?'canal':'grupo')+' cadastrado';
-  else if(!sh){
-    const channel=$('telegram_chat_id').value||'@achadinhosmlcr';
-    $('channel-label').textContent='Destino Telegram: '+channel;
-  }
+    $('channel-label').textContent='Destino '+type+': nenhum '+(selectedNetwork==='telegram'?'canal':'grupo')+' selecionado';
+  else if(dest)$('channel-label').textContent='Destino '+type+': '+dest;
+  else $('channel-label').textContent='Destino '+type+': carregando...';
 }
 async function refreshShopeeAccount(){
   if(selectedPlatform!=='shopee')return;
@@ -712,7 +713,7 @@ async function refreshPlatformTargets(){
   }
   const select=$('platform-target-select');
   select.innerHTML=entries.map(e=>
-    '<option value="'+Number(e.id)+'">'+escape(e.name)+' • '+escape(e.category)+
+    '<option value="'+Number(e.id)+'" data-name="'+escape(e.name)+'">'+escape(e.name)+' • '+escape(e.category)+
       (selectedPlatform==='shopee'?(e.shopee_enabled?' • Shopee ativo':e.configured?' • Shopee configurado':' • Novo destino'):'')+
       '</option>').join('');
   if(!entries.some(e=>e.id===selected)){
@@ -724,6 +725,7 @@ async function refreshPlatformTargets(){
   select.value=selected==null?'':String(selected);
   select.disabled=entries.length===0;
   rememberNavigation();
+  updatePlatformIdentity();
   if(selectedPlatform==='shopee'){
     $('shopee-create-toggle').textContent=selectedNetwork==='telegram'?'+ Adicionar canal Telegram Shopee':'+ Adicionar grupo WhatsApp Shopee';
     $('shopee-create-heading').textContent=selectedNetwork==='telegram'?'Adicionar canal Telegram exclusivo da Shopee':'Adicionar grupo WhatsApp exclusivo da Shopee';
