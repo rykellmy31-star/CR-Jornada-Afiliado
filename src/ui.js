@@ -592,7 +592,7 @@ export const CSS = `
 .automation-title{margin:4px 0 18px}.automation-title h1{margin:8px 0}.automation-title p{max-width:730px;font-size:13px}
 #automation-page>.automation-box,#automation-page>#auto-ml-offer>.card,#automation-page>#auto-wa-offers>.card,#automation-page>#auto-shopee-offers>#shopee-content{margin-bottom:17px}
 .automation-box,.affiliate-page{padding:22px}.automation-box>h2{margin-bottom:17px}.automation-box>.actions{margin-top:16px}.automation-box>.hint{margin-top:9px}
-#auto-telegram-controls .settings-subsection{margin-top:0}#auto-wa-main-fields label{margin-bottom:14px}
+#auto-ml-offer>.add-offer{padding:22px;margin-bottom:16px}#auto-telegram-controls .settings-subsection{margin-top:0}#auto-wa-main-fields label{margin-bottom:14px}
 #auto-wa-main-toggle,#auto-wa-extra-toggle{margin-top:12px}#auto-ml-metrics .metric-grid{margin-bottom:16px}
 #auto-ml-history .list-panel{margin-top:14px;padding:22px}
 .affiliate-page{display:flex;flex-direction:column;gap:16px}.affiliate-page h1{font-size:27px}.affiliate-page p{max-width:760px}
@@ -608,6 +608,8 @@ const $ = id => document.getElementById(id);
 (function mountAutomationPanels(){
   const move=(selector,target)=>{const node=document.querySelector(selector);if(!node||!$(target))throw Error('Painel de automação ausente: '+selector);$(target).appendChild(node);return node;};
   const moveLabel=(id,formId,target)=>{const input=$(id);const label=input&&input.closest('label');if(!label)throw Error('Controle não encontrado: '+id);input.setAttribute('form',formId);$(target).appendChild(label);};
+  // O seletor de plataforma e destino deve aparecer antes dos controles da automação.
+  $('platform-context').after($('automation-page'),$('affiliate-page'));
   const telegram=move('.settings-subsection.automation-section','auto-telegram-controls');
   for(const input of telegram.querySelectorAll('input,select,textarea'))input.setAttribute('form','settings-form');
   move('.add-offer','auto-ml-offer');
