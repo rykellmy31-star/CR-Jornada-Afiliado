@@ -202,19 +202,19 @@ export async function listCategoryDestinations(env){
   const safeAll=async sql=>{try{return await env.DB.prepare(sql).all();}catch{return {results:[]};}};
   const safeFirst=async sql=>{try{return await env.DB.prepare(sql).first();}catch{return null;}};
   const raw=await Promise.all([
-    safeAll('SELECT id,name,telegram_chat_id,telegram_enabled,channel_registered FROM telegram_channels ORDER BY id'),
+    safeAll('SELECT id,name,telegram_chat_id,telegram_enabled,automation_enabled,channel_registered FROM telegram_channels ORDER BY id'),
     safeAll('SELECT id,name,group_jid,enabled,public_registered FROM whatsapp_groups ORDER BY id'),
     safeAll('SELECT id,name,telegram_chat_id,enabled,channel_registered FROM shopee_telegram_channels ORDER BY id'),
     safeAll('SELECT id,name,group_jid,enabled,public_registered FROM shopee_whatsapp_groups ORDER BY id'),
-    env.DB.prepare('SELECT telegram_chat_id,telegram_enabled,channel_registered FROM settings WHERE id=1').first(),
+    env.DB.prepare('SELECT telegram_chat_id,telegram_enabled,automation_enabled,channel_registered FROM settings WHERE id=1').first(),
     safeFirst('SELECT group_jid,enabled,public_registered FROM whatsapp_settings WHERE id=1')
   ]);
   const [tele,wa,st,sw,primaryTelegram,primaryWhatsapp]=raw;
   const destinations=[];
   const add=(scope,network,id,name,active)=>destinations.push({scope,network,id,name,active:!!active});
-  add('mercadolivre','telegram',1,primaryTelegram?.telegram_chat_id||'Canal principal',primaryTelegram?.telegram_enabled&&primaryTelegram?.channel_registered);
+  add('mercadolivre','telegram',1,primaryTelegram?.telegram_chat_id||'Canal principal',primaryTelegram?.automation_enabled&&primaryTelegram?.telegram_enabled&&primaryTelegram?.channel_registered);
   if(primaryWhatsapp?.group_jid)add('mercadolivre','whatsapp',1,'WhatsApp principal',primaryWhatsapp.enabled&&primaryWhatsapp.public_registered);
-  for(const x of tele.results)add('mercadolivre','telegram',x.id,x.name,x.telegram_enabled&&x.channel_registered);
+  for(const x of tele.results)add('mercadolivre','telegram',x.id,x.name,x.automation_enabled&&x.telegram_enabled&&x.channel_registered);
   for(const x of wa.results)if(x.group_jid)add('mercadolivre','whatsapp',x.id,x.name,x.enabled&&x.public_registered);
   for(const x of st.results)add('shopee','telegram',x.id,x.name,x.enabled&&x.channel_registered);
   for(const x of sw.results)if(x.group_jid)add('shopee','whatsapp',x.id,x.name,x.enabled&&x.public_registered);
