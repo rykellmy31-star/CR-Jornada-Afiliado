@@ -25,3 +25,12 @@ test('interface compartilha o contexto de canal entre configurações, ofertas, 
   assert.match(CLIENT_JS,/\/api\/channels\/'\+currentChannelId\+'\/test/);
   assert.match(CLIENT_JS,/bot_token/);
 });
+
+test('painel mobile conserva escala sem zoom por pinça ou foco de campos',()=>{
+  const html=renderPage();
+  assert.match(html,/name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/);
+  assert.match(CLIENT_JS,/document\.addEventListener\('gesturestart'/);
+  assert.match(CLIENT_JS,/document\.addEventListener\('gesturechange'/);
+  assert.match(CLIENT_JS,/event\.touches\.length>1/);
+  assert.match(CLIENT_JS,/passive:false/);
+});
