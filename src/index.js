@@ -2,7 +2,7 @@ import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
-import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp } from './whatsapp.js';
+import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
 import {
  listManagedWhatsAppGroups,createManagedWhatsAppGroup,getManagedWhatsAppGroupState,
@@ -354,27 +354,73 @@ async function router(request, env) {
     try{return json(await retryWhatsAppDelivery(env,(await getBody(request)).offer_id));}
     catch(error){return fail(String(error.message||error));}
   }
-  if (u.pathname === '/api/offers' && method === 'POST') {
+  if ((u.pathname === '/api/offers' || u.pathname === '/api/whatsapp/offers') && method === 'POST') {
+    const body=await getBody(request);
+    const mode=body.delivery_mode===undefined
+      ?(u.pathname==='/api/whatsapp/offers'?'whatsapp':'both')
+      :body.delivery_mode;
+    if(!['telegram','whatsapp','both'].includes(mode))
+      return fail('Escolha Telegram, WhatsApp ou ambos como destino da oferta.',400);
+    if(u.pathname==='/api/whatsapp/offers'&&body.delivery_mode===undefined)
+      body.delivery_mode='whatsapp';
     let data;
-    try { data = normalizeOffer(await getBody(request)); }
+    try { data = normalizeOffer(body); }
     catch (error) { return fail(error.message, 400); }
-    const now = Math.floor(Date.now() / 1000);
-    // O mesmo link não entra em canais diferentes sem decisão explícita.
-    const primaryCategory=await getPrimaryCategory(env);
-    if(!categoryMatches(data.category,primaryCategory))
-      return fail('Este canal só aceita ofertas da categoria '+primaryCategory+'.');
+    await ensureWhatsAppTables(env);
     await ensureMultiChannelTables(env);
-    const other=await env.DB.prepare('SELECT channel_id FROM channel_offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
-    if(other)return fail('Este link já pertence a outro canal. Use ofertas diferentes em cada canal.',409);
-    try {
-      const result = await env.DB.prepare('INSERT INTO offers (title,affiliate_url,category,price_cents,old_price_cents,created_at) VALUES (?,?,?,?,?,?)')
-        .bind(data.title, data.affiliate_url, data.category, data.price_cents, data.old_price_cents, now).run();
-      await log(env, 'offer_added', data.title, result.meta?.last_row_id || null);
-    } catch (err) {
-      if (/UNIQUE/i.test(err.message || '')) return fail('Este link já está cadastrado.', 409);
-      throw err;
+    const waConfig=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
+    // Requisições antigas sem delivery_mode preservam o fluxo preexistente:
+    // elas continuam podendo registrar ofertas antes de ativar o WhatsApp.
+    const explicit=body.delivery_mode!==undefined;
+    if(mode!=='telegram'&&(explicit||u.pathname==='/api/whatsapp/offers')){
+      if(!waConfig?.group_jid||!waConfig?.instance_name)
+        return fail('Escolha e salve primeiro o grupo principal do WhatsApp.',400);
+      const waCategory=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
+      if(!categoryMatches(data.category,waCategory))
+        return fail('O WhatsApp principal só aceita ofertas da categoria '+waCategory+'.',400);
+      if(mode==='both'&&(!waConfig.enabled||!waConfig.public_registered))
+        return fail('Ative e autorize o WhatsApp principal antes de selecionar os dois destinos.',400);
     }
-    return json({ ok: true }, 201);
+    if(mode!=='whatsapp'){
+      const telegramCategory=await getPrimaryCategory(env);
+      if(!categoryMatches(data.category,telegramCategory))
+        return fail('O Telegram principal só aceita ofertas da categoria '+telegramCategory+'.',400);
+    }
+    const extra=await env.DB.prepare('SELECT channel_id FROM channel_offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
+    if(extra)return fail('Este link já pertence a outro canal. Use ofertas diferentes em cada canal.',409);
+    if(mode==='whatsapp'){
+      const existing=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
+      if(existing)return fail('Este link já está no Telegram. Para publicar nos dois destinos, escolha "Telegram e WhatsApp" no cadastro de uma nova oferta.',409);
+      try{return json(await addDirectWhatsAppOffer(env,body),201);}
+      catch(error){return fail(error.message,error.status||400);}
+    }
+    const direct=await env.DB.prepare('SELECT id FROM whatsapp_direct_offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
+    if(direct)return fail('Este link já pertence à fila exclusiva do WhatsApp principal.',409);
+    const now = Math.floor(Date.now()/1000);
+    let id;
+    try {
+      // Cria primeiro em revisão: se a gravação do destino falhar, nunca
+      // publica por engano no Telegram nem espelha no WhatsApp.
+      const result=await env.DB.prepare("INSERT INTO offers (title,affiliate_url,category,price_cents,old_price_cents,created_at,status) VALUES (?,?,?,?,?,?,'needs_review')")
+        .bind(data.title,data.affiliate_url,data.category,data.price_cents,data.old_price_cents,now).run();
+      id=Number(result.meta?.last_row_id);
+      await setOfferDeliveryMode(env,id,mode);
+      await env.DB.prepare("UPDATE offers SET status='ready' WHERE id=? AND status='needs_review'").bind(id).run();
+      await log(env,'offer_added',data.title+' • '+(mode==='both'?'Telegram e WhatsApp':'Somente Telegram'),id);
+    } catch (error) {
+      if(/UNIQUE/i.test(error.message||''))return fail('Este link já está cadastrado.',409);
+      throw error;
+    }
+    return json({ok:true,delivery_mode:mode,offer_id:id},201);
+  }
+  const directAction=u.pathname.match(/^\/api\/whatsapp\/offers\/(\d+)\/(publish|requeue)$/);
+  if(directAction&&method==='POST'){
+    try{
+      const result=directAction[2]==='publish'
+        ?await publishDirectWhatsAppOffer(env,Number(directAction[1]))
+        :await retryDirectWhatsAppOffer(env,Number(directAction[1]));
+      return json(result,result.skipped||result.status==='needs_review'?409:200);
+    }catch(error){return fail(error.message,error.status||400);}
   }
   if (u.pathname === '/api/coupons' && method === 'POST') {
     let coupon;

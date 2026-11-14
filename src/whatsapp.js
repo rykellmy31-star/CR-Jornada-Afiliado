@@ -1,4 +1,4 @@
-import { composeOfferMessage } from './logic.js';
+import { composeOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
@@ -38,6 +38,26 @@ const CREATE_CUSTOM_SCHEDULE = `CREATE TABLE IF NOT EXISTS whatsapp_schedule_cus
   last_attempt_at INTEGER NOT NULL DEFAULT 0
 )`;
 const CUSTOM_SCHEDULE_TABLE = 'whatsapp_schedule_custom';
+const CREATE_ROUTING = `CREATE TABLE IF NOT EXISTS offer_delivery_routing (
+  offer_id INTEGER PRIMARY KEY REFERENCES offers(id),
+  delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('telegram','both'))
+)`;
+const CREATE_DIRECT = `CREATE TABLE IF NOT EXISTS whatsapp_direct_offers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  affiliate_url TEXT NOT NULL UNIQUE,
+  category TEXT NOT NULL DEFAULT 'Geral',
+  price_cents INTEGER,old_price_cents INTEGER,
+  group_jid TEXT NOT NULL,
+  instance_name TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready','sending','published','needs_review')),
+  published_at INTEGER,
+  message_id TEXT,
+  last_error TEXT
+)`;
+const CREATE_DIRECT_INDEX = "CREATE INDEX IF NOT EXISTS idx_wa_direct_queue ON whatsapp_direct_offers(status,created_at)";
+
 export function validWhatsAppInterval(value) {
   return typeof value==='number' && Number.isInteger(value) && value>=1 && value<=1440;
 }
@@ -186,6 +206,9 @@ export async function ensureWhatsAppTables(env) {
   await env.DB.prepare(CREATE_PRIMARY_CATEGORY).run();
   await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_primary_category(id) VALUES(1)").run();
   await env.DB.prepare(CREATE_DELIVERIES).run();
+  await env.DB.prepare(CREATE_ROUTING).run();
+  await env.DB.prepare(CREATE_DIRECT).run();
+  await env.DB.prepare(CREATE_DIRECT_INDEX).run();
   await env.DB.prepare(CREATE_SCHEDULE).run();
   await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_schedule(id) VALUES(1)').run();
   await env.DB.prepare(CREATE_CUSTOM_SCHEDULE).run();
@@ -195,13 +218,14 @@ export async function ensureWhatsAppTables(env) {
 }
 export async function getWhatsAppState(env) {
   await ensureWhatsAppTables(env);
-  const [config,deliveries,schedule,categoryRow]=await Promise.all([
+  const [config,deliveries,schedule,categoryRow,direct]=await Promise.all([
     env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first(),
     env.DB.prepare("SELECT d.offer_id,d.status,d.last_error,d.updated_at,o.title FROM whatsapp_deliveries d JOIN offers o ON o.id=d.offer_id ORDER BY d.updated_at DESC LIMIT 12").all(),
     env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first(),
-    env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()
+    env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first(),
+    env.DB.prepare('SELECT id,title,affiliate_url,category,group_jid,instance_name,status,created_at,published_at,last_error FROM whatsapp_direct_offers ORDER BY id DESC LIMIT 100').all()
   ]);
-  return {config,schedule,category:categoryRow.category,server_configured:configured(env),deliveries:deliveries.results};
+  return {config,schedule,category:categoryRow.category,server_configured:configured(env),deliveries:deliveries.results,direct_offers:direct.results};
 }
 export async function listWhatsAppGroups(env,instance) {
   const data=await evoFetch(env,instance,'/group/fetchAllGroups',{method:'GET'});
@@ -248,6 +272,64 @@ export async function updateWhatsAppSettings(env,body) {
   await env.DB.prepare('UPDATE whatsapp_primary_category SET category=? WHERE id=1').bind(category).run();
   return {ok:true,enabled,group_changed:changed,interval_minutes:interval,category};
 }
+// Rotas explícitas para novas ofertas, preservando o espelhamento de todas as
+// ofertas antigas que não possuem entrada em offer_delivery_routing.
+export async function setOfferDeliveryMode(env,offerId,mode){
+  if(!['telegram','both'].includes(mode))throw new Error('Destino da oferta inválido.');
+  await ensureWhatsAppTables(env);
+  await env.DB.prepare('INSERT INTO offer_delivery_routing(offer_id,delivery_mode) VALUES(?,?) ON CONFLICT(offer_id) DO UPDATE SET delivery_mode=excluded.delivery_mode')
+    .bind(offerId,mode).run();
+}
+export async function addDirectWhatsAppOffer(env,body){
+  await ensureWhatsAppTables(env);
+  const data=normalizeOffer(body);
+  const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
+  if(!cfg.group_jid||!cfg.instance_name)throw new Error('Escolha e salve primeiro o grupo principal do WhatsApp.');
+  // A configuração pode estar desligada ao cadastrar; só enviamos após a ativação.
+  validateGroupJid(cfg.group_jid);
+  validateInstance(cfg.instance_name);
+  const allowed=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
+  if(!categoryMatches(data.category,allowed))
+    throw new Error('O grupo WhatsApp só aceita ofertas da categoria '+allowed+'.');
+  // Uma oferta nunca entra simultaneamente nas duas filas por cadastros separados:
+  // para publicar nos dois destinos use a opção "Telegram e WhatsApp".
+  const main=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
+  if(main)throw Object.assign(new Error('Este link já está na fila do Telegram. Selecione "Telegram e WhatsApp" ao cadastrar uma nova oferta.'),{status:409});
+  let result;
+  try{
+    result=await env.DB.prepare('INSERT INTO whatsapp_direct_offers(title,affiliate_url,category,price_cents,old_price_cents,group_jid,instance_name,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .bind(data.title,data.affiliate_url,data.category,data.price_cents,data.old_price_cents,cfg.group_jid,cfg.instance_name,nowSec()).run();
+  }catch(error){
+    if(/UNIQUE/i.test(String(error?.message||error)))throw Object.assign(new Error('Este link já está cadastrado no WhatsApp principal.'),{status:409});
+    throw error;
+  }
+  return {ok:true,id:Number(result.meta?.last_row_id),destination:'whatsapp'};
+}
+export async function retryDirectWhatsAppOffer(env,id){
+  await ensureWhatsAppTables(env);
+  const offerId=Number(id);
+  if(!Number.isSafeInteger(offerId)||offerId<1)throw new Error('Oferta inválida.');
+  const r=await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='ready',last_error=NULL WHERE id=? AND status='needs_review'").bind(offerId).run();
+  if(r.meta?.changes!==1)throw Object.assign(new Error('Somente ofertas em revisão podem ser reenfileiradas após verificar o grupo.'),{status:409});
+  return {ok:true};
+}
+export async function publishDirectWhatsAppOffer(env,id){
+  const offerId=Number(id);
+  if(!Number.isSafeInteger(offerId)||offerId<1)throw new Error('Oferta inválida.');
+  await ensureWhatsAppTables(env);
+  const [cfg,cat,offer]=await Promise.all([
+    env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first(),
+    env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first(),
+    env.DB.prepare('SELECT * FROM whatsapp_direct_offers WHERE id=?').bind(offerId).first()
+  ]);
+  if(!offer)throw Object.assign(new Error('Oferta não encontrada no WhatsApp principal.'),{status:404});
+  if(offer.status!=='ready')throw Object.assign(new Error('Esta oferta já foi enviada ou está em revisão.'),{status:409});
+  if(!cfg.enabled||!cfg.public_registered||!configured(env))throw new Error('Ative e autorize primeiro o WhatsApp principal.');
+  if(offer.group_jid!==cfg.group_jid||offer.instance_name!==cfg.instance_name)
+    throw new Error('Esta oferta pertence a outro grupo configurado anteriormente. Confira o destino antes de publicar.');
+  if(!categoryMatches(offer.category,cat.category))throw new Error('Categoria não permitida neste grupo.');
+  return dispatchPrimaryWhatsApp(env,cfg,offer,'direct');
+}
 export async function testWhatsApp(env) {
   await ensureWhatsAppTables(env);
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
@@ -278,6 +360,61 @@ async function sendOfferWhatsApp(env,cfg,offer){
   if(typeof data.key?.id!=='string'||!data.key.id)throw new Error('Evolution não confirmou o envio; confira o grupo antes de reenviar.');
   return {message_id:data.key.id,format:image?'photo':'text'};
 }
+async function dispatchPrimaryWhatsApp(env,cfg,offer,source){
+  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
+  const timestamp=nowSec();
+  const minGap=schedule.interval_minutes*60;
+  if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
+    return {skipped:'interval'};
+  // Uma mesma instância respeita o ritmo configurado, inclusive entre ofertas
+  // manuais, espelhadas e outros grupos Evolution deste número.
+  const slot=await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
+    .bind(timestamp,timestamp-minGap).run();
+  if(slot.meta?.changes!==1)return {skipped:'interval'};
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS whatsapp_instance_pacing (instance_name TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0)").run();
+  await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_instance_pacing(instance_name,last_attempt_at) VALUES(?,0)').bind(cfg.instance_name).run();
+  const sharedSlot=await env.DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=? AND (last_attempt_at=0 OR last_attempt_at<=?)')
+    .bind(timestamp,cfg.instance_name,timestamp-60).run();
+  if(sharedSlot.meta?.changes!==1){
+    await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND last_attempt_at=?')
+      .bind(schedule.last_attempt_at,timestamp).run();
+    return {skipped:'instance_interval'};
+  }
+  const direct=source==='direct';
+  let claim;
+  if(direct){
+    claim=await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='sending',last_error=NULL WHERE id=? AND status='ready'")
+      .bind(offer.id).run();
+  }else{
+    claim=await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_deliveries(offer_id,group_jid,status,created_at,updated_at) VALUES(?,?,'sending',?,?)")
+      .bind(offer.id,cfg.group_jid,timestamp,timestamp).run();
+  }
+  if(claim.meta?.changes!==1)return {skipped:'claimed'};
+  try{
+    const result=await sendOfferWhatsApp(env,cfg,offer);
+    const updatedAt=nowSec();
+    if(direct){
+      await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='published',published_at=?,message_id=?,last_error=NULL WHERE id=? AND status='sending'")
+        .bind(updatedAt,result.message_id,offer.id).run();
+    }else{
+      await env.DB.prepare("UPDATE whatsapp_deliveries SET status='sent',message_id=?,updated_at=? WHERE offer_id=? AND group_jid=? AND status='sending'")
+        .bind(result.message_id,updatedAt,offer.id,cfg.group_jid).run();
+    }
+    await env.DB.prepare('UPDATE whatsapp_settings SET last_error=NULL WHERE id=1').run();
+    return {status:direct?'published':'sent',source,offer_id:offer.id,format:result.format};
+  }catch(error){
+    const reason=String(error?.message||error).slice(0,220);
+    if(direct){
+      await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='needs_review',last_error=? WHERE id=? AND status='sending'")
+        .bind(reason,offer.id).run();
+    }else{
+      await env.DB.prepare("UPDATE whatsapp_deliveries SET status='needs_review',last_error=?,updated_at=? WHERE offer_id=? AND group_jid=? AND status='sending'")
+        .bind(reason,nowSec(),offer.id,cfg.group_jid).run();
+    }
+    await env.DB.prepare('UPDATE whatsapp_settings SET last_error=? WHERE id=1').bind(reason).run();
+    return {status:'needs_review',source,error:reason,offer_id:offer.id};
+  }
+}
 export async function runWhatsAppScheduled(env){
   if(!env.DB)return {skipped:'db'};
   await ensureWhatsAppTables(env);
@@ -285,51 +422,26 @@ export async function runWhatsAppScheduled(env){
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
   await ensureCouponTable(env);
   const cat=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
-  const offer=await env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
-    c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,
-    c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,c.owner_confirmed AS coupon_owner_confirmed
-    FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
-    LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
-    WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL AND (lower(?)='geral' OR lower(o.category)=lower(?))
-    ORDER BY o.published_at ASC,o.id ASC LIMIT 1`).bind(cfg.group_jid,cfg.started_at,cat,cat).first();
-  if(!offer)return {skipped:'empty'};
-  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
-  const timestamp=nowSec();
-  const minGap=schedule.interval_minutes*60;
-  if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
-    return {skipped:'interval'};
-  // Reserva atomicamente o próximo envio, inclusive entre execuções concorrentes.
-  const slot=await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
-    .bind(timestamp,timestamp-minGap).run();
-  if(slot.meta?.changes!==1)return {skipped:'interval'};
-  // Uma única janela de envio por instância Evolution, inclusive quando
-  // outros grupos do mesmo número estiverem habilitados.
-  await env.DB.prepare("CREATE TABLE IF NOT EXISTS whatsapp_instance_pacing (instance_name TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0)").run();
-  await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_instance_pacing(instance_name,last_attempt_at) VALUES(?,0)').bind(cfg.instance_name).run();
-  const sharedSlot=await env.DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=? AND (last_attempt_at=0 OR last_attempt_at<=?)')
-    .bind(timestamp,cfg.instance_name,timestamp-60).run();
-  if(sharedSlot.meta?.changes!==1){
-    // Não inicia um intervalo novo quando o número já está enviando a outro grupo.
-    await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND last_attempt_at=?')
-      .bind(schedule.last_attempt_at,timestamp).run();
-    return {skipped:'instance_interval'};
-  }
-  const claim=await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_deliveries(offer_id,group_jid,status,created_at,updated_at) VALUES(?,?,'sending',?,?)")
-    .bind(offer.id,cfg.group_jid,timestamp,timestamp).run();
-  if(claim.meta?.changes!==1)return {skipped:'claimed'};
-  try{
-    const result=await sendOfferWhatsApp(env,cfg,offer);
-    await env.DB.prepare("UPDATE whatsapp_deliveries SET status='sent',message_id=?,updated_at=? WHERE offer_id=? AND group_jid=? AND status='sending'")
-      .bind(result.message_id,nowSec(),offer.id,cfg.group_jid).run();
-    await env.DB.prepare('UPDATE whatsapp_settings SET last_error=NULL WHERE id=1').run();
-    return {status:'sent',offer_id:offer.id,format:result.format};
-  }catch(error){
-    const reason=String(error?.message||error).slice(0,220);
-    await env.DB.prepare("UPDATE whatsapp_deliveries SET status='needs_review',last_error=?,updated_at=? WHERE offer_id=? AND group_jid=? AND status='sending'")
-      .bind(reason,nowSec(),offer.id,cfg.group_jid).run();
-    await env.DB.prepare('UPDATE whatsapp_settings SET last_error=? WHERE id=1').bind(reason).run();
-    return {status:'needs_review',error:reason,offer_id:offer.id};
-  }
+  const [mirrored,direct]=await Promise.all([
+    env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
+      c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,
+      c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,c.owner_confirmed AS coupon_owner_confirmed
+      FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
+      LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
+      LEFT JOIN offer_delivery_routing r ON r.offer_id=o.id
+      WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
+        AND (r.delivery_mode IS NULL OR r.delivery_mode='both')
+        AND (lower(?)='geral' OR lower(o.category)=lower(?))
+      ORDER BY o.published_at ASC,o.id ASC LIMIT 1`)
+      .bind(cfg.group_jid,cfg.started_at,cat,cat).first(),
+    env.DB.prepare("SELECT * FROM whatsapp_direct_offers WHERE status='ready' AND group_jid=? AND instance_name=? AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at ASC,id ASC LIMIT 1")
+      .bind(cfg.group_jid,cfg.instance_name,cat,cat).first()
+  ]);
+  if(!mirrored&&!direct)return {skipped:'empty'};
+  // Prioridade cronológica impede que a fila direta ou o espelhamento bloqueiem
+  // permanentemente a outra fila.
+  const chooseDirect=!!direct&&(!mirrored||direct.created_at<=(mirrored.published_at||0));
+  return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored');
 }
 export async function retryWhatsAppDelivery(env,offerId){
   await ensureWhatsAppTables(env);
