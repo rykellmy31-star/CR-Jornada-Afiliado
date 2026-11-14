@@ -113,6 +113,17 @@ export function classifyProduct(title,sourceCategory,categories){
   // Uma categoria personalizada mais específica prevalece sobre o modelo inicial, evitando ambiguidade.
   const custom=matches.filter(c=>!STARTER_CATEGORY_NAMES.has(String(c.name).toLocaleLowerCase('pt-BR')));
   if(custom.length===1)return {category:custom[0],subcategory:inferSubcategory(title),classification:'keywords'};
+  // Em termos compartilhados como "shampoo", prevalece a frase mais específica
+  // ("shampoo automotivo") quando há uma única categoria vencedora.
+  const scored=matches.map(category=>({
+    category,
+    specificity:Math.max(...keywordsOf(category).filter(k=>includesPhrase(t,k)).map(k=>k.length))
+  }));
+  if(scored.length){
+    const best=Math.max(...scored.map(item=>item.specificity));
+    const winners=scored.filter(item=>item.specificity===best);
+    if(winners.length===1)return {category:winners[0].category,subcategory:inferSubcategory(title),classification:'keywords'};
+  }
   return {category:null,subcategory:null,classification:'needs_review'};
 }
 export async function upsertProductCategory(env,platform,offer,categoriesGiven=null){
