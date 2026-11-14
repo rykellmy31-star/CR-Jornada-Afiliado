@@ -106,7 +106,7 @@ export function renderPage() {
             <div class="field-grid">
               <label>Nome para identificar<input name="name" required maxlength="80" placeholder="Ex.: Achadinhos Eletrônicos"></label>
               <label>Canal público<input name="telegram_chat_id" required placeholder="https://t.me/seucanal"></label>
-              <label>Categoria do canal<input name="category" required maxlength="60" value="Geral" placeholder="Ex.: Eletrônicos"></label>
+              <label>Categoria do canal<select data-category-selector name="category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
               <label>Qual bot usar?
                 <select name="bot_mode" id="new-channel-bot-mode">
                   <option value="shared">Usar bot principal</option>
@@ -129,7 +129,7 @@ export function renderPage() {
           <form id="settings-form">
             <div id="channel-primary-category">
               <label>Categoria permitida neste canal
-                <input id="primary-channel-category" maxlength="60" value="Geral" placeholder="Ex.: Motos, Feminino, Masculino, Infantil, Peças">
+                <select data-category-selector id="primary-channel-category" data-desired-category="Geral"><option value="Geral">Geral</option></select>
               </label>
               <p class="hint">Geral aceita todas as categorias. Se escolher uma categoria específica, somente ofertas correspondentes serão cadastradas ou publicadas aqui.</p>
             </div>
@@ -137,7 +137,7 @@ export function renderPage() {
               <h2>Configurações exclusivas deste canal</h2>
               <div class="field-grid">
                 <label>Nome do canal<input id="channel-name" maxlength="80" placeholder="Nome no painel"></label>
-                <label>Categoria das ofertas<input id="channel-category" maxlength="60" placeholder="Ex.: Eletrônicos"></label>
+                <label>Categoria das ofertas<select data-category-selector id="channel-category" data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
                 <label>Bot responsável
                   <select id="channel-bot-mode">
                     <option value="shared">Usar bot principal</option>
@@ -163,7 +163,7 @@ export function renderPage() {
           </form>
         </section>
         <section class="card add-offer"><div class="section-header"><div><h2>Adicionar oferta</h2><p>Somente links gerados na sua conta do Mercado Livre. Ao cadastrar, escolha se deseja publicar no Telegram, no WhatsApp ou nos dois.</p></div><div class="symbol">＋</div></div>
-          <form id="offer-form"><label>Nome do produto<input name="title" required minlength="5" maxlength="180" placeholder="Ex.: Base Bauleto Gow 33 e 47 litros"></label><label>Link oficial do afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label><div class="field-grid"><label>Categoria<input name="category" placeholder="Ex.: Automotivo"></label><label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01" placeholder="79.90"></label><label>Preço anterior (opcional)<input name="old_price" type="number" min="0.01" step="0.01" placeholder="99.90"></label></div>
+          <form id="offer-form"><label>Nome do produto<input name="title" required minlength="5" maxlength="180" placeholder="Ex.: Base Bauleto Gow 33 e 47 litros"></label><label>Link oficial do afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label><div class="field-grid"><label>Categoria<select data-category-selector name="category" data-desired-category="Geral"><option value="Geral">Geral</option></select></label><label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01" placeholder="79.90"></label><label>Preço anterior (opcional)<input name="old_price" type="number" min="0.01" step="0.01" placeholder="99.90"></label></div>
           <label id="offer-delivery-wrap">Onde esta oferta será publicada?
             <select name="delivery_mode" id="offer-delivery-mode" required>
               <option value="both" selected>Telegram e WhatsApp</option>
@@ -196,7 +196,7 @@ export function renderPage() {
           </div>
           <p class="hint">O link de convite do grupo não é seu ID técnico. O botão consulta apenas os grupos que o número conectado na Evolution já participa.</p>
           <label>Categoria permitida no grupo principal
-            <input id="wa-category" maxlength="60" placeholder="Geral, Motos, Feminino, Masculino, Infantil, Peças" value="Geral" required>
+            <select data-category-selector id="wa-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select>
           </label>
           <p class="hint">Geral espelha todas as categorias. Outra categoria filtra tanto as ofertas diretas quanto as espelhadas do Telegram.</p>
           <label>Intervalo entre publicações no WhatsApp (minutos)
@@ -218,7 +218,7 @@ export function renderPage() {
             <label>Nome do produto<input name="title" required minlength="5" maxlength="180" placeholder="Ex.: Capacete de moto"></label>
             <label>Link oficial do afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label>
             <div class="field-grid">
-              <label>Categoria<input name="category" id="wa-direct-category" placeholder="Ex.: Motos" required maxlength="60"></label>
+              <label>Categoria<select data-category-selector name="category" id="wa-direct-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
               <label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01" placeholder="79.90"></label>
               <label>Preço anterior (opcional)<input name="old_price" type="number" min="0.01" step="0.01" placeholder="99.90"></label>
             </div>
@@ -260,7 +260,7 @@ export function renderPage() {
           <form id="wa-multi-create-form">
             <div class="field-grid">
               <label>Nome do grupo no painel<input name="name" required minlength="3" maxlength="80" placeholder="Ex.: Ofertas para motociclistas"></label>
-              <label>Categoria permitida<input name="category" required maxlength="60" value="Motos" placeholder="Motos, Feminino, Masculino, Infantil, Peças"></label>
+              <label>Categoria permitida<select data-category-selector name="category" required data-desired-category="Motos"><option value="Geral">Geral</option></select></label>
               <label>Número do WhatsApp
                 <select name="instance_mode">
                   <option value="shared">Usar o número Evolution já conectado</option>
@@ -284,7 +284,7 @@ export function renderPage() {
           <form id="wa-multi-settings-form" class="wa-multi-form">
             <div class="field-grid">
               <label>Nome do grupo<input id="wa-multi-name" maxlength="80" required></label>
-              <label>Categoria permitida<input id="wa-multi-category" maxlength="60" placeholder="Ex.: Infantil" required></label>
+              <label>Categoria permitida<select data-category-selector id="wa-multi-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
               <label>Grupo da Evolution
                 <select id="wa-multi-jid"><option value="">Buscar grupos para selecionar</option></select>
               </label>
@@ -304,7 +304,7 @@ export function renderPage() {
             <label>Produto<input name="title" minlength="5" maxlength="180" required placeholder="Ex.: Capacete para moto"></label>
             <label>Link de afiliado<input name="affiliate_url" type="url" required placeholder="https://meli.la/..."></label>
             <div class="field-grid">
-              <label>Categoria<input name="category" id="wa-multi-offer-category" required></label>
+              <label>Categoria<select data-category-selector name="category" id="wa-multi-offer-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
               <label>Preço atual (opcional)<input name="price" type="number" min="0.01" step="0.01"></label>
               <label>Preço antigo (opcional)<input name="old_price" type="number" min="0.01" step="0.01"></label>
             </div>
@@ -355,7 +355,7 @@ export function renderPage() {
           <form id="shopee-destination-create-form" class="shopee-form">
             <div class="field-grid">
               <label>Nome para identificar<input name="name" minlength="3" maxlength="80" required placeholder="Ex.: Shopee Infantil"></label>
-              <label>Categoria<input name="category" maxlength="60" required value="Geral" placeholder="Ex.: Motos, Moda, Infantil"></label>
+              <label>Categoria<select data-category-selector name="category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
             </div>
             <label id="shopee-create-telegram-field">Canal público do Telegram
               <input id="shopee-create-telegram-handle" name="telegram_chat_id" required placeholder="https://t.me/meucanalshopee">
@@ -378,7 +378,7 @@ export function renderPage() {
           <form id="shopee-telegram-destination-form" class="shopee-form hidden">
             <div class="field-grid">
               <label>Nome do canal<input id="shopee-tele-name" required minlength="3" maxlength="80"></label>
-              <label>Categoria do canal<input id="shopee-tele-category" required maxlength="60"></label>
+              <label>Categoria do canal<select data-category-selector id="shopee-tele-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
             </div>
             <label>Canal público da Shopee<input id="shopee-tele-chat" required placeholder="@canalshopee"></label>
             <label>Token do bot exclusivo (BotFather)
@@ -402,7 +402,7 @@ export function renderPage() {
             <form id="shopee-whatsapp-destination-form" class="shopee-form">
               <div class="field-grid">
                 <label>Nome do grupo<input id="shopee-wa-name" minlength="3" maxlength="80" required></label>
-                <label>Categoria do grupo<input id="shopee-wa-category" maxlength="60" required></label>
+                <label>Categoria do grupo<select data-category-selector id="shopee-wa-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select></label>
                 <label>Grupo na instância Shopee
                   <select id="shopee-wa-group"><option value="">Clique em buscar grupos</option></select>
                 </label>
@@ -422,7 +422,7 @@ export function renderPage() {
             <p id="shopee-base-status" class="hint">Carregando permissões do canal ou grupo...</p>
             <form id="shopee-settings-form" class="shopee-form">
               <label>Categoria das ofertas
-                <input id="shopee-category" type="text" required maxlength="60" placeholder="Ex.: Motos, Feminino, Infantil">
+                <select data-category-selector id="shopee-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select>
               </label>
               <div class="field-grid">
                 <label>Intervalo (minutos)
@@ -457,7 +457,7 @@ export function renderPage() {
                 <input name="affiliate_url" type="url" required placeholder="https://s.shopee.com.br/...">
               </label>
               <label>Categoria do produto
-                <input name="category" id="shopee-offer-category" required maxlength="60" placeholder="Ex.: Infantil">
+                <select data-category-selector name="category" id="shopee-offer-category" required data-desired-category="Geral"><option value="Geral">Geral</option></select>
               </label>
               <div class="field-grid">
                 <label>Preço atual (opcional)
