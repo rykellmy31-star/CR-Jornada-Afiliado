@@ -69,15 +69,27 @@ function productTitle(url,hint,id){
 }
 export async function monitorState(env){
  await ensureMonitor(env);
- const [settings,groups,links,pending,categories]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
   env.DB.prepare("SELECT status,COUNT(*) AS total FROM ml_monitor_shortlinks GROUP BY status").all(),
-  (async()=>{await ensureAutomationCenter(env);return env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1 ORDER BY name').all()})()
+  (async()=>{await ensureAutomationCenter(env);return env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1 ORDER BY name').all()})(),
+  env.DB.prepare("SELECT COUNT(l.id) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id").first(),
+  env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all()
  ]);
+ const normalizedCounts=x=>({
+  captured:Number(x?.captured||0),
+  available:Number(x?.available||0),
+  in_conversion:Number(x?.in_conversion||0),
+  queued:Number(x?.queued||0)
+ });
+ const perGroupMap=new Map(perGroup.results.map(x=>[x.group_id,normalizedCounts(x)]));
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
-   groups:groups.results,links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
+   counts:normalizedCounts(counts),
+   groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||normalizedCounts(null)})),
+   links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),
+   shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
 }
 export async function saveMonitorSettings(env,body){
  await ensureMonitor(env);

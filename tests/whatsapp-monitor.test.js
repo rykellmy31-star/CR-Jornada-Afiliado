@@ -141,3 +141,61 @@ test('categoria desconhecida exige classificação antes do lote',async()=>{
   assert.equal(batch.items.length,1);
  }finally{DB.close();}
 });
+
+
+test('painel apresenta contagem de produtos únicos, disponíveis, em conversão e já enfileirados por grupo',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Ferramentas',permission_confirmed:true});
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:OTHER,group_name:'Ofertas gerais',permission_confirmed:true});
+  let state=await monitorState(env);
+  assert.deepEqual(state.counts,{captured:0,available:0,in_conversion:0,queued:0});
+  assert.ok(state.groups.every(x=>x.counts.captured===0));
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event());
+  const product2='https://www.mercadolivre.com.br/furadeira-sem-fio/p/MLB99887766';
+  await ingestMonitorEvent(env,event(OTHER,'Parafusadeira em promoção '+product2));
+  // Repetir o mesmo produto em outro grupo não aumenta contadores.
+  await ingestMonitorEvent(env,event(OTHER,'Furadeira já vista '+PRODUCT));
+  state=await monitorState(env);
+  assert.deepEqual(state.counts,{captured:2,available:2,in_conversion:0,queued:0});
+  assert.equal(state.groups.find(x=>x.group_jid===GROUP).counts.captured,1);
+  assert.equal(state.groups.find(x=>x.group_jid===OTHER).counts.captured,1);
+  const selected=state.links.find(x=>x.source_url===PRODUCT);
+  const batch=await prepareMonitorBatch(env,{ids:[selected.id]});
+  state=await monitorState(env);
+  assert.deepEqual(state.counts,{captured:2,available:1,in_conversion:1,queued:0});
+  await importLinkBatch(env,batch.batch.id,{
+   owner_confirmation:true,pairing_confirmation:true,
+   links:[{affiliate_url:'https://meli.la/COUNT12345',category:batch.items[0].category}]
+  });
+  state=await monitorState(env);
+  assert.deepEqual(state.counts,{captured:2,available:1,in_conversion:0,queued:1});
+  assert.equal(state.groups.find(x=>x.group_jid===GROUP).counts.queued,1);
+  assert.equal(state.groups.find(x=>x.group_jid===OTHER).counts.available,1);
+  const html=renderPage();
+  assert.match(html,/Produtos únicos captados/);
+  assert.match(html,/Enviados à fila/);
+  assert.match(CSS,/ml-monitor-counter-grid/);
+  assert.match(CLIENT_JS,/mlMonitorApplyCounts/);
+  assert.match(CLIENT_JS,/30000/);
+ }finally{DB.close();}
+});
+
+test('o contador consulta todos os produtos do D1 mesmo com lista visual limitada a 200',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo grande',permission_confirmed:true});
+  const group=DB.prepare('SELECT id FROM ml_monitor_groups WHERE group_jid=?').bind(GROUP).first();
+  for(let i=0;i<205;i++){
+   const pid='MLB'+String(10000000+i);
+   DB.prepare("INSERT INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) VALUES(?,?,?,?,?,'Geral','needs_review','available',?)")
+     .bind(group.id,'test'+i,pid,'https://www.mercadolivre.com.br/produto/p/'+pid,'Produto '+i,1700000000).run();
+  }
+  const state=await monitorState(env);
+  assert.equal(state.links.length,200);
+  assert.equal(state.counts.captured,205);
+  assert.equal(state.counts.available,205);
+  assert.equal(state.groups[0].counts.captured,205);
+ }finally{DB.close();}
+});
