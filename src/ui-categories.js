@@ -179,5 +179,14 @@ $('category-routes-form').addEventListener('submit',async e=>{
     notice('Distribuição salva. Apenas destinos autorizados poderão receber anúncios.',false,'category-feedback');
   }catch(error){notice(error.message,true,'category-feedback');}
 });
+async function refreshActivity(){
+  const data=await call('/api/activity');
+  const events=data.events||[];
+  $('log-list').innerHTML=events.length?events.map(e=>
+    '<div><span><b>'+escape(e.event)+'</b> '+escape(e.detail||'')+
+    '<small style="display:block;color:#748095">'+escape(e.platform)+' • '+escape(e.network)+' • '+escape(e.destination||'')+'</small></span>'+
+    '<time>'+toDate(e.created_at)+'</time></div>'
+  ).join(''):'Ainda não há eventos registrados.';
+}
 $('activity-refresh').addEventListener('click',()=>refreshActivity().catch(e=>notice(e.message,true)));
 `;
