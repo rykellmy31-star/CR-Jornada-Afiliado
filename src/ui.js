@@ -3,8 +3,8 @@ export function renderPage() {
   <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><span id="top-status" class="pill">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
   <main>
     <section id="initial-loading" class="login card" role="status" aria-live="polite"><strong>Carregando o painel...</strong></section>
-    <section id="login" class="login card hidden"><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
-    <section id="dashboard" class="hidden">
+    <section id="login" class="login card hidden" hidden><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
+    <section id="dashboard" class="hidden" hidden>
       <aside class="platform-sidebar" id="platform-sidebar" aria-label="Menu de plataformas">
         <div class="platform-nav-heading">PLATAFORMAS</div>
         <button class="platform-nav-item active" type="button" data-platform="mercadolivre"><span>🛍️</span> Mercado Livre</button>
@@ -596,7 +596,9 @@ function view(auth) {
   authenticated=auth;
   $('initial-loading').classList.add('hidden');
   $('dashboard').classList.toggle('hidden',!auth);
+  $('dashboard').hidden=!auth;
   $('login').classList.toggle('hidden',auth);
+  $('login').hidden=auth;
   $('logout').classList.toggle('hidden',!auth);
   document.body.classList.toggle('app-has-sidebar',auth);
 }
@@ -1029,7 +1031,6 @@ async function refresh(){
     options.innerHTML=channels.map(c=>'<option value="'+Number(c.id)+'">'+escape(c.name)+' • '+escape(c.telegram_chat_id)+(c.id===1?' (atual)':'')+'</option>').join('');
     options.value=String(currentChannelId);
     const data=await call(currentChannelId===1?'/api/state':'/api/channels/'+currentChannelId+'/state');
-    view(true);
     const s=data.settings;
     $('telegram_chat_id').value=s.telegram_chat_id||'';
     const isExtra=currentChannelId!==1;
@@ -1084,6 +1085,7 @@ async function refresh(){
     await refreshPlatformTargets();
     applyPlatformView();
     if(selectedPlatform==='shopee'){await refreshShopeeAccount();await refreshShopee();}
+    view(true);
     restoreScrollAfterRefresh();
   }catch(e){
     if(e.status===401){
