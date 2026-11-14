@@ -11,6 +11,7 @@ import {
  testManagedWhatsAppGroup,publishManagedWhatsAppOffer,runManagedWhatsAppScheduled
 } from './whatsapp-groups.js';
 import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
+import {getShopeeAccount,saveShopeeProfile,saveShopeeCredentials,clearShopeeCredentials,verifyShopeeApi} from './shopee-account.js';
 import {
  createShopeeOwnDestination,saveShopeeOwnTelegram,saveShopeeOwnWhatsApp,
  shopeeWhatsAppConnection,shopeeWhatsAppOptions,testShopeeOwnDestination
@@ -220,6 +221,17 @@ async function router(request, env) {
     ]);
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
+  // Conta e credenciais Shopee independentes: não usar o perfil Mercado Livre.
+  if(u.pathname==='/api/shopee/account'&&method==='GET')
+    return json(await getShopeeAccount(env));
+  if(u.pathname==='/api/shopee/account/profile'&&method==='POST')
+    return json(await saveShopeeProfile(env,await getBody(request)));
+  if(u.pathname==='/api/shopee/account/credentials'&&method==='POST')
+    return json(await saveShopeeCredentials(env,await getBody(request)));
+  if(u.pathname==='/api/shopee/account/credentials/verify'&&method==='POST')
+    return json(await verifyShopeeApi(env));
+  if(u.pathname==='/api/shopee/account/credentials/clear'&&method==='POST')
+    return json(await clearShopeeCredentials(env));
   // Shopee: apenas links oficiais já gerados pelo próprio afiliado, sem consulta
   // a API/credenciais Shopee; destinos/filas/agendamentos são isolados do Mercado Livre.
   if(u.pathname==='/api/shopee/destinations/create'&&method==='POST')

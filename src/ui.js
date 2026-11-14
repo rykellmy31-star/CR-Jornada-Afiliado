@@ -27,7 +27,63 @@ export function renderPage() {
           <select id="platform-target-select" aria-label="Canal ou grupo da plataforma"></select>
         </label>
       </section>
-      <div class="intro"><div><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span><h1>Suas ofertas, no ritmo certo.</h1><p>Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.</p></div><div class="profile"><span>Perfil afiliado</span><b>rykellmy_007</b><span id="channel-label">Destino Telegram: @achadinhosmlcr</span></div></div>
+      <section id="shopee-account-panel" class="card shopee-account-panel hidden">
+        <div class="section-header">
+          <div>
+            <span class="eyebrow">CONTA DA PLATAFORMA</span>
+            <h2>🧡 Conta Shopee • Afiliados</h2>
+            <p>Seu perfil e suas credenciais são independentes do Mercado Livre. Ainda não é necessário ter a API para cadastrar seus próprios links Shopee.</p>
+          </div>
+          <span class="tag" id="shopee-account-badge">API não conectada</span>
+        </div>
+        <div class="main-grid account-grid">
+          <div class="shopee-inner">
+            <h2>Identificação do afiliado</h2>
+            <p class="hint">Estes dados servem apenas para identificar seu perfil neste painel. Não substituem autenticação da Shopee.</p>
+            <form id="shopee-account-profile-form" class="shopee-form">
+              <label>Nome ou apelido do afiliado Shopee
+                <input id="shopee-affiliate-name" maxlength="80" placeholder="Ex.: Minha Shopee Ofertas" autocomplete="off">
+              </label>
+              <label>ID do afiliado (opcional)
+                <input id="shopee-affiliate-id" maxlength="60" placeholder="ID da Central de Afiliados" autocomplete="off">
+              </label>
+              <button class="primary" type="submit">Salvar perfil Shopee</button>
+            </form>
+          </div>
+          <div class="shopee-inner">
+            <h2>Conectar Open API da Shopee</h2>
+            <p class="hint" id="shopee-api-status">Ainda não há uma API Shopee conectada.</p>
+            <p class="hint">Quando a Shopee liberar o acesso, informe aqui o <strong>App ID</strong> e a <strong>Senha da API</strong>. Não utilize sua senha de login da Shopee.</p>
+            <form id="shopee-account-api-form" class="shopee-form">
+              <label>App ID fornecido pela Shopee
+                <input id="shopee-api-app-id" inputmode="numeric" autocomplete="off" maxlength="30" placeholder="Disponível após liberação da Open API" required>
+              </label>
+              <label>Senha da Open API (Secret)
+                <input id="shopee-api-secret" type="password" autocomplete="new-password" placeholder="Não é a senha de login Shopee">
+              </label>
+              <p class="hint" id="shopee-api-secret-hint">A senha fica criptografada no banco e não será mostrada novamente.</p>
+              <div class="actions">
+                <button class="primary" type="submit">Salvar credenciais API</button>
+                <button class="outline" type="button" id="shopee-api-verify">Testar conexão oficial</button>
+                <button class="outline" type="button" id="shopee-api-clear">Desconectar API</button>
+              </div>
+            </form>
+            <p class="hint">Ainda não recebeu App ID e Senha? <a href="https://affiliate.shopee.com.br/open_api" target="_blank" rel="noopener noreferrer">Abrir a Open API da Shopee</a> e solicitar liberação pela Central de Ajuda.</p>
+          </div>
+        </div>
+        <p id="shopee-account-feedback" class="feedback" role="status" aria-live="polite"></p>
+      </section>
+      <div class="intro">
+        <div><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span>
+          <h1>Suas ofertas, no ritmo certo.</h1>
+          <p id="intro-description">Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.</p>
+        </div>
+        <div class="profile">
+          <span id="affiliate-platform-label">Perfil afiliado • Mercado Livre</span>
+          <b id="affiliate-profile-name">rykellmy_007</b>
+          <span id="channel-label">Destino Telegram: @achadinhosmlcr</span>
+        </div>
+      </div>
       <div id="notice" class="feedback" role="status"></div>
       <section class="card channels-panel" id="channels-panel">
         <div class="section-header"><div><h2>📣 Central multicanal do Telegram</h2>
@@ -412,7 +468,7 @@ export function renderPage() {
 
 export const CSS = `
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.platform-sidebar{position:fixed;left:12px;top:82px;width:205px;z-index:5;background:#112747;color:#ecf5fb;border-radius:16px;padding:18px;box-shadow:0 10px 30px #0b1b3520;display:flex;flex-direction:column;gap:9px}.platform-nav-heading{font-size:11px;font-weight:900;letter-spacing:1.2px;color:#91aecb;margin-bottom:9px}.platform-nav-item{display:flex;align-items:center;gap:10px;text-align:left;background:transparent;border:1px solid transparent;color:#e0e9f4;padding:12px;border-radius:10px;font-weight:750;cursor:pointer}.platform-nav-item.active{background:#1e4c65;border-color:#35c4b7;color:#fff}.platform-side-divider{height:1px;background:#35516c;margin:10px 0}.platform-side-note{font-size:11px;color:#abc0d4}.app-has-sidebar main{margin-left:225px;max-width:none}.platform-context{padding:20px 22px;margin-bottom:16px}.platform-context-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.platform-context h2{font-size:22px;margin:5px 0}.platform-network-tabs{display:flex;gap:5px;padding:5px;border-radius:13px;background:#eaf0f5}.platform-network-button{padding:9px 15px;border:0;border-radius:9px;background:transparent;color:#475c76;cursor:pointer;font-size:13px;font-weight:700}.platform-network-button.active{background:white;color:#0f7d8a;box-shadow:0 1px 4px #153e5920}.platform-target-label{margin-top:13px;max-width:650px}.shopee-panel{padding:22px;margin-top:16px}.shopee-grid{margin-top:18px}.shopee-destination-toolbar{margin:14px 0}.shopee-destination-toolbar .hint{margin-top:8px}.shopee-destination-manage{background:#f8fafc;border:1px solid #e0e8f3;border-radius:14px;padding:18px;margin:14px 0}.shopee-destination-manage h2{margin-bottom:14px}.shopee-destination-manage .shopee-form{margin-bottom:4px}.shopee-destination-manage .wa-connect-box{margin-bottom:14px}.shopee-destination-manage .hint{margin:7px 0}.shopee-inner{background:#f8fafc;padding:18px;border-radius:13px;border:1px solid #e3eaf2}.shopee-inner h2{margin-bottom:12px}.shopee-form{display:flex;flex-direction:column;gap:12px}.shopee-panel .logs{margin-top:15px}@media(max-width:950px){.app-has-sidebar main{margin-left:0}.platform-sidebar{position:static;left:auto;top:auto;width:auto;flex-direction:row;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px}.platform-nav-heading,.platform-side-divider,.platform-side-note{display:none}.platform-nav-item{padding:10px 12px}.platform-context-head{flex-direction:column;align-items:stretch}}@media(max-width:520px){.platform-network-tabs{width:100%;justify-content:space-evenly}.platform-network-button{flex:1}.platform-context,.shopee-panel{padding:15px}}.channels-panel{padding:22px;margin-bottom:16px}.wa-multichannel{padding:22px;margin-top:16px}.wa-multichannel>label{max-width:560px}.wa-multi-form{display:flex;flex-direction:column;gap:12px;margin-top:15px}.wa-multichannel .hint{margin:8px 0}.divider-wa{border-top:1px solid #e6edf5;margin:21px 0}.wa-multichannel .wa-connect-box{margin-bottom:14px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
+*{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}.card{background:#fff;border:1px solid #e8edf5;border-radius:17px;box-shadow:0 10px 25px #112b5510}.login{max-width:480px;margin:60px auto;padding:36px}.login h1{margin:10px 0}.login p{margin-bottom:25px}.eyebrow{font-size:11px;letter-spacing:1.4px;font-weight:800;color:#258b9e}.intro{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:12px 4px 25px}.intro h1{margin:10px 0}.intro p{max-width:650px}.profile{background:#eaf3fb;padding:12px 18px;border-radius:13px;display:flex;flex-direction:column;gap:2px;min-width:210px;color:#506780;font-size:12px}.profile b{color:#10253e;font-size:18px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:16px}.metric{padding:19px 20px}.metric span{display:block;font-size:12px;color:#79849b}.metric strong{display:block;font-size:30px;margin-top:6px;letter-spacing:-1px;color:#182f4d}.main-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.main-grid>.card,.list-panel,.history{padding:22px}.section-header{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:19px}.section-header p{font-size:12px;margin-top:5px}.symbol{background:#e5f5f3;color:#087e71;border-radius:11px;width:32px;height:32px;display:grid;place-items:center;font-size:20px;font-weight:800}.settings form,.add-offer form,#login-form{display:flex;flex-direction:column;gap:15px}label{font-size:13px;font-weight:600;color:#34425a;display:flex;flex-direction:column;gap:8px}input:not([type=checkbox]),select{width:100%;padding:12px 13px;border-radius:9px;border:1px solid #d9e1ef;background:#fbfcfe;color:#182c47;font-size:15px;outline:none;min-height:44px}input:focus,select:focus{border-color:#1696ab;box-shadow:0 0 0 3px #14aaa21d}.check-row{flex-direction:row;gap:12px;align-items:flex-start;padding:11px;border:1px solid #e9edf3;border-radius:11px;background:#fcfdff;cursor:pointer}.check-row input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#119d8d}.check-row span{display:flex;flex-direction:column;gap:5px}.check-row small{font-size:11.5px;color:#748095;line-height:1.5;font-weight:400}.owner{margin-top:3px}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;flex-wrap:wrap}.hint{font-size:11px;margin-top:0}.primary,.outline,.ghost{border:0;cursor:pointer;border-radius:10px;padding:12px 17px;min-height:41px;font-size:13px;font-weight:700}.primary{background:#0e867f;color:#fff}.primary:hover{background:#09726c}.outline{background:#fff;border:1px solid #cbd8e5;color:#1a5772}.outline:hover{background:#eff8fb}.ghost{background:#1d3454;color:#fff;padding:8px 12px}.full{width:100%}.feedback{font-size:13px;margin-bottom:12px;min-height:0}.feedback:not(:empty){padding:12px 14px;border-radius:10px;background:#e7f5ef;color:#17654d}.feedback.error:not(:empty){background:#fff0f0;color:#a82828}.list-panel,.history,.coupon-panel,.whatsapp-panel{margin-top:16px}.platform-sidebar{position:fixed;left:12px;top:82px;width:205px;z-index:5;background:#112747;color:#ecf5fb;border-radius:16px;padding:18px;box-shadow:0 10px 30px #0b1b3520;display:flex;flex-direction:column;gap:9px}.platform-nav-heading{font-size:11px;font-weight:900;letter-spacing:1.2px;color:#91aecb;margin-bottom:9px}.platform-nav-item{display:flex;align-items:center;gap:10px;text-align:left;background:transparent;border:1px solid transparent;color:#e0e9f4;padding:12px;border-radius:10px;font-weight:750;cursor:pointer}.platform-nav-item.active{background:#1e4c65;border-color:#35c4b7;color:#fff}.platform-side-divider{height:1px;background:#35516c;margin:10px 0}.platform-side-note{font-size:11px;color:#abc0d4}.app-has-sidebar main{margin-left:225px;max-width:none}.platform-context{padding:20px 22px;margin-bottom:16px}.platform-context-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.platform-context h2{font-size:22px;margin:5px 0}.platform-network-tabs{display:flex;gap:5px;padding:5px;border-radius:13px;background:#eaf0f5}.platform-network-button{padding:9px 15px;border:0;border-radius:9px;background:transparent;color:#475c76;cursor:pointer;font-size:13px;font-weight:700}.platform-network-button.active{background:white;color:#0f7d8a;box-shadow:0 1px 4px #153e5920}.platform-target-label{margin-top:13px;max-width:650px}.shopee-account-panel{padding:22px;margin-bottom:18px}.shopee-account-panel .section-header{align-items:center}.shopee-account-panel .shopee-inner{min-width:0}.account-grid{margin-top:16px}.shopee-account-panel .hint{margin:8px 0}.shopee-account-panel .shopee-form{margin-top:12px}.shopee-account-panel .tag{white-space:nowrap}@media(max-width:750px){.account-grid{grid-template-columns:1fr}.shopee-account-panel .section-header{flex-wrap:wrap}}.shopee-panel{padding:22px;margin-top:16px}.shopee-grid{margin-top:18px}.shopee-destination-toolbar{margin:14px 0}.shopee-destination-toolbar .hint{margin-top:8px}.shopee-destination-manage{background:#f8fafc;border:1px solid #e0e8f3;border-radius:14px;padding:18px;margin:14px 0}.shopee-destination-manage h2{margin-bottom:14px}.shopee-destination-manage .shopee-form{margin-bottom:4px}.shopee-destination-manage .wa-connect-box{margin-bottom:14px}.shopee-destination-manage .hint{margin:7px 0}.shopee-inner{background:#f8fafc;padding:18px;border-radius:13px;border:1px solid #e3eaf2}.shopee-inner h2{margin-bottom:12px}.shopee-form{display:flex;flex-direction:column;gap:12px}.shopee-panel .logs{margin-top:15px}@media(max-width:950px){.app-has-sidebar main{margin-left:0}.platform-sidebar{position:static;left:auto;top:auto;width:auto;flex-direction:row;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding:10px 12px}.platform-nav-heading,.platform-side-divider,.platform-side-note{display:none}.platform-nav-item{padding:10px 12px}.platform-context-head{flex-direction:column;align-items:stretch}}@media(max-width:520px){.platform-network-tabs{width:100%;justify-content:space-evenly}.platform-network-button{flex:1}.platform-context,.shopee-panel{padding:15px}}.channels-panel{padding:22px;margin-bottom:16px}.wa-multichannel{padding:22px;margin-top:16px}.wa-multichannel>label{max-width:560px}.wa-multi-form{display:flex;flex-direction:column;gap:12px;margin-top:15px}.wa-multichannel .hint{margin:8px 0}.divider-wa{border-top:1px solid #e6edf5;margin:21px 0}.wa-multichannel .wa-connect-box{margin-bottom:14px}.channels-panel>label{max-width:560px}.channels-panel .section-header{align-items:center}.channel-create{margin-top:15px;padding:18px;border:1px solid #d9e4ec;border-radius:13px;background:#f8fafc}.channel-create form{display:flex;flex-direction:column;gap:13px;margin-top:13px}.channel-create h2{margin-bottom:7px}.channel-extra-settings{background:#f8fafc;padding:16px;border-radius:12px;border:1px solid #e4ebf3;margin-bottom:8px}.channel-extra-settings h2{margin-bottom:13px}.coupon-panel,.whatsapp-panel{padding:22px}.coupon-panel form,.whatsapp-panel form{display:flex;flex-direction:column;gap:13px;margin-top:16px}.whatsapp-panel select{min-width:0}.whatsapp-panel .tag{flex-shrink:0}.whatsapp-delivery{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #edf1f6;padding:11px 0}.whatsapp-delivery small{display:block;color:#748095}.whatsapp-panel .hint{margin:9px 0}.wa-connect-box{border:1px solid #d9e8e7;background:#f4fbfa;border-radius:13px;padding:16px}.wa-connect-box p{margin-bottom:11px}.wa-connect-box code{color:#135a55;font-weight:800}.wa-qr-wrap{display:flex;flex-direction:column;align-items:center;margin-top:16px;gap:10px}.wa-qr-wrap img{display:block;width:min(260px,100%);height:auto;aspect-ratio:1;background:white;border:9px solid white;border-radius:10px;image-rendering:pixelated;box-shadow:0 2px 13px #15354320}.wa-qr-wrap p{max-width:340px;text-align:center;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}th{font-size:11px;color:#7e8ba1;text-transform:uppercase;letter-spacing:.8px;background:#f7f9fc}td,th{padding:12px 14px;border-bottom:1px solid #edf1f7;vertical-align:middle}td:first-child{min-width:240px}td a{font-weight:700;color:#0a7e95;text-decoration:none}td small{display:block;color:#718099;font-size:11px;margin-top:3px}.tag{border-radius:16px;padding:5px 9px;background:#edf4f8;color:#517086;font-size:11px;font-weight:700;white-space:nowrap}.tag.ready{background:#e4f8ef;color:#197348}.tag.published{background:#e8effb;color:#2558a2}.tag.needs_review{background:#fff1dd;color:#9b6a10}.tag.sending{background:#f2e8fd;color:#6a39a1}.mini{border:1px solid #d5e1eb;border-radius:9px;padding:7px 10px;background:#fff;color:#245b75;font-weight:700;cursor:pointer;white-space:nowrap}.logs{display:flex;flex-direction:column;gap:9px;color:#526477;font-size:12px}.logs>div{display:flex;justify-content:space-between;gap:15px;padding:9px 0;border-bottom:1px solid #edf1f6}.logs time{white-space:nowrap;color:#94a0b0}footer{font-size:11px;color:#97a2b4;text-align:center;margin-top:30px;line-height:1.8}
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill{display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 `;
 
@@ -427,6 +483,8 @@ let selectedPlatform='mercadolivre';
 let selectedNetwork='telegram';
 const lastNetwork={mercadolivre:'telegram',shopee:'telegram'};
 const shopeeTarget={telegram:null,whatsapp:null};
+let shoAccountState=null;
+let mlTopStatus='Robô desligado';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 async function call(path, opts={}) {
   const init = {...opts, credentials: 'same-origin'};
@@ -439,9 +497,55 @@ async function call(path, opts={}) {
 function view(auth) { $('dashboard').classList.toggle('hidden', !auth); $('login').classList.toggle('hidden', auth); $('logout').classList.toggle('hidden', !auth); document.body.classList.toggle('app-has-sidebar',auth); }
 function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'Publicado',needs_review:'Revisar'})[s]||s;}
 
+function updatePlatformIdentity(){
+  const sh=selectedPlatform==='shopee';
+  $('affiliate-platform-label').textContent=sh?'Perfil afiliado • Shopee':'Perfil afiliado • Mercado Livre';
+  $('affiliate-profile-name').textContent=sh
+    ?(shoAccountState?.affiliate_name||shoAccountState?.affiliate_id||'Não identificado')
+    :'rykellmy_007';
+  $('intro-description').textContent=sh
+    ?'Configure sua conta Shopee, cadastre links próprios e controle canais do Telegram ou grupos do WhatsApp.'
+    :'Cadastre links oficiais, programe envios e acompanhe o Telegram em um único lugar.';
+  $('top-status').textContent=sh
+    ?(shoAccountState?.api_status==='verified'?'API Shopee conectada':'API Shopee não conectada')
+    :mlTopStatus;
+  if(sh&&!Number.isInteger(shopeeTarget[selectedNetwork]))
+    $('channel-label').textContent='Shopee: nenhum '+(selectedNetwork==='telegram'?'canal':'grupo')+' cadastrado';
+  else if(!sh){
+    const channel=$('telegram_chat_id').value||'@achadinhosmlcr';
+    $('channel-label').textContent='Destino Telegram: '+channel;
+  }
+}
+async function refreshShopeeAccount(){
+  if(selectedPlatform!=='shopee')return;
+  try{
+    const account=await call('/api/shopee/account');
+    shoAccountState=account;
+    $('shopee-affiliate-name').value=account.affiliate_name||'';
+    $('shopee-affiliate-id').value=account.affiliate_id||'';
+    $('shopee-api-app-id').value=account.api_app_id||'';
+    $('shopee-api-secret').value='';
+    $('shopee-api-verify').disabled=!account.api_configured;
+    $('shopee-api-clear').disabled=!account.api_configured;
+    const labels={
+      verified:'✅ API Shopee conectada e verificada.',
+      credentials_saved:'Credenciais salvas com segurança. Clique em Testar conexão oficial.',
+      verification_failed:account.last_error||'A Shopee ainda não confirmou o acesso à API.',
+      not_configured:'API não conectada. Aguarde a liberação do App ID e da Senha da Open API.'
+    };
+    $('shopee-api-status').textContent=labels[account.api_status]||labels.not_configured;
+    $('shopee-account-badge').textContent=account.api_status==='verified'?'API conectada':
+      account.api_configured?'API não verificada':'API não conectada';
+    $('shopee-api-secret-hint').textContent=account.api_configured
+      ?'Senha armazenada de forma criptografada. Para substituir, informe App ID e nova Senha da API.'
+      :'A Senha da API será criptografada no servidor e não será exibida novamente.';
+    updatePlatformIdentity();
+  }catch(error){notice('Conta Shopee: '+error.message,true,'shopee-account-feedback');}
+}
 function applyPlatformView(){
   const isML=selectedPlatform==='mercadolivre',telegram=selectedNetwork==='telegram';
   // Shopee não compartilha canais, grupos ou bots com Mercado Livre.
+  $('shopee-account-panel').classList.toggle('hidden',isML);
   $('channels-panel').classList.toggle('hidden',!isML||!telegram);
   $('shopee-panel').classList.toggle('hidden',isML);
   document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram);
@@ -459,6 +563,7 @@ function applyPlatformView(){
   $('platform-description').textContent=isML
     ?'Configure as publicações do Mercado Livre em cada canal ou grupo.'
     :'Escolha Telegram ou WhatsApp e configure onde serão publicadas as ofertas da Shopee.';
+  updatePlatformIdentity();
 }
 async function refreshPlatformTargets(){
   let entries=[],selected;
@@ -598,7 +703,7 @@ async function switchPlatform(platform,network){
   $('shopee-destination-create').classList.add('hidden');
   try{
     await refreshPlatformTargets();
-    if(selectedPlatform==='shopee')await refreshShopee();
+    if(selectedPlatform==='shopee'){await refreshShopeeAccount();await refreshShopee();}
   }catch(error){notice('Destinos: '+error.message,true);}
 }
 async function refreshWhatsAppConnection(showErrors=false){
@@ -755,7 +860,8 @@ async function refresh(){
     $('channel-label').textContent='Destino Telegram: '+(s.telegram_chat_id||'não configurado');
     for(const k of ['channel_registered','telegram_enabled','automation_enabled']) $(k).checked=!!s[k];
     for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) $(k).value=s[k];
-    $('top-status').textContent=s.automation_enabled?'Robô ligado':'Robô desligado';
+    mlTopStatus=s.automation_enabled?'Robô ligado':'Robô desligado';
+    if(selectedPlatform==='mercadolivre')$('top-status').textContent=mlTopStatus;
     $('token-state').textContent=currentChannelId===1
       ?(data.telegram_token_configured?'✓ Bot principal configurado no servidor.':'⚠ Falta configurar TELEGRAM_BOT_TOKEN no servidor.')
       :(s.bot_mode==='shared'
@@ -779,7 +885,7 @@ async function refresh(){
     await refreshManagedWhatsApp();
     await refreshPlatformTargets();
     applyPlatformView();
-    if(selectedPlatform==='shopee')await refreshShopee();
+    if(selectedPlatform==='shopee'){await refreshShopeeAccount();await refreshShopee();}
   }catch(e){ if(e.message.includes('login')){view(false);$('top-status').textContent='Aguardando login';}else notice(e.message,true); }
 }
 for(let h=0;h<=24;h++){
@@ -1012,6 +1118,50 @@ $('shopee-wa-test').addEventListener('click',async()=>{
       body:JSON.stringify({network:'whatsapp',target_id:shopeeTarget.whatsapp})});
     notice('Teste enviado ao grupo Shopee.',false,'shopee-feedback');
   }catch(error){notice(error.message,true,'shopee-feedback');}
+});
+$('shopee-account-profile-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  try{
+    await call('/api/shopee/account/profile',{method:'POST',body:JSON.stringify({
+      affiliate_name:$('shopee-affiliate-name').value.trim(),
+      affiliate_id:$('shopee-affiliate-id').value.trim()
+    })});
+    await refreshShopeeAccount();
+    notice('Perfil Shopee salvo, separado da conta do Mercado Livre. Isso não conecta a Open API.',false,'shopee-account-feedback');
+  }catch(error){notice(error.message,true,'shopee-account-feedback');}
+});
+$('shopee-account-api-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const appId=$('shopee-api-app-id').value.trim();
+  const secret=$('shopee-api-secret').value;
+  try{
+    await call('/api/shopee/account/credentials',{method:'POST',
+      body:JSON.stringify({app_id:appId,api_secret:secret})});
+    $('shopee-api-secret').value='';
+    await refreshShopeeAccount();
+    notice('Credenciais armazenadas com criptografia. Clique em Testar conexão oficial para validar com a Shopee.',false,'shopee-account-feedback');
+  }catch(error){
+    $('shopee-api-secret').value='';
+    notice(error.message,true,'shopee-account-feedback');
+  }
+});
+$('shopee-api-verify').addEventListener('click',async()=>{
+  const button=$('shopee-api-verify');
+  button.disabled=true;
+  try{
+    const result=await call('/api/shopee/account/credentials/verify',{method:'POST',body:'{}'});
+    await refreshShopeeAccount();
+    notice(result.message,!result.ok,'shopee-account-feedback');
+  }catch(error){notice(error.message,true,'shopee-account-feedback');}
+  finally{button.disabled=!shoAccountState?.api_configured;}
+});
+$('shopee-api-clear').addEventListener('click',async()=>{
+  if(!confirm('Desconectar somente a Open API Shopee? O seu perfil, canais, grupos e histórico serão preservados.'))return;
+  try{
+    await call('/api/shopee/account/credentials/clear',{method:'POST',body:'{}'});
+    await refreshShopeeAccount();
+    notice('Credenciais da Open API removidas. Perfil e canais Shopee foram preservados.',false,'shopee-account-feedback');
+  }catch(error){notice(error.message,true,'shopee-account-feedback');}
 });
 for(const button of document.querySelectorAll('[data-platform]')){
   button.addEventListener('click',()=>switchPlatform(button.dataset.platform));
