@@ -1,6 +1,7 @@
 import { normalizeOffer,localTimeParts,composeOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
+import { resolveProductImage } from './offer-images.js';
 import { categoryMatches,normalizeChannelCategory } from './multichannel.js';
 import { listWhatsAppGroups,connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,evolutionOrigin,ensureWhatsAppTables } from './whatsapp.js';
 
@@ -261,7 +262,7 @@ async function sendWhatsApp(env,g,offer){
  const description=composeOfferMessage(offer);
  const text=(description.length+link.length+1>1024?description.slice(0,1023-link.length):description)+'\n'+link;
  let photo=null;
- try{photo=await findProductImage(link);}catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
+ try{photo=await resolveProductImage(env,link,findProductImage);}catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
  const body=photo
    ?{number:g.group_jid,mediatype:'image',mimetype:photo.endsWith('.png')?'image/png':'image/jpeg',
      media:photo,caption:text,fileName:'oferta-mercado-livre.jpg'}
