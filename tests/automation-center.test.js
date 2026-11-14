@@ -7,7 +7,7 @@ import { ensureWhatsAppTables } from '../src/whatsapp.js';
 import { ensureShopeeTables } from '../src/shopee.js';
 import {
   ensureAutomationCenter,masterState,setMasterState,listCategories,createGroupCategory,STARTER_GROUP_CATEGORIES,
-  saveCategoryRoutes,listCategoryDestinations,upsertProductCategory,classifyProduct,runCategoryRoutingScheduled
+  saveCategoryRoutes,listCategoryDestinations,upsertProductCategory,classifyProduct,runCategoryRoutingScheduled,PREVIOUS_STARTER_KEYWORDS
 } from '../src/automation-center.js';
 import { renderPage,CLIENT_JS } from '../src/ui.js';
 
@@ -59,6 +59,54 @@ test('cinco categorias iniciais são cadastradas sem duplicar nem sobrescrever c
       assert.equal(found.category?.name,'Ferramentas e Peças Automotivas',title);
     }
   }finally{DB.close();}
+});
+
+
+test('ampliação migra cinco presets antigos uma vez, sem mexer em pausas, personalizações ou destinos',async()=>{
+  const {env,DB}=setup();
+  try{
+    await ensureAutomationCenter(env);
+    for(const preset of STARTER_GROUP_CATEGORIES){
+      const previous=PREVIOUS_STARTER_KEYWORDS[preset.name];
+      assert.ok(previous&&previous!==preset.keywords,'Presets antes e depois devem diferir');
+      DB.prepare('UPDATE affiliate_group_categories SET keywords=? WHERE name=?').bind(previous,preset.name).run();
+    }
+    DB.prepare("UPDATE affiliate_group_categories SET enabled=0 WHERE name='Beleza e Cuidados Pessoais'").run();
+    await ensureAutomationCenter(env);
+    const result=await listCategories(env);
+    assert.equal(result.groups.filter(c=>STARTER_GROUP_CATEGORIES.some(p=>p.name===c.name)).length,5);
+    for(const preset of STARTER_GROUP_CATEGORIES){
+      const item=result.groups.find(c=>c.name===preset.name);
+      assert.equal(item.keywords,preset.keywords,'Migrar preset anterior sem perder conteúdo: '+preset.name);
+      assert.ok(item.keywords.length<=800);
+      assert.equal(new Set(item.keywords.split(', ')).size,item.keywords.split(', ').length,'Não duplicar termos');
+    }
+    assert.equal(result.groups.find(c=>c.name==='Beleza e Cuidados Pessoais').enabled,0,'Não reativar categoria pausada');
+    assert.equal(result.routes.length,0,'Não criar novos destinatários ou autorizar envio');
+    assert.equal((await masterState(env)).enabled,null,'Não ligar robô geral');
+
+    DB.prepare("UPDATE affiliate_group_categories SET keywords='palavra escolhida, termo exclusivo' WHERE name='Casa e Utilidades'").run();
+    await ensureAutomationCenter(env);
+    await ensureAutomationCenter(env);
+    assert.equal(DB.prepare("SELECT keywords FROM affiliate_group_categories WHERE name='Casa e Utilidades'").first().keywords,'palavra escolhida, termo exclusivo','Personalização deve ser preservada');
+  }finally{DB.close();}
+});
+
+test('novos termos classificam exemplos das cinco categorias sem confundir shampoo automotivo com beleza',()=>{
+  const groups=STARTER_GROUP_CATEGORIES.map((c,i)=>({...c,id:i+1,enabled:1}));
+  const samples=[
+    ['Panela de pressão inox 4 litros','Casa e Utilidades'],
+    ['Kit skincare com água micelar','Beleza e Cuidados Pessoais'],
+    ['Vestido midi feminino','Moda e Acessórios'],
+    ['Smart TV 4k 55 polegadas','Eletrônicos e Eletrodomésticos'],
+    ['Trena laser profissional','Ferramentas e Peças Automotivas'],
+    ['Shampoo automotivo para lavagem do carro','Ferramentas e Peças Automotivas'],
+    ['Shampoo anticaspa para cabelos','Beleza e Cuidados Pessoais']
+  ];
+  for(const [title,name] of samples){
+    assert.equal(classifyProduct(title,'Geral',groups).category?.name,name,title);
+  }
+  assert.equal(classifyProduct('Produto desconhecido referência 123','Geral',groups).classification,'needs_review');
 });
 
 test('controle geral começa legado e permite ligar/desligar sem apagar dados',async()=>{
