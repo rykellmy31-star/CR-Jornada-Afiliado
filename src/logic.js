@@ -1,4 +1,5 @@
 import { couponDescription } from './coupons.js';
+import {publishedPromotionLines} from './promotion-terms.js';
 export const BRAZIL_TIMEZONE = 'America/Bahia';
 
 export function validateAffiliateUrl(input) {
@@ -70,13 +71,16 @@ export function formatBRL(cents) {
 export function composeOfferMessage(offer, now = Date.now()) {
   const date = new Date(now);
   const headline = ['📣 Publicidade • Oferta Mercado Livre', '', `🛍️ ${offer.title}`];
-  if (offer.price_cents != null) {
-    // Evita tratar um preço antigo como preço confirmado em tempo real.
-    const recent = now - offer.created_at * 1000 <= 6 * 60 * 60 * 1000;
-    if (recent) {
-      if (offer.old_price_cents && offer.old_price_cents > offer.price_cents) {
+  // Ofertas capturadas em grupos trazem a origem e a data reais da mensagem.
+  // Após 6h não reaproveite valores antigos só porque o link foi convertido agora.
+  const sourced=offer.promo_terms_json?publishedPromotionLines(offer,now):null;
+  if(offer.promo_terms_json){if(sourced)headline.push(...sourced);}
+  else if(offer.price_cents != null){
+    const recent=now-offer.created_at*1000<=6*60*60*1000;
+    if(recent){
+      if(offer.old_price_cents&&offer.old_price_cents>offer.price_cents)
         headline.push(`🏷️ De ${formatBRL(offer.old_price_cents)} por ${formatBRL(offer.price_cents)}`);
-      } else headline.push(`💰 Preço informado: ${formatBRL(offer.price_cents)}`);
+      else headline.push(`💰 Preço informado: ${formatBRL(offer.price_cents)}`);
     }
   }
   const couponDay = localTimeParts(date).day;

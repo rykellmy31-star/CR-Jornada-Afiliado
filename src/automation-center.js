@@ -2,6 +2,7 @@ import { sendPlatformTelegramText } from './multichannel.js';
 import { sendPlatformWhatsAppText } from './whatsapp-groups.js';
 import { sendShopeeOwnText } from './shopee-destinations.js';
 import { localTimeParts } from './logic.js';
+import {publishedPromotionLines} from './promotion-terms.js';
 
 // Camada ADITIVA: nunca substitui as tabelas, filas, autorizações ou credenciais existentes.
 const SCHEMA=[
@@ -261,7 +262,11 @@ export async function saveCategoryRoutes(env,id,data){
 function offerText(platform,offer,category,subcategory){
   const heading=platform==='shopee'?'Shopee':'Mercado Livre';
   const lines=['📣 Publicidade • Oferta '+heading,'','🛍️ '+offer.title];
-  if(offer.price_cents!=null)lines.push('💰 Preço informado: '+(offer.price_cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
+  if(offer.promo_terms_json){
+    const sourced=publishedPromotionLines(offer);
+    if(sourced)lines.push(...sourced);
+  }else if(offer.price_cents!=null)
+    lines.push('💰 Preço informado: '+(offer.price_cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
   lines.push('','📁 '+category+(subcategory?' • '+subcategory:''),'✅ Confira o valor e a disponibilidade antes de comprar.','🔗 Comprar aqui:',offer.affiliate_url);
   return lines.join('\n');
 }

@@ -2,7 +2,20 @@
 export const REPEAT_WINDOW_SECONDS=7*24*60*60;
 export const REPEAT_META_SCHEMA="CREATE TABLE IF NOT EXISTS ml_monitor_product_meta(product_id TEXT PRIMARY KEY,last_seen_price_cents INTEGER,last_seen_at INTEGER NOT NULL DEFAULT 0,pending_batch_id INTEGER,pending_price_cents INTEGER,last_queued_at INTEGER NOT NULL DEFAULT 0,last_queued_price_cents INTEGER)";
 
-export async function ensureRepeatMeta(env){await env.DB.prepare(REPEAT_META_SCHEMA).run();}
+export async function ensureRepeatMeta(env){
+ await env.DB.prepare(REPEAT_META_SCHEMA).run();
+ const current=new Set((await env.DB.prepare("PRAGMA table_info(ml_monitor_product_meta)").all()).results.map(x=>x.name));
+ for(const [name,type] of [['last_seen_deal_json','TEXT'],['pending_deal_json','TEXT'],['pending_captured_at','INTEGER']]){
+   if(!current.has(name))await env.DB.prepare('ALTER TABLE ml_monitor_product_meta ADD COLUMN '+name+' '+type).run();
+ }
+}
+export async function ensureOfferPromoColumns(env){
+ const current=new Set((await env.DB.prepare('PRAGMA table_info(offers)').all()).results.map(x=>x.name));
+ for(const [name,type] of [['promo_terms_json','TEXT'],['promo_captured_at','INTEGER']]){
+   if(!current.has(name))await env.DB.prepare('ALTER TABLE offers ADD COLUMN '+name+' '+type).run();
+ }
+}
+
 
 function cents(amount){
  if(!/^\d{1,6}(?:\.\d{3})*(?:,\d{2})?$/.test(amount))return null;

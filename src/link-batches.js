@@ -2,7 +2,8 @@ import {validateAffiliateUrl,normalizeOffer} from './logic.js';
 import {classifyProduct,ensureAutomationCenter,upsertProductCategory} from './automation-center.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
 import {ensureWhatsAppTables} from './whatsapp.js';
-import {ensureRepeatMeta} from './monitor-repeat-policy.js';
+import {ensureRepeatMeta,ensureOfferPromoColumns} from './monitor-repeat-policy.js';
+import {safePromotionTerms} from './promotion-terms.js';
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_link_batches(id INTEGER PRIMARY KEY AUTOINCREMENT,status TEXT NOT NULL DEFAULT 'awaiting_links' CHECK(status IN ('awaiting_links','imported')),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,imported_at INTEGER)",
  "CREATE TABLE IF NOT EXISTS ml_link_batch_items(id INTEGER PRIMARY KEY AUTOINCREMENT,batch_id INTEGER NOT NULL REFERENCES ml_link_batches(id),position INTEGER NOT NULL,title TEXT NOT NULL,source_url TEXT NOT NULL,category TEXT NOT NULL,classification TEXT NOT NULL,affiliate_url TEXT,offer_id INTEGER,status TEXT NOT NULL DEFAULT 'awaiting_links' CHECK(status IN ('awaiting_links','queued')),UNIQUE(batch_id,position),UNIQUE(batch_id,source_url))",
@@ -10,7 +11,7 @@ const SCHEMA=[
 ];
 const now=()=>Math.floor(Date.now()/1000);
 const bad=(message,status=400)=>Object.assign(new Error(message),{status});
-export async function ensureLinkBatches(env){for(const sql of SCHEMA)await env.DB.prepare(sql).run();await ensureRepeatMeta(env);}
+export async function ensureLinkBatches(env){for(const sql of SCHEMA)await env.DB.prepare(sql).run();await ensureRepeatMeta(env);await ensureOfferPromoColumns(env);}
 export function productId(value){const m=String(value||'').match(/\b(MLBU?)[-_]?(\d{6,})\b/i);return m?m[1].toUpperCase()+m[2]:null;}
 export function validateSourceUrl(value){
  let u;try{u=new URL(String(value||'').trim());}catch{throw bad('Insira uma URL original válida do Mercado Livre.');}
@@ -120,21 +121,30 @@ export async function importLinkBatch(env,id,body){
  ];
  const duplicates=await Promise.all(queries.map(sql=>env.DB.prepare(sql).bind(...urls).all()));
  if(duplicates.some(r=>r.results.length))throw bad('Um dos links já está cadastrado em outra fila. Revise antes de continuar.',409);
- const t=now(),ops=[];
+ const t=now(),ops=[],sourceDeals=new Map();
  // A janela de sete dias começa ao colocar o produto monitorado na fila.
  // O preço usado na comparação é o que foi registrado ao preparar este lote.
  const hasMonitor=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_monitor_links'").first();
  if(hasMonitor){
-   const captured=(await env.DB.prepare("SELECT product_id FROM ml_monitor_links WHERE batch_id=? AND status='batched'").bind(Number(id)).all()).results;
+   const captured=(await env.DB.prepare("SELECT l.product_id,l.source_url,m.pending_deal_json,m.pending_captured_at FROM ml_monitor_links l JOIN ml_monitor_product_meta m ON m.product_id=l.product_id WHERE l.batch_id=? AND l.status='batched'").bind(Number(id)).all()).results;
    for(const item of captured){
+     sourceDeals.set(item.source_url,item);
      ops.push(env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) VALUES(?,0)").bind(item.product_id));
-     ops.push(env.DB.prepare("UPDATE ml_monitor_product_meta SET last_queued_at=?,last_queued_price_cents=pending_price_cents,pending_batch_id=NULL,pending_price_cents=NULL WHERE product_id=? AND (pending_batch_id=? OR pending_batch_id IS NULL)")
+     ops.push(env.DB.prepare("UPDATE ml_monitor_product_meta SET last_queued_at=?,last_queued_price_cents=pending_price_cents,pending_batch_id=NULL,pending_price_cents=NULL,pending_deal_json=NULL,pending_captured_at=NULL WHERE product_id=? AND (pending_batch_id=? OR pending_batch_id IS NULL)")
        .bind(t,item.product_id,Number(id)));
    }
  }
  chosen.forEach(x=>{
-   const offer=normalizeOffer({title:x.source.title,affiliate_url:x.affiliate_url,category:x.category,owner_confirmation:true});
-   ops.push(env.DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status) VALUES(?,?,?,?,'ready')").bind(offer.title,offer.affiliate_url,offer.category,t));
+   const source=sourceDeals.get(x.source.source_url);
+   const promo=safePromotionTerms(source?.pending_deal_json);
+   const capturedAt=Number(source?.pending_captured_at);
+   const offer=normalizeOffer({title:x.source.title,affiliate_url:x.affiliate_url,category:x.category,
+     price:promo?.price_cents!=null?(promo.price_cents/100).toFixed(2):null,
+     old_price:promo?.old_price_cents!=null?(promo.old_price_cents/100).toFixed(2):null,
+     owner_confirmation:true});
+   ops.push(env.DB.prepare("INSERT INTO offers(title,affiliate_url,category,price_cents,old_price_cents,promo_terms_json,promo_captured_at,created_at,status) VALUES(?,?,?,?,?,?,?,?,'ready')")
+     .bind(offer.title,offer.affiliate_url,offer.category,offer.price_cents,offer.old_price_cents,
+       promo?JSON.stringify(promo):null,promo&&Number.isSafeInteger(capturedAt)&&capturedAt>0?capturedAt:null,t));
    ops.push(env.DB.prepare("UPDATE ml_link_batch_items SET affiliate_url=?,offer_id=(SELECT id FROM offers WHERE affiliate_url=?),category=?,status='queued' WHERE id=? AND batch_id=? AND status='awaiting_links'")
      .bind(x.affiliate_url,x.affiliate_url,x.category,x.source.id,Number(id)));
  });
