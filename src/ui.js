@@ -12,11 +12,28 @@ export function renderPage() {
         <button class="platform-nav-item" type="button" data-platform="shopee"><span>🧡</span> Shopee</button>
         <div class="platform-side-divider"></div>
         <button class="platform-nav-item" type="button" data-panel="categories"><span>📁</span> Categorias</button>
+        <button class="platform-nav-item" type="button" data-panel="automation"><span>⚙️</span> Automação</button>
+        <button class="platform-nav-item" type="button" data-panel="affiliate"><span>🔐</span> Conexão de Afiliado</button>
         <button class="platform-nav-item" type="button" data-panel="activity"><span>📋</span> Atividade recente</button>
         <div class="platform-side-divider"></div>
         <p class="platform-side-note">Cada plataforma possui suas próprias filas e configurações de divulgação.</p>
       </aside>
       ${CATEGORY_PAGE_HTML}
+      <section id="automation-page" class="hidden" aria-label="Central de automação">
+        <div class="automation-title"><span class="eyebrow">CENTRAL DE AUTOMAÇÃO</span><h1>Automação</h1><p>Configure o ritmo das publicações e cadastre ofertas da plataforma e do destino selecionados acima. As filas existentes são preservadas.</p></div>
+        <section id="auto-telegram-settings" class="card automation-box hidden"><h2>⚙️ Publicações automáticas • Telegram</h2><div id="auto-telegram-controls"></div><div class="actions"><button class="primary" type="submit" form="settings-form">Salvar automação Telegram</button></div><p class="hint">O canal, suas permissões e o bot são configurados na aba Telegram.</p></section>
+        <section id="auto-wa-main-settings" class="card automation-box hidden"><h2>⚙️ Publicações automáticas • WhatsApp principal</h2><div id="auto-wa-main-fields"></div><div id="auto-wa-main-toggle"></div><div class="actions"><button class="primary" type="submit" form="whatsapp-form">Salvar automação WhatsApp</button></div><p class="hint">O número, grupo e autorização são configurados na aba WhatsApp.</p></section>
+        <section id="auto-wa-extra-settings" class="card automation-box hidden"><h2>⚙️ Publicações automáticas • Grupo WhatsApp</h2><div id="auto-wa-extra-fields" class="field-grid"></div><div id="auto-wa-extra-toggle"></div><div class="actions"><button class="primary" type="submit" form="wa-multi-settings-form">Salvar automação do grupo</button></div></section>
+        <section id="auto-wa-group-offers" class="card automation-box hidden"><h2>Adicionar oferta e acompanhar fila deste grupo</h2></section>
+        <div id="auto-ml-offer"></div><div id="auto-ml-metrics"></div><div id="auto-ml-history"></div>
+        <div id="auto-wa-offers"></div><div id="auto-shopee-offers"></div>
+      </section>
+      <section id="affiliate-page" class="card affiliate-page hidden" aria-label="Conexão de afiliado">
+        <span class="eyebrow">MERCADO LIVRE</span><h1>🔐 Conexão de Afiliado</h1>
+        <p><strong>Estado: não conectada.</strong> A conexão autenticada com o gerador de links ainda não foi implementada nem autorizada. O robô continua publicando os links de afiliado já cadastrados.</p>
+        <p>Esta área ficará reservada para uma integração que possa gerar links vinculados à sua conta com segurança. Não informe senha, cookies ou tokens de sessão em formulários improvisados. A criação da aplicação de desenvolvedor, por si só, não gera links de comissão.</p>
+        <p>Quando houver método suportado e validado, o painel poderá exibir conexão, renovação, geração de teste e estado da integração sem alterar as publicações atuais.</p>
+      </section>
       <section class="platform-context card" id="platform-context">
         <div class="platform-context-head">
           <div>
@@ -555,9 +572,7 @@ export const CSS = `
 *{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}
 /* Aba ativa é a única visível, inclusive durante consultas assíncronas atrasadas. */
 #dashboard:not([data-view="mercadolivre-telegram"]) > #channels-panel,
-#dashboard:not([data-view="mercadolivre-telegram"]) > .metric-grid,
 #dashboard:not([data-view="mercadolivre-telegram"]) > .main-grid,
-#dashboard:not([data-view="mercadolivre-telegram"]) > .list-panel,
 #dashboard:not([data-view="mercadolivre-whatsapp"]) > #wa-multichannel,
 #dashboard:not([data-view="mercadolivre-whatsapp"]) > #whatsapp,
 #dashboard:not([data-view="shopee-telegram"]):not([data-view="shopee-whatsapp"]) > #shopee-panel,
@@ -574,11 +589,43 @@ export const CSS = `
   input:not([type=checkbox]),select,textarea{font-size:16px}
 }
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill:not(#master-toggle){display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
+.automation-title{margin:4px 0 18px}.automation-title h1{margin:8px 0}.automation-title p{max-width:730px;font-size:13px}
+#automation-page>.automation-box,#automation-page>#auto-ml-offer>.card,#automation-page>#auto-wa-offers>.card,#automation-page>#auto-shopee-offers>#shopee-content{margin-bottom:17px}
+.automation-box,.affiliate-page{padding:22px}.automation-box>h2{margin-bottom:17px}.automation-box>.actions{margin-top:16px}.automation-box>.hint{margin-top:9px}
+#auto-telegram-controls .settings-subsection{margin-top:0}#auto-wa-main-fields label{margin-bottom:14px}
+#auto-wa-main-toggle,#auto-wa-extra-toggle{margin-top:12px}#auto-ml-metrics .metric-grid{margin-bottom:16px}
+#auto-ml-history .list-panel{margin-top:14px;padding:22px}
+.affiliate-page{display:flex;flex-direction:column;gap:16px}.affiliate-page h1{font-size:27px}.affiliate-page p{max-width:760px}
+#auto-wa-offers .wa-direct-card{padding:22px;border:1px solid #e8edf5;border-radius:17px;margin:16px 0;background:#fff}
+@media(max-width:520px){.automation-box,.affiliate-page{padding:17px}}
 ${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}
 `;
 export const CLIENT_JS = `
 'use strict';
 const $ = id => document.getElementById(id);
+// Os mesmos controles e formulários atendem às novas abas: nenhum estado duplicado
+// e nenhuma migração de banco é necessária.
+(function mountAutomationPanels(){
+  const move=(selector,target)=>{const node=document.querySelector(selector);if(!node||!$(target))throw Error('Painel de automação ausente: '+selector);$(target).appendChild(node);return node;};
+  const moveLabel=(id,formId,target)=>{const input=$(id);const label=input&&input.closest('label');if(!label)throw Error('Controle não encontrado: '+id);input.setAttribute('form',formId);$(target).appendChild(label);};
+  const telegram=move('.settings-subsection.automation-section','auto-telegram-controls');
+  for(const input of telegram.querySelectorAll('input,select,textarea'))input.setAttribute('form','settings-form');
+  move('.add-offer','auto-ml-offer');
+  move('#dashboard > .metric-grid','auto-ml-metrics');
+  move('#dashboard > .list-panel','auto-ml-history');
+  moveLabel('wa-interval','whatsapp-form','auto-wa-main-fields');
+  moveLabel('wa-enabled','whatsapp-form','auto-wa-main-toggle');
+  for(const id of ['wa-multi-interval','wa-multi-daily','wa-multi-start','wa-multi-end'])moveLabel(id,'wa-multi-settings-form','auto-wa-extra-fields');
+  moveLabel('wa-multi-enabled','wa-multi-settings-form','auto-wa-extra-toggle');
+  move('#wa-direct-card','auto-wa-offers');
+  const groupForm=$('wa-multi-offer-form');
+  const groupHead=groupForm.previousElementSibling;
+  const groupHistory=groupForm.nextElementSibling;
+  const groupTable=groupHistory.nextElementSibling;
+  const groupLogs=groupTable.nextElementSibling;
+  for(const node of [groupHead,groupForm,groupHistory,groupTable,groupLogs])$('auto-wa-group-offers').appendChild(node);
+  move('#shopee-content','auto-shopee-offers');
+})();
 // iOS Safari pode ignorar user-scalable=no: bloqueie somente gestos de zoom.
 // O toque simples continua disponível para rolar a tela e usar os controles.
 document.addEventListener('gesturestart',event=>event.preventDefault(),{passive:false});
@@ -607,7 +654,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
-    if(['platform','categories','activity'].includes(state.page))selectedPage=state.page;
+    if(['platform','categories','activity','automation','affiliate'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -770,10 +817,10 @@ function applyPlatformView(){
   $('ml-coupon-target-hint').textContent=selectedNetwork==='telegram'
     ?'Selecione acima o canal Telegram do Mercado Livre para vincular um cupom à oferta.'
     :'No WhatsApp, escolha seu grupo acima. Para o principal, cupons de ofertas compartilhadas são vinculados à fila principal do Mercado Livre; ofertas exclusivas diretas não possuem cupons nesta versão.';
-  document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram||coupons);
+  $('auto-ml-metrics').classList.toggle('hidden',selectedPage!=='automation'||!isML||!telegram);
   document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram||coupons);
   $('ml-coupon-panel').classList.toggle('hidden',!isML||!coupons||(!telegram&&currentWaGroupId!==1));
-  document.querySelector('#dashboard > .list-panel').classList.toggle('hidden',!isML||!telegram||coupons);
+  $('auto-ml-history').classList.toggle('hidden',selectedPage!=='automation'||!isML||!telegram);
   $('wa-multichannel').classList.toggle('hidden',!isML||telegram||coupons);
   $('whatsapp').classList.toggle('hidden',!isML||telegram||coupons||currentWaGroupId!==1);
   for(const el of document.querySelectorAll('[data-platform]'))
@@ -785,14 +832,29 @@ function applyPlatformView(){
   $('platform-description').textContent=isML
     ?'Configure as publicações do Mercado Livre em cada canal ou grupo.'
     :'Escolha Telegram ou WhatsApp e configure onde serão publicadas as ofertas da Shopee.';
-  // A aba Atividade e a aba Categorias são páginas próprias do menu lateral.
+  // Páginas próprias do menu lateral preservam o estado da plataforma selecionada.
   for(const item of $('dashboard').children){
     if(item.id==='platform-sidebar')continue;
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
-    if(selectedPage!=='platform')item.classList.add('hidden');
-    else if(item.id==='platform-context'||item.id==='notice'||item.classList.contains('intro')||item.tagName==='FOOTER')item.classList.remove('hidden');
+    if(item.id==='automation-page'){item.classList.toggle('hidden',selectedPage!=='automation');continue;}
+    if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate');continue;}
+    if(selectedPage!=='platform'){
+      item.classList.toggle('hidden',item.id!=='platform-context'||selectedPage!=='automation');
+    }else if(item.id==='platform-context'||item.id==='notice'||item.classList.contains('intro')||item.tagName==='FOOTER')item.classList.remove('hidden');
   }
+  const showAuto=selectedPage==='automation';
+  $('auto-telegram-settings').classList.toggle('hidden',!showAuto||!isML||!telegram);
+  $('auto-ml-offer').classList.toggle('hidden',!showAuto||!isML||!telegram);
+  const mainWA=showAuto&&isML&&!telegram&&currentWaGroupId===1;
+  const extraWA=showAuto&&isML&&!telegram&&currentWaGroupId!==1;
+  $('auto-wa-main-settings').classList.toggle('hidden',!mainWA);
+  $('auto-wa-extra-settings').classList.toggle('hidden',!extraWA);
+  $('auto-wa-offers').classList.toggle('hidden',!mainWA);
+  $('auto-wa-group-offers').classList.toggle('hidden',!extraWA);
+  const activeShopee=showAuto&&!isML&&Number.isSafeInteger(shopeeTarget[selectedNetwork])&&shopeeTarget[selectedNetwork]>=1000;
+  $('auto-shopee-offers').classList.toggle('hidden',!activeShopee);
+  $('shopee-content').classList.toggle('hidden',!activeShopee);
   for(const button of document.querySelectorAll('[data-panel]'))
     button.classList.toggle('active',button.dataset.panel===selectedPage);
   for(const button of document.querySelectorAll('[data-platform]'))
@@ -832,7 +894,7 @@ async function refreshPlatformTargets(prefetchedChannels=null){
         configured:x.configured,shopee_enabled:x.shopee_enabled}));
     selected=shopeeTarget[network];
   }
-  if(requestRevision!==destinationRequestRevision||selectedPlatform!==platform||selectedNetwork!==network||selectedPage!=='platform')
+  if(requestRevision!==destinationRequestRevision||selectedPlatform!==platform||selectedNetwork!==network||!['platform','automation'].includes(selectedPage))
     return false;
   const select=$('platform-target-select');
   select.innerHTML=entries.map(e=>
@@ -1279,7 +1341,7 @@ async function refresh(){
     view(true);
     restoreScrollAfterRefresh();
     // Não consultar Evolution/Shopee enquanto uma aba diferente estiver aberta.
-    const isPlatform=selectedPage==='platform';
+    const isPlatform=selectedPage==='platform'||selectedPage==='automation';
     const isWhatsApp=isPlatform&&selectedPlatform==='mercadolivre'&&selectedNetwork==='whatsapp';
     const isShopee=isPlatform&&selectedPlatform==='shopee';
     void Promise.allSettled([
@@ -1581,10 +1643,25 @@ for(const button of document.querySelectorAll('[data-panel]')){
     applyPlatformView();
     if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
     if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
+    if(selectedPage==='automation'){
+      await refreshPlatformTargets().catch(error=>notice('Destinos: '+error.message,true));
+      if(selectedPlatform==='shopee')await Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
+      else if(selectedNetwork==='whatsapp')await Promise.allSettled([refreshWhatsApp(),refreshManagedWhatsApp()]);
+    }
   });
 }
 for(const button of document.querySelectorAll('[data-network]')){
-  button.addEventListener('click',()=>switchPlatform(selectedPlatform,button.dataset.network));
+  button.addEventListener('click',async()=>{
+    if(selectedPage!=='automation')return switchPlatform(selectedPlatform,button.dataset.network);
+    selectedNetwork=button.dataset.network;
+    selectedTab=selectedNetwork;
+    lastNetwork[selectedPlatform]=selectedNetwork;
+    rememberNavigation();applyPlatformView();
+    await refreshPlatformTargets().catch(error=>notice('Destinos: '+error.message,true));
+    if(selectedPlatform==='shopee')await Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
+    else if(selectedNetwork==='whatsapp')await Promise.allSettled([refreshWhatsApp(),refreshManagedWhatsApp()]);
+    else await refresh();
+  });
 }
 $('coupons-tab').addEventListener('click',async()=>{
   selectedPage='platform';selectedTab='coupons';rememberNavigation();applyPlatformView();
