@@ -666,7 +666,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
-    if(['platform','categories','activity'].includes(state.page))selectedPage=state.page;
+    if(['platform','categories','activity','affiliate'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -674,7 +674,7 @@ function restoreNavigationState(){
     selectedNetwork=state.network==='telegram'||state.network==='whatsapp'
       ?state.network:lastNetwork[selectedPlatform];
     lastNetwork[selectedPlatform]=selectedNetwork;
-    selectedTab=state.tab==='coupons'?'coupons':selectedNetwork;
+    selectedTab=['coupons','automation'].includes(state.tab)?state.tab:selectedNetwork;
     currentChannelId=validNavigationId(state.channelId)||1;
     currentWaGroupId=validNavigationId(state.whatsappGroupId)||1;
     shopeeTarget.telegram=validNavigationId(state.shopeeTelegram,1000);
@@ -692,6 +692,9 @@ function rememberNavigation(){
   }catch{/* Armazenamento desativado: a navegação continua funcional. */}
 }
 restoreNavigationState();
+// A fila histórica permanece íntegra e é mostrada apenas na Central de Automação.
+const waHistory=document.querySelector('#wa-direct-card .table-scroll');
+if(waHistory)$('ml-wa-automation-history').appendChild(waHistory);
 let firstRefresh=true;
 function restoreScrollAfterRefresh(){
   if(!firstRefresh)return;
@@ -815,31 +818,35 @@ function applyPlatformView(){
   $('dashboard').dataset.view=selectedPage==='platform'?selectedPlatform+'-'+selectedTab:selectedPage;
   const isML=selectedPlatform==='mercadolivre',telegram=selectedNetwork==='telegram';
   // Exibe páginas secundárias sem misturar configurações de plataformas diferentes.
-  const coupons=selectedTab==='coupons';
-  $('shopee-account-panel').classList.toggle('hidden',isML||coupons);
-  $('channels-panel').classList.toggle('hidden',!isML||!telegram||coupons);
+  const coupons=selectedTab==='coupons',automation=selectedTab==='automation';
+  $('shopee-account-panel').classList.toggle('hidden',isML||coupons||automation);
+  $('channels-panel').classList.toggle('hidden',!isML||!telegram||coupons||automation);
   $('shopee-panel').classList.toggle('hidden',isML||coupons);
-  $('shopee-telegram-destination-form').classList.toggle('hidden',isML||!telegram||coupons);
-  $('shopee-whatsapp-destination').classList.toggle('hidden',isML||telegram||coupons);
+  $('shopee-telegram-destination-form').classList.toggle('hidden',isML||!telegram||coupons||automation);
+  $('shopee-whatsapp-destination').classList.toggle('hidden',isML||telegram||coupons||automation);
   $('shopee-coupon-panel').classList.toggle('hidden',isML||!coupons);
   $('ml-whatsapp-coupon-panel').classList.toggle('hidden',!isML||!coupons||telegram||currentWaGroupId===1);
   $('coupon-network-wrap').classList.toggle('hidden',!coupons);
+   $('automation-network-wrap').classList.toggle('hidden',!automation||isML);
+   $('automation-network-select').value=selectedNetwork;
   $('coupon-target-network').value=selectedNetwork;
   $('platform-target-caption').textContent='Selecionar '+(selectedNetwork==='telegram'?'canal do Telegram':'grupo do WhatsApp')+' para configurar';
   $('ml-coupon-target-hint').textContent=selectedNetwork==='telegram'
     ?'Selecione acima o canal Telegram do Mercado Livre para vincular um cupom à oferta.'
     :'No WhatsApp, escolha seu grupo acima. Para o principal, cupons de ofertas compartilhadas são vinculados à fila principal do Mercado Livre; ofertas exclusivas diretas não possuem cupons nesta versão.';
-  document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!telegram||coupons);
-  document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||!telegram||coupons);
+  document.querySelector('#dashboard > .metric-grid').classList.toggle('hidden',!isML||!automation);
+  document.querySelector('#dashboard > .main-grid').classList.toggle('hidden',!isML||coupons||(!telegram&&!automation));
   $('ml-coupon-panel').classList.toggle('hidden',!isML||!coupons||(!telegram&&currentWaGroupId!==1));
-  document.querySelector('#dashboard > .list-panel').classList.toggle('hidden',!isML||!telegram||coupons);
-  $('wa-multichannel').classList.toggle('hidden',!isML||telegram||coupons);
-  $('whatsapp').classList.toggle('hidden',!isML||telegram||coupons||currentWaGroupId!==1);
+  document.querySelector('#dashboard > .list-panel').classList.toggle('hidden',!isML||!automation);
+  $('wa-multichannel').classList.toggle('hidden',!isML||telegram||coupons||automation);
+   $('ml-wa-automation-panel').classList.toggle('hidden',!isML||!automation);
+  $('whatsapp').classList.toggle('hidden',!isML||telegram||coupons||automation||currentWaGroupId!==1);
   for(const el of document.querySelectorAll('[data-platform]'))
     el.classList.toggle('active',el.dataset.platform===selectedPlatform);
   for(const el of document.querySelectorAll('[data-network]'))
-    el.classList.toggle('active',!coupons&&el.dataset.network===selectedNetwork);
+    el.classList.toggle('active',!coupons&&!automation&&el.dataset.network===selectedNetwork);
   $('coupons-tab').classList.toggle('active',coupons);
+   $('automation-tab').classList.toggle('active',automation);
   $('platform-heading').textContent=isML?'Mercado Livre':'Shopee';
   $('platform-description').textContent=isML
     ?'Configure as publicações do Mercado Livre em cada canal ou grupo.'
@@ -849,6 +856,7 @@ function applyPlatformView(){
     if(item.id==='platform-sidebar')continue;
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
+     if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate');continue;}
     if(selectedPage!=='platform')item.classList.add('hidden');
     else if(item.id==='platform-context'||item.id==='notice'||item.classList.contains('intro')||item.tagName==='FOOTER')item.classList.remove('hidden');
   }
@@ -1023,7 +1031,7 @@ async function switchPlatform(platform,network,tabOverride=null){
   selectedPlatform=platform;
   selectedPage='platform';
   selectedNetwork=network||lastNetwork[platform]||'telegram';
-  selectedTab=tabOverride==='coupons'?'coupons':selectedNetwork;
+  selectedTab=['coupons','automation'].includes(tabOverride)?tabOverride:selectedNetwork;
   lastNetwork[platform]=selectedNetwork;
   // Limpa o seletor ANTES de carregar para nunca mostrar um grupo no Telegram.
   ++destinationRequestRevision;
@@ -1156,6 +1164,8 @@ async function refreshWhatsApp(){
     $('wa-registered').checked=!!d.config.public_registered;
     $('wa-enabled').checked=!!d.config.enabled;
     $('wa-interval').value=String(d.schedule?.interval_minutes||60);
+     $('auto-wa-interval').value=String(d.schedule?.interval_minutes||60);
+     $('auto-wa-enabled').checked=!!d.config.enabled;
     setCategoryFieldValue('wa-category',d.category||'Geral');
     const directCategory=$('wa-direct-category');
     if(d.category&&d.category.toLowerCase()!=='geral'){
@@ -1645,7 +1655,25 @@ for(const button of document.querySelectorAll('[data-panel]')){
 for(const button of document.querySelectorAll('[data-network]')){
   button.addEventListener('click',()=>switchPlatform(selectedPlatform,button.dataset.network));
 }
-$('coupons-tab').addEventListener('click',async()=>{
+$('automation-tab').addEventListener('click',()=>switchPlatform(
+    selectedPlatform,selectedPlatform==='mercadolivre'?'telegram':selectedNetwork,'automation'
+  ));
+ $('automation-network-select').addEventListener('change',()=>switchPlatform(
+    selectedPlatform,$('automation-network-select').value,'automation'
+  ));
+ $('auto-wa-form').addEventListener('submit',async e=>{
+   e.preventDefault();
+   try{
+     const result=await call('/api/whatsapp/settings',{method:'POST',body:JSON.stringify({
+       instance_name:$('wa-instance').value,group_jid:$('wa-group').value,
+       public_registered:$('wa-registered').checked,enabled:$('auto-wa-enabled').checked,
+       interval_minutes:Number($('auto-wa-interval').value),category:$('wa-category').value.trim()
+     })});
+     await refreshWhatsApp();
+     notice(result.group_changed?'Grupo alterado. Reconfirme a permissão pública.':'Automação WhatsApp salva.',false,'auto-wa-feedback');
+   }catch(error){notice(error.message,true,'auto-wa-feedback');}
+ });
+ $('coupons-tab').addEventListener('click',async()=>{
   selectedPage='platform';selectedTab='coupons';rememberNavigation();applyPlatformView();
   if(selectedPlatform==='shopee')await refreshShopee();
   else await refreshMainWhatsappCoupons();
