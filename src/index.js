@@ -13,7 +13,7 @@ import {
  requeueManagedWhatsAppOffer,managedWhatsAppConnection,listManagedWhatsAppGroupOptions,
  testManagedWhatsAppGroup,publishManagedWhatsAppOffer,runManagedWhatsAppScheduled
 } from './whatsapp-groups.js';
-import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
+import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,saveShopeeCoupon,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
 import {getShopeeAccount,saveShopeeProfile,saveShopeeCredentials,clearShopeeCredentials,verifyShopeeApi} from './shopee-account.js';
 import {
  createShopeeOwnDestination,saveShopeeOwnTelegram,saveShopeeOwnWhatsApp,
@@ -282,6 +282,8 @@ async function router(request, env) {
     await upsertProductCategory(env,'shopee',payload);
     return json(result,201);
   }
+  if(u.pathname==='/api/shopee/coupons'&&method==='POST')
+    return json(await saveShopeeCoupon(env,await getBody(request)),201);
   const shopeeAction=u.pathname.match(/^\/api\/shopee\/offers\/(\d+)\/(publish|requeue)$/);
   if(shopeeAction&&method==='POST'){
     const data=await getBody(request);
