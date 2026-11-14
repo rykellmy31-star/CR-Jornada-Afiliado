@@ -35,7 +35,9 @@ export function parseMonitorEvent(event){
      .filter(v=>typeof v==='string'&&v).join('\n').slice(0,8000);
    const urls=extractUrls(text);
    if(!urls.length)continue;
-   result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint:text.slice(0,450),urls});
+   // Guarde apenas a descrição curta da oferta, sem conteúdo de conversas ou links de rastreamento.
+   const hint=urls.length===1?text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180):'';
+   result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,urls});
  }
  return result;
 }
@@ -157,7 +159,9 @@ export async function updateMonitorLinkCategory(env,id,body){
 }
 export async function prepareMonitorBatch(env,body){
  await ensureMonitor(env);
- const ids=body?.ids;
+ const ids=body?.automatic===true
+   ?(await env.DB.prepare("SELECT id FROM ml_monitor_links WHERE status='available' AND category<>'Geral' ORDER BY category,id LIMIT 50").all()).results.map(x=>x.id)
+   :body?.ids;
  if(!Array.isArray(ids)||!ids.length||ids.length>50||!ids.every(x=>Number.isSafeInteger(x)&&x>0)||new Set(ids).size!==ids.length)
    throw fail('Selecione de 1 a 50 produtos diferentes.');
  const sql='SELECT id,title,source_url,category FROM ml_monitor_links WHERE status=\'available\' AND id IN ('+ids.map(()=>'?').join(',')+') ORDER BY id';

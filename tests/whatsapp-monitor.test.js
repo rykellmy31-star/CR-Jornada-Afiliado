@@ -72,12 +72,13 @@ test('seleciona links por categoria e gera lote de URL sem disparar mensagens',a
   await ingestMonitorEvent(env,event());
   const captured=(await monitorState(env)).links[0];
   assert.ok(captured);
-  const batch=await prepareMonitorBatch(env,{ids:[captured.id]});
+  const batch=await prepareMonitorBatch(env,{automatic:true});
   assert.equal(batch.items.length,1);
   assert.equal(batch.items[0].source_url,PRODUCT);
   assert.equal(batch.items[0].category,'Ferramentas e Peças Automotivas');
   assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
   await assert.rejects(prepareMonitorBatch(env,{ids:[captured.id]}),/já foi utilizado/);
+  await assert.rejects(prepareMonitorBatch(env,{automatic:true}),/Selecione de 1 a 50/);
   await importLinkBatch(env,batch.batch.id,{
     owner_confirmation:true,pairing_confirmation:true,
     links:[{affiliate_url:'https://meli.la/ABCDEF12',category:captured.category}]
@@ -120,7 +121,7 @@ test('webhook exige segredo correto, painel continua autenticado e interface con
   assert.equal(unauthorized.status,401);
   const page=renderPage();
   assert.match(page,/Robô de captura/);
-  assert.match(page,/Preparar lote com os produtos selecionados/);
+  assert.match(page,/Preparar lote automaticamente/);
   assert.match(CLIENT_JS,/refreshWhatsAppMonitor/);
   assert.match(CLIENT_JS,/data-monitor-category-id/);
   assert.match(CSS,/ml-whatsapp-monitor/);
