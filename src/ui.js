@@ -609,7 +609,7 @@ export const CSS = `
 #dashboard:not([data-view="mercadolivre-automation"]) > #ml-wa-automation-panel,
 #dashboard:not([data-view="affiliate"]) > #affiliate-page,
 #dashboard:not([data-view="shopee-telegram"]):not([data-view="shopee-whatsapp"]):not([data-view="shopee-automation"]) > #shopee-panel,
-#dashboard:not([data-view="shopee-telegram"]):not([data-view="shopee-whatsapp"]) > #shopee-account-panel,
+#dashboard:not([data-view="affiliate"]) > #shopee-account-panel,
 #dashboard:not([data-view="shopee-coupons"]) > #shopee-coupon-panel,
 #dashboard:not([data-view="mercadolivre-coupons"]) > #ml-coupon-panel,
 #dashboard:not([data-view="mercadolivre-coupons"]) > #ml-whatsapp-coupon-panel,
@@ -849,7 +849,7 @@ function applyPlatformView(){
   const isML=selectedPlatform==='mercadolivre',telegram=selectedNetwork==='telegram';
   // Exibe páginas secundárias sem misturar configurações de plataformas diferentes.
   const coupons=selectedTab==='coupons',automation=selectedTab==='automation';
-  $('shopee-account-panel').classList.toggle('hidden',isML||coupons||automation);
+  $('shopee-account-panel').classList.toggle('hidden',isML||selectedPage!=='affiliate');
   $('channels-panel').classList.toggle('hidden',!isML||!telegram||coupons||automation);
   $('shopee-panel').classList.toggle('hidden',isML||coupons);
   $('shopee-telegram-destination-form').classList.toggle('hidden',isML||!telegram||coupons||automation);
@@ -886,7 +886,8 @@ function applyPlatformView(){
     if(item.id==='platform-sidebar')continue;
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
-     if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate');continue;}
+     if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate'||!isML);continue;}
+     if(item.id==='shopee-account-panel'){item.classList.toggle('hidden',selectedPage!=='affiliate'||isML);continue;}
     if(selectedPage!=='platform')item.classList.add('hidden');
     else if(item.id==='platform-context'||item.id==='notice'||item.classList.contains('intro')||item.tagName==='FOOTER')item.classList.remove('hidden');
   }
@@ -1396,6 +1397,7 @@ async function refresh(){
       loadMasterState(),
       selectedPage==='categories'?refreshCategories():Promise.resolve(),
       selectedPage==='activity'?refreshActivity():Promise.resolve(),
+      selectedPage==='affiliate'&&selectedPlatform==='shopee'?refreshShopeeAccount():Promise.resolve(),
       isPlatform?refreshPlatformTargets(channelList).then(valid=>{
         if(valid&&isShopee&&selectedPlatform==='shopee')
           return Promise.allSettled([refreshShopeeAccount(),refreshShopee()]);
@@ -1713,6 +1715,7 @@ for(const button of document.querySelectorAll('[data-panel]')){
     applyPlatformView();
     if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
     if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
+    if(selectedPage==='affiliate'&&selectedPlatform==='shopee')await refreshShopeeAccount().catch(error=>notice(error.message,true,'shopee-account-feedback'));
   });
 }
 for(const button of document.querySelectorAll('[data-network]')){
@@ -1727,13 +1730,11 @@ $('automation-tab').addEventListener('click',()=>switchPlatform(
  $('auto-wa-form').addEventListener('submit',async e=>{
    e.preventDefault();
    try{
-     const result=await call('/api/whatsapp/settings',{method:'POST',body:JSON.stringify({
-       instance_name:$('wa-instance').value,group_jid:$('wa-group').value,
-       public_registered:$('wa-registered').checked,enabled:$('auto-wa-enabled').checked,
-       interval_minutes:Number($('auto-wa-interval').value),category:$('wa-category').value.trim()
+     const result=await call('/api/whatsapp/automation',{method:'POST',body:JSON.stringify({
+       enabled:$('auto-wa-enabled').checked,interval_minutes:$('auto-wa-interval').value
      })});
      await refreshWhatsApp();
-     notice(result.group_changed?'Grupo alterado. Reconfirme a permissão pública.':'Automação WhatsApp salva.',false,'auto-wa-feedback');
+     notice('Automação WhatsApp salva sem alterar a conexão nem o grupo.',false,'auto-wa-feedback');
    }catch(error){notice(error.message,true,'auto-wa-feedback');}
  });
  $('coupons-tab').addEventListener('click',async()=>{
@@ -2072,6 +2073,7 @@ async function bootstrap(){
     const tasks=[loadMasterState(),fetchCategoryOptions()];
     if(selectedPage==='categories')tasks.push(refreshCategories());
     else if(selectedPage==='activity')tasks.push(refreshActivity());
+    else if(selectedPage==='affiliate'&&selectedPlatform==='shopee')tasks.push(refreshShopeeAccount());
     else if(selectedPage==='platform'){
       const platform=selectedPlatform;
       tasks.push(refreshPlatformTargets().then(valid=>{

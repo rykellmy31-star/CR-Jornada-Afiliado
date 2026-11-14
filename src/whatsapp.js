@@ -277,6 +277,30 @@ export async function updateWhatsAppSettings(env,body) {
   await env.DB.prepare('UPDATE whatsapp_primary_category SET category=? WHERE id=1').bind(category).run();
   return {ok:true,enabled,group_changed:changed,interval_minutes:interval,category};
 }
+// A configuração de automação não regrava dados de conexão e permissão.
+export async function updateWhatsAppAutomation(env,body){
+  await ensureWhatsAppTables(env);
+  if(typeof body?.enabled!=='boolean')throw new Error('Escolha ativar ou pausar a automação do WhatsApp.');
+  const interval=Number(body.interval_minutes);
+  if(body.interval_minutes===undefined||body.interval_minutes===''||!validWhatsAppInterval(interval))
+    throw new Error('Informe um intervalo inteiro entre 1 e 1440 minutos.');
+  const prev=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
+  if(!prev)throw new Error('Configuração principal do WhatsApp não encontrada.');
+  if(body.enabled){
+    if(!prev.public_registered||!prev.instance_name||!prev.group_jid)
+      throw new Error('Configure e confirme um grupo público primeiro na aba WhatsApp.');
+    if(!configured(env))throw new Error('Configure a Evolution API antes de ativar o WhatsApp.');
+    const groups=await listWhatsAppGroups(env,prev.instance_name);
+    if(!groups.some(g=>g.id===prev.group_jid))
+      throw new Error('Grupo não localizado na instância Evolution conectada.');
+  }
+  const timestamp=nowSec(),resuming=!prev.enabled&&body.enabled;
+  await env.DB.prepare('UPDATE whatsapp_settings SET enabled=?,started_at=?,updated_at=? WHERE id=1')
+    .bind(+body.enabled,resuming?timestamp:prev.started_at,timestamp).run();
+  await env.DB.prepare('UPDATE whatsapp_schedule_custom SET interval_minutes=?,last_attempt_at=CASE WHEN ?=1 THEN 0 ELSE last_attempt_at END WHERE id=1')
+    .bind(interval,+resuming).run();
+  return {ok:true,enabled:body.enabled,interval_minutes:interval};
+}
 // Rotas explícitas para novas ofertas, preservando o espelhamento de todas as
 // ofertas antigas que não possuem entrada em offer_delivery_routing.
 export async function setOfferDeliveryMode(env,offerId,mode){

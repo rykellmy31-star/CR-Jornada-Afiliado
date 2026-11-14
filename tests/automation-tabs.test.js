@@ -49,3 +49,13 @@ test('Grupos adicionais mantêm seus cadastros e controles em Automação',()=>{
   assert.match(CLIENT_JS,/auto-wa-multi-settings-form/);
   assert.match(CLIENT_JS,/refreshManagedWhatsApp\(\)/);
 });
+
+test('Credenciais Shopee somente na aba lateral de conexão',()=>{
+  assert.match(CSS,/#dashboard:not\(\[data-view="affiliate"\]\) > #shopee-account-panel/);
+  assert.match(CLIENT_JS,/selectedPage!=='affiliate'\|\|isML/);
+});
+test('Automação WhatsApp não regrava os campos ocultos da conexão',()=>{
+  assert.match(CLIENT_JS,/\/api\/whatsapp\/automation/);
+  const x=CLIENT_JS.slice(CLIENT_JS.indexOf("auto-wa-form').addEventListener"),CLIENT_JS.indexOf("coupons-tab').addEventListener"));
+  assert.doesNotMatch(x,/group_jid|instance_name|public_registered|category:/);
+});

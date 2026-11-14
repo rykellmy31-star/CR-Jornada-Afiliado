@@ -5,7 +5,7 @@ import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import { masterState,setMasterState,listCategories,createGroupCategory,updateGroupCategory,listCategoryDestinations,saveCategoryRoutes,upsertProductCategory,runCategoryRoutingScheduled } from './automation-center.js';
-import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
+import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, updateWhatsAppAutomation, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
 import {
  listManagedWhatsAppGroups,createManagedWhatsAppGroup,getManagedWhatsAppGroupState,
@@ -368,6 +368,10 @@ async function router(request, env) {
   }
   if (u.pathname === '/api/whatsapp/settings' && method === 'POST') {
     try{return json(await updateWhatsAppSettings(env,await getBody(request)));}
+    catch(error){return fail(String(error.message||error));}
+  }
+  if (u.pathname === '/api/whatsapp/automation' && method === 'POST') {
+    try{return json(await updateWhatsAppAutomation(env,await getBody(request)));}
     catch(error){return fail(String(error.message||error));}
   }
   if (u.pathname === '/api/whatsapp/test' && method === 'POST') {
