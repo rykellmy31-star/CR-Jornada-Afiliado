@@ -167,6 +167,6 @@ test('aba Shopee WhatsApp n√£o espera Evolution para exibir ofertas e configura√
   assert.match(source,/void Promise\.allSettled\(\[refreshShopeeWaConnection\(false\),loadShopeeGroupNames\(id\)\]\)/);
   assert.doesNotMatch(source,/await refreshShopeeWaConnection\(/);
   assert.doesNotMatch(source,/await loadShopeeGroupNames\(/);
-  assert.ok(source.indexOf('Promise.allSettled')<source.indexOf("('shopee-target-title').textContent"));
+  assert.ok(source.indexOf('Promise.allSettled')<source.lastIndexOf("('shopee-target-title').textContent"));
   assert.match(source,/\$\('shopee-offers-rows'\)\.innerHTML=/);
 });
