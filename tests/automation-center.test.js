@@ -292,3 +292,24 @@ test('rotas por categoria respeitam a pausa individual do Telegram mesmo com rob
     assert.equal(destinations.find(x=>x.scope==='mercadolivre'&&x.network==='telegram'&&x.id===1).active,false);
   }finally{DB.close();}
 });
+
+
+test('verificação rápida de sessão exige login e não altera o robô',async()=>{
+  const {env,DB}=setup();
+  try{
+    const unauth=await worker.fetch(new Request('https://afiliados.test/api/session'),env);
+    assert.equal(unauth.status,401);
+    const login=await worker.fetch(new Request('https://afiliados.test/api/login',{
+      method:'POST',
+      headers:{origin:'https://afiliados.test','content-type':'application/json'},
+      body:JSON.stringify({password:env.ADMIN_PASSWORD})
+    }),env);
+    assert.equal(login.status,200);
+    const cookie=login.headers.get('set-cookie')?.split(';')[0];
+    assert.ok(cookie?.startsWith('crj_auth='));
+    const valid=await worker.fetch(new Request('https://afiliados.test/api/session',{headers:{cookie}}),env);
+    assert.equal(valid.status,200);
+    assert.deepEqual(await valid.json(),{authenticated:true});
+    assert.equal((await masterState(env)).enabled,null,'Verificar sessão não deve ligar ou desligar o robô');
+  }finally{DB.close();}
+});
