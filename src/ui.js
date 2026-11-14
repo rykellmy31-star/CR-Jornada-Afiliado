@@ -903,8 +903,9 @@ async function refreshShopee(){
       }
       selector.value=base.group_jid||'';
       $('shopee-wa-test').disabled=!base.base_enabled;
-      await refreshShopeeWaConnection(false);
-      await loadShopeeGroupNames(shopeeTarget.whatsapp);
+      // A Evolution API é externa: atualizar conexão e nomes em paralelo, sem atrasar
+      // a exibição das configurações e das ofertas já recebidas do D1.
+      void Promise.allSettled([refreshShopeeWaConnection(false),loadShopeeGroupNames(id)]);
     }
     $('shopee-target-title').textContent=(selectedNetwork==='telegram'?'Canal Telegram: ':'Grupo WhatsApp: ')+base.name;
     $('channel-label').textContent='Destino Shopee: '+base.name;
