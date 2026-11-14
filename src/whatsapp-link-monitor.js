@@ -76,7 +76,7 @@ export async function monitorState(env){
   (async()=>{await ensureAutomationCenter(env);return env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1 ORDER BY name').all()})()
  ]);
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
-   groups:groups.results,links:links.results,shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
+   groups:groups.results,links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
 }
 export async function saveMonitorSettings(env,body){
  await ensureMonitor(env);
