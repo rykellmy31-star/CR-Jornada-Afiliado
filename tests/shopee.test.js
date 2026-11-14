@@ -302,3 +302,24 @@ test('aba de cupons Shopee tem cadastro e API próprios',()=>{
   assert.match(html,/id="shopee-coupon-form"/);
   assert.match(CLIENT_JS,/\/api\/shopee\/coupons/);
 });
+
+test('robô geral ligado respeita pausa individual da Shopee',async()=>{
+  const DB=makeDb(),env=envFor(DB);
+  try{
+    mockExternal();
+    const dest=await createTele(env);
+    await activateTele(env,dest);
+    await saveShopeeTarget(env,{...config(dest),enabled:false});
+    await addShopeeOffer(env,offer(dest));
+    const result=await runShopeeScheduled({...env,MASTER_SCHEDULE_ENABLED:true});
+    assert.deepEqual(result.results,[],'Destino pausado não deve ser enviado pelo botão geral');
+    assert.equal((await shopeeState(env,dest.network,dest.id)).offers[0].status,'ready');
+    assert.equal(posted.length,0,'Nenhuma mensagem foi publicada');
+  }finally{globalThis.fetch=actualFetch;DB.close();}
+});
+test('aba Cupons concentra WhatsApp e Shopee sem duplicar formulário',()=>{
+  const html=renderPage();
+  assert.match(html,/id="ml-whatsapp-coupon-panel"/);
+  assert.equal((html.match(/id="wa-multi-coupon-form"/g)||[]).length,1);
+  assert.match(CLIENT_JS,/refreshMainWhatsappCoupons/);
+});
