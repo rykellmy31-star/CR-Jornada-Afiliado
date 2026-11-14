@@ -1,13 +1,16 @@
 import {parseOptionalBRL,localTimeParts,formatBRL} from './logic.js';
 import {categoryMatches} from './multichannel.js';
+import {CREATE_COUPON_TABLE,normalizeCoupon,couponDescription} from './coupons.js';
 import {listShopeeOwnDestinations,shoOwnDestination,sendShopeeOwnText,shopeeWhatsAppInstance,ensureShopeeDestinationTables} from './shopee-destinations.js';
 
 const SCHEMA=[
   "CREATE TABLE IF NOT EXISTS shopee_targets (id INTEGER PRIMARY KEY AUTOINCREMENT,network TEXT NOT NULL CHECK(network IN ('telegram','whatsapp')),target_id INTEGER NOT NULL CHECK(target_id>=1),category TEXT NOT NULL DEFAULT 'Geral',enabled INTEGER NOT NULL DEFAULT 0,permission_confirmed INTEGER NOT NULL DEFAULT 0,interval_minutes INTEGER NOT NULL DEFAULT 60 CHECK(interval_minutes BETWEEN 1 AND 1440),max_daily INTEGER NOT NULL DEFAULT 12 CHECK(max_daily BETWEEN 1 AND 48),start_hour INTEGER NOT NULL DEFAULT 8,end_hour INTEGER NOT NULL DEFAULT 21,last_attempt_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(network,target_id))",
   "CREATE TABLE IF NOT EXISTS shopee_offers (id INTEGER PRIMARY KEY AUTOINCREMENT,destination_id INTEGER NOT NULL REFERENCES shopee_targets(id),title TEXT NOT NULL,affiliate_url TEXT NOT NULL,category TEXT NOT NULL,price_cents INTEGER,old_price_cents INTEGER,created_at INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready','sending','published','needs_review')),published_at INTEGER,published_day TEXT,message_id TEXT,last_error TEXT,UNIQUE(destination_id,affiliate_url))",
   "CREATE INDEX IF NOT EXISTS idx_shopee_queue ON shopee_offers(destination_id,status,created_at)",
-  "CREATE TABLE IF NOT EXISTS shopee_logs (id INTEGER PRIMARY KEY AUTOINCREMENT,destination_id INTEGER NOT NULL,offer_id INTEGER,event TEXT NOT NULL,detail TEXT,created_at INTEGER NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS shopee_logs (id INTEGER PRIMARY KEY AUTOINCREMENT,destination_id INTEGER NOT NULL,offer_id INTEGER,event TEXT NOT NULL,detail TEXT,created_at INTEGER NOT NULL)",
+  CREATE_COUPON_TABLE.replace('offer_coupons','shopee_offer_coupons').replace('offers(id)','shopee_offers(id)')
 ];
+const SHOPEE_WITH_COUPON="SELECT o.*, c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.owner_confirmed AS coupon_owner_confirmed FROM shopee_offers o LEFT JOIN shopee_offer_coupons c ON c.offer_id=o.id";
 const nowSec=()=>Math.floor(Date.now()/1000);
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const allowedNetwork=value=>value==='telegram'||value==='whatsapp';
@@ -83,7 +86,7 @@ export async function shopeeState(env,network,target){
   const {base,config}=await row(env,network,target);
   if(!config.id)return {base,config,offers:[],counts:[],logs:[]};
   const [offers,counts,logs]=await Promise.all([
-    env.DB.prepare('SELECT * FROM shopee_offers WHERE destination_id=? ORDER BY created_at DESC,id DESC LIMIT 100').bind(config.id).all(),
+    env.DB.prepare(SHOPEE_WITH_COUPON+' WHERE o.destination_id=? ORDER BY o.created_at DESC,o.id DESC LIMIT 100').bind(config.id).all(),
     env.DB.prepare('SELECT status,COUNT(*) AS total FROM shopee_offers WHERE destination_id=? GROUP BY status').bind(config.id).all(),
     env.DB.prepare('SELECT event,detail,created_at,offer_id FROM shopee_logs WHERE destination_id=? ORDER BY id DESC LIMIT 20').bind(config.id).all()
   ]);
@@ -135,6 +138,22 @@ export async function addShopeeOffer(env,body){
     throw error;
   }
 }
+export async function saveShopeeCoupon(env,body){
+  const {config}=await row(env,body?.network,body?.target_id);
+  if(!config.id)throw fail('Configure primeiro este destino Shopee.');
+  let coupon;
+  try{coupon=normalizeCoupon(body,'shopee');}catch(error){throw fail(error.message);}
+  const offer=await env.DB.prepare('SELECT status FROM shopee_offers WHERE id=? AND destination_id=?')
+    .bind(coupon.offer_id,config.id).first();
+  if(!offer)throw fail('Oferta Shopee não encontrada neste destino.',404);
+  if(offer.status!=='ready')throw fail('Vincule cupons apenas a ofertas Shopee ainda na fila.',409);
+  const sql="INSERT INTO shopee_offer_coupons (offer_id,kind,code,discount_type,discount_value,min_cart_cents,max_discount_cents,start_day,end_day,source_url,notes,owner_confirmed,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?) ON CONFLICT(offer_id) DO UPDATE SET kind=excluded.kind,code=excluded.code,discount_type=excluded.discount_type,discount_value=excluded.discount_value,min_cart_cents=excluded.min_cart_cents,max_discount_cents=excluded.max_discount_cents,start_day=excluded.start_day,end_day=excluded.end_day,source_url=excluded.source_url,notes=excluded.notes,owner_confirmed=1,updated_at=excluded.updated_at";
+  await env.DB.prepare(sql).bind(coupon.offer_id,coupon.kind,coupon.code,coupon.discount_type,
+    coupon.discount_value,coupon.min_cart_cents,coupon.max_discount_cents,coupon.start_day,
+    coupon.end_day,coupon.source_url,coupon.notes,nowSec()).run();
+  await log(env,config.id,'coupon_saved','Cupom Shopee informado; aplicação no checkout não verificada.',coupon.offer_id);
+  return {ok:true};
+}
 function shopeeText(offer){
   const lines=['📣 Publicidade • Oferta Shopee','','🛍️ '+offer.title];
   if(offer.price_cents!=null&&Date.now()-offer.created_at*1000<6*60*60*1000){
@@ -142,6 +161,7 @@ function shopeeText(offer){
       lines.push('🏷️ De '+formatBRL(offer.old_price_cents)+' por '+formatBRL(offer.price_cents));
     else lines.push('💰 Preço informado: '+formatBRL(offer.price_cents));
   }
+  lines.push(...couponDescription(offer,localTimeParts(new Date()).day));
   lines.push('','📂 Categoria: '+offer.category,'✅ Verifique preço, disponibilidade e condições antes de comprar.',
     '🔗 Link de afiliado Shopee:',offer.affiliate_url);
   return lines.join('\n');
@@ -192,7 +212,7 @@ export async function publishShopeeOffer(env,network,target,offerId){
     throw fail('Ative e autorize a Shopee e o canal/grupo antes de publicar.');
   const id=Number(offerId);
   if(!Number.isSafeInteger(id)||id<1)throw fail('Oferta inválida.');
-  const offer=await env.DB.prepare('SELECT * FROM shopee_offers WHERE id=? AND destination_id=?').bind(id,config.id).first();
+  const offer=await env.DB.prepare(SHOPEE_WITH_COUPON+' WHERE o.id=? AND o.destination_id=?').bind(id,config.id).first();
   if(!offer)throw fail('Oferta não encontrada neste destino.',404);
   if(!categoryMatches(offer.category,config.category)||!categoryMatches(offer.category,base.category))
     throw fail('Categoria diferente da configurada neste destino.');
@@ -211,7 +231,7 @@ export async function runShopeeScheduled(env){
     if(local.hour<config.start_hour||local.hour>=config.end_hour)continue;
     const published=await env.DB.prepare("SELECT COUNT(*) AS total FROM shopee_offers WHERE destination_id=? AND status='published' AND published_day=?").bind(config.id,local.day).first();
     if((published?.total||0)>=config.max_daily||t-config.last_attempt_at<config.interval_minutes*60)continue;
-    const offer=await env.DB.prepare("SELECT * FROM shopee_offers WHERE destination_id=? AND status='ready' AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at,id LIMIT 1")
+    const offer=await env.DB.prepare(SHOPEE_WITH_COUPON+" WHERE o.destination_id=? AND o.status='ready' AND (lower(?)='geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at,o.id LIMIT 1")
       .bind(config.id,config.category,config.category).first();
     if(!offer)continue;
     let base;
