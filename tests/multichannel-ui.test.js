@@ -94,3 +94,58 @@ test('Cupons começam ocultos e aparecem somente ao selecionar a aba Cupons da p
   assert.deepEqual(renderState('shopee','telegram','coupons',1),
     {shopee:true,mlWhatsapp:false,ml:false});
 });
+
+
+test('Trocas rápidas descartam resposta antiga que misturaria grupo WhatsApp no seletor do Telegram',async()=>{
+  const from=CLIENT_JS.indexOf('async function refreshPlatformTargets(){');
+  const to=CLIENT_JS.indexOf('async function refreshShopee(){',from);
+  assert.ok(from>=0&&to>from);
+  const select={dataset:{},innerHTML:'',value:'',disabled:true};
+  const invoke=new Function('call','select',
+    "let selectedPlatform='mercadolivre',selectedNetwork='telegram',selectedPage='platform';"+
+    "let destinationRequestRevision=0,currentChannelId=1,currentWaGroupId=1;"+
+    "const shopeeTarget={telegram:null,whatsapp:null};"+
+    "const $=()=>select,escape=s=>String(s);"+
+    "const rememberNavigation=()=>{},updatePlatformIdentity=()=>{};"+
+    CLIENT_JS.slice(from,to)+
+    "return {setNetwork:n=>{selectedNetwork=n;},setPlatform:p=>{selectedPlatform=p;},refreshPlatformTargets};");
+  const pending=new Map();
+  const mockCall=path=>new Promise(resolve=>pending.set(path,resolve));
+  const state=invoke(mockCall,select);
+  const oldTelegram=state.refreshPlatformTargets();
+  state.setNetwork('whatsapp');
+  const newWhatsapp=state.refreshPlatformTargets();
+  pending.get('/api/wa-groups')({groups:[{id:8,name:'Grupo WhatsApp correto',category:'Geral'}]});
+  assert.equal(await newWhatsapp,true);
+  pending.get('/api/channels')({channels:[{id:1,name:'Canal Telegram atrasado',category:'Geral'}]});
+  assert.equal(await oldTelegram,false);
+  assert.equal(select.dataset.network,'whatsapp');
+  assert.equal(select.dataset.platform,'mercadolivre');
+  assert.match(select.innerHTML,/Grupo WhatsApp correto/);
+  assert.doesNotMatch(select.innerHTML,/Canal Telegram atrasado/);
+
+  state.setPlatform('shopee');
+  state.setNetwork('telegram');
+  const oldShopee=state.refreshPlatformTargets();
+  state.setPlatform('mercadolivre');
+  state.setNetwork('telegram');
+  const newTelegram=state.refreshPlatformTargets();
+  pending.get('/api/channels')({channels:[{id:1,name:'Canal Telegram correto',category:'Geral'}]});
+  assert.equal(await newTelegram,true);
+  pending.get('/api/shopee/destinations')({destinations:[{network:'telegram',target_id:1000,name:'Canal da Shopee',category:'Geral'}]});
+  assert.equal(await oldShopee,false);
+  assert.equal(select.dataset.platform,'mercadolivre');
+  assert.equal(select.dataset.network,'telegram');
+  assert.match(select.innerHTML,/Canal Telegram correto/);
+  assert.doesNotMatch(select.innerHTML,/Shopee/);
+});
+
+test('Abas separadas e troca instantânea não permitem conteúdo WhatsApp sobre Telegram',()=>{
+  assert.match(CLIENT_JS,/destinationRequestRevision/);
+  assert.match(CLIENT_JS,/select\.dataset\.platform=platform/);
+  assert.match(CLIENT_JS,/select\.dataset\.network=network/);
+  assert.match(CLIENT_JS,/requestRevision!==destinationRequestRevision/);
+  assert.match(CLIENT_JS,/\$\('dashboard'\)\.dataset\.view=/);
+  assert.match(CLIENT_JS,/shopeeStateRequestRevision/);
+  assert.match(CLIENT_JS,/Promise\.allSettled\(\[refreshShopeeAccount\(\),refreshShopee\(\)\]\)/);
+});
