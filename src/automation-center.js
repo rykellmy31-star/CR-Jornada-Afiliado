@@ -79,6 +79,27 @@ export async function upsertProductCategory(env,platform,offer){
 }
 export async function listCategories(env){
   await ensureAutomationCenter(env);
+  // Adota as categorias antigas de grupos sem sobrescrever nada no banco existente.
+  const legacyQueries=[
+    'SELECT category FROM primary_channel_category',
+    'SELECT category FROM whatsapp_primary_category',
+    'SELECT category FROM telegram_channels',
+    'SELECT category FROM whatsapp_groups',
+    'SELECT category FROM shopee_telegram_channels',
+    'SELECT category FROM shopee_whatsapp_groups'
+  ];
+  const found=new Set(['Geral']);
+  for(const sql of legacyQueries){
+    try{
+      const rows=await env.DB.prepare(sql).all();
+      for(const item of rows.results){
+        const value=String(item.category||'').trim();
+        if(value.length>=3&&value.length<=60&&/^[\\p{L}\\p{N} &/()\\-]+$/u.test(value))found.add(value);
+      }
+    }catch{/* A tabela de outro módulo pode ainda não existir. */}
+  }
+  const now=timestamp();
+  for(const name of found)await env.DB.prepare('INSERT OR IGNORE INTO affiliate_group_categories(name,created_at,updated_at) VALUES(?,?,?)').bind(name,now,now).run();
   const [groups,products,routes]=await Promise.all([
     env.DB.prepare('SELECT * FROM affiliate_group_categories ORDER BY name').all(),
     env.DB.prepare('SELECT p.*,g.name AS group_category FROM affiliate_product_categories p LEFT JOIN affiliate_group_categories g ON g.id=p.group_category_id ORDER BY p.updated_at DESC LIMIT 150').all(),
