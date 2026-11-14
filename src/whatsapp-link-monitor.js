@@ -78,11 +78,16 @@ export async function monitorState(env){
   env.DB.prepare("SELECT COUNT(l.id) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id").first(),
   env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all()
  ]);
- const perGroupMap=new Map(perGroup.results.map(x=>[x.group_id,x]));
- const empty={captured:0,available:0,in_conversion:0,queued:0};
+ const normalizedCounts=x=>({
+  captured:Number(x?.captured||0),
+  available:Number(x?.available||0),
+  in_conversion:Number(x?.in_conversion||0),
+  queued:Number(x?.queued||0)
+ });
+ const perGroupMap=new Map(perGroup.results.map(x=>[x.group_id,normalizedCounts(x)]));
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
-   counts:counts||empty,
-   groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||empty})),
+   counts:normalizedCounts(counts),
+   groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||normalizedCounts(null)})),
    links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),
    shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
 }
