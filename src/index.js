@@ -1,8 +1,10 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
+import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
+import { masterState,setMasterState,listCategories,createGroupCategory,updateGroupCategory,listCategoryDestinations,saveCategoryRoutes,upsertProductCategory,runCategoryRoutingScheduled } from './automation-center.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
 import {
@@ -183,12 +185,14 @@ async function runScheduled(env) {
     env.DB.prepare("SELECT COUNT(*) AS total FROM offers WHERE status='published' AND published_day=?").bind(day).first(),
     env.DB.prepare("SELECT MAX(published_at) AS published_at FROM offers WHERE status='published'").first()
   ]);
-  if (!shouldSend(settings, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
+  if(env.MASTER_SCHEDULE_ENABLED===false)return;
+  const effective=env.MASTER_SCHEDULE_ENABLED===true?{...settings,automation_enabled:1,telegram_enabled:settings.channel_registered&&!!env.TELEGRAM_BOT_TOKEN?1:settings.telegram_enabled}:settings;
+  if (!shouldSend(effective, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
   if (!env.TELEGRAM_BOT_TOKEN) return;
   await ensureCouponTable(env);
   const offer = await env.DB.prepare(OFFER_WITH_COUPON + " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC, o.id ASC LIMIT 1").bind(settings.category,settings.category).first();
   if (!offer) return;
-  await sendOffer(env, offer, settings);
+  await sendOffer(env, offer, effective);
 }
 
 async function router(request, env) {
@@ -211,6 +215,16 @@ async function router(request, env) {
     return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SEC}${secure}` });
   }
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
+  if(u.pathname==='/api/master'&&method==='GET')return json(await masterState(env));
+  if(u.pathname==='/api/master'&&method==='POST')return json(await setMasterState(env,(await getBody(request)).enabled));
+  if(u.pathname==='/api/categories'&&method==='GET')return json(await listCategories(env));
+  if(u.pathname==='/api/activity'&&method==='GET')return json(await listActivity(env,100));
+  if(u.pathname==='/api/categories/destinations'&&method==='GET')return json({destinations:await listCategoryDestinations(env)});
+  if(u.pathname==='/api/categories/groups'&&method==='POST')return json(await createGroupCategory(env,await getBody(request)),201);
+  const categoryUpdate=u.pathname.match(/^\/api\/categories\/groups\/(\d+)$/);
+  if(categoryUpdate&&method==='POST')return json(await updateGroupCategory(env,categoryUpdate[1],await getBody(request)));
+  const categoryRouting=u.pathname.match(/^\/api\/categories\/groups\/(\d+)\/routes$/);
+  if(categoryRouting&&method==='POST')return json(await saveCategoryRoutes(env,categoryRouting[1],await getBody(request)));
   if (u.pathname === '/api/logout' && method === 'POST') return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
   if (u.pathname === '/api/state' && method === 'GET') {
     await ensureCouponTable(env);
@@ -262,8 +276,12 @@ async function router(request, env) {
     return json(await shopeeState(env,u.searchParams.get('network'),u.searchParams.get('target_id')));
   if(u.pathname==='/api/shopee/settings'&&method==='POST')
     return json(await saveShopeeTarget(env,await getBody(request)));
-  if(u.pathname==='/api/shopee/offers'&&method==='POST')
-    return json(await addShopeeOffer(env,await getBody(request)),201);
+  if(u.pathname==='/api/shopee/offers'&&method==='POST'){
+    const payload=await getBody(request);
+    const result=await addShopeeOffer(env,payload);
+    await upsertProductCategory(env,'shopee',payload);
+    return json(result,201);
+  }
   const shopeeAction=u.pathname.match(/^\/api\/shopee\/offers\/(\d+)\/(publish|requeue)$/);
   if(shopeeAction&&method==='POST'){
     const data=await getBody(request);
@@ -392,8 +410,11 @@ async function router(request, env) {
     if(mode==='whatsapp'){
       const existing=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
       if(existing)return fail('Este link já está no Telegram. Para publicar nos dois destinos, escolha "Telegram e WhatsApp" no cadastro de uma nova oferta.',409);
-      try{return json(await addDirectWhatsAppOffer(env,body),201);}
-      catch(error){return fail(error.message,error.status||400);}
+      try{
+        const result=await addDirectWhatsAppOffer(env,body);
+        await upsertProductCategory(env,'mercadolivre',data);
+        return json(result,201);
+      }catch(error){return fail(error.message,error.status||400);}
     }
     const direct=await env.DB.prepare('SELECT id FROM whatsapp_direct_offers WHERE affiliate_url=?').bind(data.affiliate_url).first();
     if(direct)return fail('Este link já pertence à fila exclusiva do WhatsApp principal.',409);
@@ -412,6 +433,7 @@ async function router(request, env) {
       if(/UNIQUE/i.test(error.message||''))return fail('Este link já está cadastrado.',409);
       throw error;
     }
+    await upsertProductCategory(env,'mercadolivre',data);
     return json({ok:true,delivery_mode:mode,offer_id:id},201);
   }
   const directAction=u.pathname.match(/^\/api\/whatsapp\/offers\/(\d+)\/(publish|requeue)$/);
@@ -503,11 +525,21 @@ export default {
     catch (error) { console.error('CR Jornada Afiliados:', error?.message); return fail(error?.message || 'Falha interna.', error?.status || (error instanceof SyntaxError ? 400 : 500)); }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(runScheduled(env).catch(error => console.error('Publicador:', error?.message)));
-    ctx.waitUntil(runWhatsAppScheduled(env).catch(error => console.error('WhatsApp:', error?.message)));
-    ctx.waitUntil(runMultiChannelScheduled(env).catch(error => console.error('Canais extras:', error?.message)));
-    ctx.waitUntil(runManagedWhatsAppScheduled(env).catch(error => console.error('Grupos WhatsApp:', error?.message)));
-    ctx.waitUntil(runShopeeScheduled(env).catch(error => console.error('Shopee:', error?.message)));
+    const master=env.DB?masterState(env):Promise.resolve({enabled:null});
+    function start(fn,label,route=false){
+      ctx.waitUntil((async()=>{
+        const state=await master;
+        if(state.enabled===false)return;
+        const configured={...env,MASTER_SCHEDULE_ENABLED:state.enabled};
+        await fn(configured);
+        if(route&&state.enabled===true)await runCategoryRoutingScheduled(configured);
+      })().catch(error=>console.error(label+':',error?.message)));
+    }
+    start(runScheduled,'Telegram');
+    start(runWhatsAppScheduled,'WhatsApp');
+    start(runMultiChannelScheduled,'Telegram multicanal');
+    start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
+    start(runShopeeScheduled,'Shopee e categorias',true);
   }
 };
 export { runScheduled, router };

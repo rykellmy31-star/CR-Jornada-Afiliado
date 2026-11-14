@@ -287,7 +287,7 @@ export async function testManagedWhatsAppGroup(env,id){
 }
 export async function publishManagedWhatsAppOffer(env,id,offerId){
  const g=await groupRow(env,id);
- if(!g.enabled||!g.public_registered||!g.group_jid)throw fail('Ative o grupo público antes de publicar.');
+ if((!g.enabled&&env.MASTER_SCHEDULE_ENABLED!==true)||!g.public_registered||!g.group_jid)throw fail('Ative o grupo público antes de publicar.');
  const offer=await env.DB.prepare(OFFER_DETAILS+' WHERE o.group_id=? AND o.id=?').bind(g.id,Number(offerId)).first();
  if(!offer)throw fail('Oferta não encontrada neste grupo.',404);
  if(!categoryMatches(offer.category,g.category))throw fail('A oferta não corresponde à categoria do grupo.');
@@ -312,8 +312,9 @@ export async function publishManagedWhatsAppOffer(env,id,offerId){
 }
 export async function runManagedWhatsAppScheduled(env){
  if(!env?.DB)return {skipped:'db'};
+  if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
  await ensureWhatsAppGroupTables(env);
- const rows=await env.DB.prepare('SELECT * FROM whatsapp_groups WHERE enabled=1 AND public_registered=1 AND group_jid<>? ORDER BY id LIMIT 40').bind('').all();
+ const rows=await env.DB.prepare('SELECT * FROM whatsapp_groups WHERE (enabled=1 OR ?=1) AND public_registered=1 AND group_jid<>? ORDER BY id LIMIT 40').bind(env.MASTER_SCHEDULE_ENABLED===true?1:0,'').all();
  const results=[];
  for(const g of rows.results){
    const current=new Date(),clock=localTimeParts(current),time=now();
@@ -325,8 +326,8 @@ export async function runManagedWhatsAppScheduled(env){
      .bind(g.id,g.category,g.category).first();
    if(!offer)continue;
    // Impede ciclos concorrentes do mesmo grupo; também limita disparos simultâneos do mesmo número.
-   const claim=await env.DB.prepare('UPDATE whatsapp_groups SET last_attempt_at=? WHERE id=? AND enabled=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
-     .bind(time,g.id,time-g.interval_minutes*60).run();
+   const claim=await env.DB.prepare('UPDATE whatsapp_groups SET last_attempt_at=? WHERE id=? AND (enabled=1 OR ?=1) AND (last_attempt_at=0 OR last_attempt_at<=?)')
+     .bind(time,g.id,env.MASTER_SCHEDULE_ENABLED===true?1:0,time-g.interval_minutes*60).run();
    if(claim.meta?.changes!==1)continue;
    await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_instance_pacing(instance_name,last_attempt_at) VALUES(?,0)').bind(g.instance_name).run();
    const instance=await env.DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=? AND (last_attempt_at=0 OR last_attempt_at<=?)')

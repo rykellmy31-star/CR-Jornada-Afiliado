@@ -16,3 +16,8 @@ jobs:
           node-version: '24'
       - name: Executar testes sem enviar mensagens reais
         run: npm test
+
+      - name: Verificar empacotamento Cloudflare sem publicar
+        run: |
+          npm install --no-audit --no-fund
+          npx wrangler deploy --dry-run --outdir=dist
