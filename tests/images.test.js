@@ -137,3 +137,21 @@ test('CDN que nega HEAD mas aceita GET parcial ainda fornece foto válida', asyn
   });
   assert.equal(result,'https://http2.mlstatic.com/D_NQ_NP_555-MLB123-F.jpg');
 });
+
+
+test('HTML maior que 1 MB ainda permite extrair og:image no começo da página', async () => {
+  const photo = 'https://http2.mlstatic.com/D_NQ_NP_412-MLB890-P.webp';
+  const start = '<html><head><meta property="og:image" content="'+photo+'"></head><body>';
+  const html = start + 'x'.repeat(1_100_000) + '</body></html>';
+  const result = await findProductImage('https://meli.la/2bsHW5y',async(url,opts={}) => {
+    if (url === 'https://meli.la/2bsHW5y') {
+      return new Response(html,{headers:{
+        'content-type':'text/html','content-length':String(html.length)
+      }});
+    }
+    if (String(url).endsWith('-F.jpg') && opts.method === 'HEAD')
+      return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'800000'}});
+    return new Response(null,{status:404});
+  });
+  assert.equal(result,'https://http2.mlstatic.com/D_NQ_NP_412-MLB890-F.jpg');
+});
