@@ -280,3 +280,66 @@ test('melila.me para Shopee ou página sem produto fica em revisão sem criar of
   assert.equal((await monitorState(env)).links.length,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
+
+
+test('diagnóstico mostra se webhook chegou, se monitor estava desligado e se grupo era autorizado',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo permitido',permission_confirmed:true});
+  let state=await monitorState(env);
+  assert.equal(state.diagnostics.events_received,0);
+  assert.equal(state.diagnostics.last_event_at,null);
+  assert.deepEqual(state.recent_shortlinks,[]);
+  assert.deepEqual(await ingestMonitorEvent(env,event()),{ok:true,ignored:'monitor_off'});
+  state=await monitorState(env);
+  assert.equal(state.diagnostics.events_received,1);
+  assert.equal(state.diagnostics.events_while_off,1);
+  assert.equal(state.diagnostics.authorized_messages,0);
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(OTHER,'Oferta '+PRODUCT));
+  state=await monitorState(env);
+  assert.equal(state.diagnostics.events_received,2);
+  assert.equal(state.diagnostics.messages_with_links,1);
+  assert.equal(state.diagnostics.authorized_messages,0);
+  assert.equal(state.diagnostics.links_recognized,0);
+  await ingestMonitorEvent(env,event(GROUP,'Ofertão https://melila.me/ijeezy55555'));
+  state=await monitorState(env);
+  assert.equal(state.diagnostics.events_received,3);
+  assert.equal(state.diagnostics.messages_with_links,2);
+  assert.equal(state.diagnostics.authorized_messages,1);
+  assert.equal(state.diagnostics.links_recognized,1);
+  assert.ok(state.diagnostics.last_event_at>0);
+  assert.ok(state.diagnostics.last_link_at>0);
+  assert.equal(state.shortlinks.find(x=>x.status==='pending').total,1);
+  assert.equal(state.recent_shortlinks[0].status,'pending');
+  assert.equal(state.recent_shortlinks[0].short_url,'https://melila.me/ijeezy55555');
+  const page=renderPage();
+  assert.match(page,/Diagnóstico da captura/);
+  assert.match(CLIENT_JS,/mlMonitorApplyDiagnostics/);
+  assert.match(CLIENT_JS,/Nenhum evento chegou ao Worker/);
+ }finally{DB.close();}
+});
+
+test('diagnóstico não registra webhook com token inválido e expõe razões de links em revisão apenas à sessão',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo permitido',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const wrong=await worker.fetch(new Request('https://afiliados.example.test/hooks/wa-links/token-errado-mas-bem-comprido-123456789',{
+    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(event())}),env);
+  assert.equal(wrong.status,404);
+  assert.equal((await monitorState(env)).diagnostics.events_received,0);
+  const received=await ingestMonitorEvent(env,event(GROUP,'Oferta https://melila.me/ijeagkktlctt'));
+  assert.equal(received.pending,1);
+  const before=await monitorState(env);
+  assert.equal(before.diagnostics.links_recognized,1);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Destino não verificável'").run();
+  const state=await monitorState(env);
+  assert.equal(state.recent_shortlinks[0].reason,'Destino não verificável');
+  assert.equal(state.recent_shortlinks[0].status,'review');
+  assert.equal(state.shortlinks.find(x=>x.status==='review').total,1);
+  assert.equal(state.counts.captured,0);
+  const unauth=await worker.fetch(new Request('https://afiliados.example.test/api/monitor/state'),env);
+  assert.equal(unauth.status,401);
+ }finally{DB.close();}
+});
