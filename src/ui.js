@@ -1112,6 +1112,7 @@ for(let h=0;h<=24;h++){
 }
 $('wa-multi-select').addEventListener('change',async()=>{
  currentWaGroupId=Number($('wa-multi-select').value)||1;
+ rememberNavigation();
  notice('',false,'wa-multi-feedback');
  await refreshManagedWhatsApp();
 });
@@ -1127,6 +1128,7 @@ $('wa-multi-create-form').addEventListener('submit',async e=>{
  try{
    const result=await call('/api/wa-groups',{method:'POST',body:JSON.stringify(body)});
    currentWaGroupId=result.id;
+    rememberNavigation();
    $('wa-multi-create').classList.add('hidden');
    e.target.reset();
    await refreshManagedWhatsApp();
@@ -1244,6 +1246,7 @@ $('shopee-destination-create-form').addEventListener('submit',async e=>{
   try{
     const result=await call('/api/shopee/destinations/create',{method:'POST',body:JSON.stringify(body)});
     shopeeTarget[selectedNetwork]=result.id;
+    rememberNavigation();
     form.reset();
     $('shopee-destination-create').classList.add('hidden');
     await refreshPlatformTargets();
@@ -1369,12 +1372,15 @@ $('platform-target-select').addEventListener('change',async()=>{
   const id=Number($('platform-target-select').value)||1;
   if(selectedPlatform==='shopee'){
     shopeeTarget[selectedNetwork]=id>=1000?id:null;
+     rememberNavigation();
     await refreshShopee();
   }else if(selectedNetwork==='telegram'){
     currentChannelId=id;
+     rememberNavigation();
     await refresh();
   }else{
     currentWaGroupId=id;
+     rememberNavigation();
     await refreshManagedWhatsApp();
     applyPlatformView();
   }
@@ -1424,6 +1430,7 @@ $('shopee-offers-rows').addEventListener('click',async e=>{
 $('shopee-refresh').addEventListener('click',refreshShopee);
 $('channel-select').addEventListener('change',async()=>{
   currentChannelId=Number($('channel-select').value)||1;
+   rememberNavigation();
   notice('');
   await refresh();
 });
@@ -1446,6 +1453,7 @@ $('channel-create-form').addEventListener('submit',async e=>{
   try{
     const result=await call('/api/channels',{method:'POST',body:JSON.stringify(body)});
     currentChannelId=result.id;
+    rememberNavigation();
     e.target.reset();
     $('new-channel-bot-wrap').classList.add('hidden');
     $('channel-creation').classList.add('hidden');
