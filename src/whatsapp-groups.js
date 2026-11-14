@@ -339,3 +339,32 @@ export async function runManagedWhatsAppScheduled(env){
  }
  return {results};
 }
+
+
+// Compartilha texto Shopee no destino WhatsApp já cadastrado e autorizado.
+export async function sendPlatformWhatsAppText(env,targetId,text){
+  const id=Number(targetId);
+  let instance,jid;
+  if(id===1){
+    // Importação dinâmica não necessária: as tabelas da versão original já são criadas
+    // pela central antes de ativar; usamos o mesmo banco e estado sem sobrescrevê-los.
+    const config=await env.DB.prepare('SELECT instance_name,group_jid,public_registered,enabled FROM whatsapp_settings WHERE id=1').first();
+    if(!config?.enabled||!config.public_registered||!config.group_jid)
+      throw fail('Ative e confirme o grupo principal do WhatsApp antes de publicar Shopee.');
+    instance=config.instance_name;
+    jid=config.group_jid;
+  }else{
+    const g=await groupRow(env,id);
+    if(!g.enabled||!g.public_registered||!g.group_jid)
+      throw fail('Ative e confirme o grupo WhatsApp selecionado antes de publicar Shopee.');
+    instance=g.instance_name;jid=g.group_jid;
+  }
+  // O mesmo número pode atender vários grupos: valide que ainda participa deste grupo.
+  const groups=await listWhatsAppGroups(env,instance);
+  if(!groups.some(g=>g.id===jid))throw fail('Grupo WhatsApp não encontrado no número conectado.');
+  const response=await evo(env,'/message/sendText/'+encodeURIComponent(instance),
+    {method:'POST',body:{number:jid,text,linkPreview:true}});
+  if(typeof response?.key?.id!=='string'||!response.key.id)
+    throw fail('Evolution não confirmou o envio; verifique o grupo antes de tentar novamente.');
+  return {message_id:response.key.id,instance_name:instance};
+}

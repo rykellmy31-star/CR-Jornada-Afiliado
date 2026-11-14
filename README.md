@@ -163,3 +163,19 @@ As ofertas dos **novos grupos WhatsApp** são colocadas diretamente na fila daqu
 A migração é estritamente aditiva: as tabelas novas `whatsapp_groups`, `whatsapp_group_offers`, `whatsapp_group_coupons`, `whatsapp_group_logs`, `whatsapp_instance_pacing`, `whatsapp_primary_category` e `primary_channel_category` são criadas por `CREATE TABLE IF NOT EXISTS`. Não apague nem recrie banco D1, ofertas, filas, tokens de bots, cupons ou instâncias existentes. A busca de produtos/links afiliados via API do Mercado Livre continua pendente de autorização da aplicação oficial.
 
 Regras oficiais consultadas: https://www.mercadolivre.com.br/l/afiliados-compartilhamento-de-publicacao — somente canais ou grupos públicos/abertos, cadastrados como mídia pelo afiliado.
+
+
+## Integração Shopee (links manuais) e menu lateral de plataformas — novembro de 2026
+
+O painel ganhou um menu lateral com **Mercado Livre** e **Shopee**. Dentro de cada plataforma, selecione **Telegram** ou **WhatsApp**, e então o canal ou grupo que deseja configurar. O Mercado Livre mantém todas as telas, filas, categorias, bots, Evolution, configurações e horários anteriores sem recriação de D1. A navegação apenas reorganiza a interface.
+
+A plataforma **Shopee** possui tabelas adicionais `shopee_targets`, `shopee_offers` e `shopee_logs` para configurar cada canal/grupo e agendar publicações independentemente do Mercado Livre. Escolha um destino já cadastrado (canal do Telegram ou grupo do WhatsApp), selecione a categoria, intervalo editável em minutos, horários e limite diário. Cada destino Shopee começa desligado; para ativá-lo é obrigatório que o canal/grupo de origem esteja ativo e autorizado e que o administrador confirme a permissão de divulgação da Shopee. Ofertas de categoria incompatível não entram na fila e publicações com resposta ambígua ficam em revisão para evitar duplicidade.
+
+**Integração inicial da Shopee:** é possível cadastrar os links de afiliado **que o próprio usuário já gerou no Portal de Afiliados da Shopee**, para publicá-los automaticamente em destinos autorizados por Telegram ou WhatsApp. URLs aceitas: HTTPS nos domínios `shopee.com.br`, `www.shopee.com.br`, `s.shopee.com.br`, `shp.ee` e `br.shp.ee`. O usuário deve confirmar que o link vem de sua própria conta de afiliado, pois a origem/comissão não pode ser autenticada automaticamente nesta versão. O texto publicado informa claramente que se trata de publicidade, traz o link completo, a categoria e os preços informados manualmente quando recentes. A versão inicial envia texto com link (não gera fotos oficiais automaticamente).
+
+**Pendente da API:** A busca automática no catálogo Shopee, geração/conversão automática de links com comissão, importação automática de promoções e comprovação automática de dados exigem acesso e credenciais da API de Afiliados Shopee; nenhuma dessas ações é ativada sem autorização. O Mercado Livre permanece com a busca e a API pendentes da autorização do usuário.
+
+Não altere segredos existentes da Evolution API, Telegram ou banco D1. Os destinos Shopee reutilizam somente a conexão autorizada já existente, têm autorização adicional própria e evitam envios simultâneos no mesmo número da Evolution. Como a Evolution usa uma interface WhatsApp não oficial, o usuário deve respeitar os termos de uso e evitar envios em massa ou grupos sem consentimento.
+
+Referência oficial Shopee para geração de links no Portal/App de Afiliados:
+https://help.shopee.com.br/portal/10/article/128461-Como%20gerar%20links%20de%20produtos%20ou%20lojas

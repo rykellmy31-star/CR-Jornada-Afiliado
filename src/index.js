@@ -10,6 +10,7 @@ import {
  requeueManagedWhatsAppOffer,managedWhatsAppConnection,listManagedWhatsAppGroupOptions,
  testManagedWhatsAppGroup,publishManagedWhatsAppOffer,runManagedWhatsAppScheduled
 } from './whatsapp-groups.js';
+import {shopeeDestinations,shopeeState,saveShopeeTarget,addShopeeOffer,requeueShopeeOffer,publishShopeeOffer,runShopeeScheduled} from './shopee.js';
 
 const COOKIE = 'crj_auth';
 const SEC = 12 * 60 * 60;
@@ -215,6 +216,24 @@ async function router(request, env) {
     ]);
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
+  // Shopee: apenas links oficiais já gerados pelo próprio afiliado, sem consulta
+  // a API/credenciais Shopee; destinos/filas/agendamentos são isolados do Mercado Livre.
+  if(u.pathname==='/api/shopee/destinations'&&method==='GET')
+    return json(await shopeeDestinations(env));
+  if(u.pathname==='/api/shopee/state'&&method==='GET')
+    return json(await shopeeState(env,u.searchParams.get('network'),u.searchParams.get('target_id')));
+  if(u.pathname==='/api/shopee/settings'&&method==='POST')
+    return json(await saveShopeeTarget(env,await getBody(request)));
+  if(u.pathname==='/api/shopee/offers'&&method==='POST')
+    return json(await addShopeeOffer(env,await getBody(request)),201);
+  const shopeeAction=u.pathname.match(/^\/api\/shopee\/offers\/(\d+)\/(publish|requeue)$/);
+  if(shopeeAction&&method==='POST'){
+    const data=await getBody(request);
+    const result=shopeeAction[2]==='publish'
+      ?await publishShopeeOffer(env,data.network,data.target_id,shopeeAction[1])
+      :await requeueShopeeOffer(env,data.network,data.target_id,shopeeAction[1]);
+    return json(result,result.status==='needs_review'?409:200);
+  }
   // Todos os endpoints multicanal exigem a mesma sessão administrativa e origem.
   // Central de grupos WhatsApp; o grupo principal usa a integração legada.
   if(u.pathname==='/api/wa-groups'&&method==='GET')
@@ -404,6 +423,7 @@ export default {
     ctx.waitUntil(runWhatsAppScheduled(env).catch(error => console.error('WhatsApp:', error?.message)));
     ctx.waitUntil(runMultiChannelScheduled(env).catch(error => console.error('Canais extras:', error?.message)));
     ctx.waitUntil(runManagedWhatsAppScheduled(env).catch(error => console.error('Grupos WhatsApp:', error?.message)));
+    ctx.waitUntil(runShopeeScheduled(env).catch(error => console.error('Shopee:', error?.message)));
   }
 };
 export { runScheduled, router };

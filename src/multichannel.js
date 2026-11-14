@@ -198,11 +198,11 @@ async function log(env,channelId,event,detail='',offerId=null){
 export async function listTelegramChannels(env){
   await ensureMultiChannelTables(env);
   const [legacy,extras]=await Promise.all([
-    env.DB.prepare('SELECT telegram_chat_id,automation_enabled,interval_minutes,max_daily FROM settings WHERE id=1').first(),
+    env.DB.prepare('SELECT telegram_chat_id,automation_enabled,telegram_enabled,channel_registered,interval_minutes,max_daily FROM settings WHERE id=1').first(),
     env.DB.prepare("SELECT c.id,c.name,c.category,c.telegram_chat_id,c.bot_mode,c.channel_registered,c.telegram_enabled,c.automation_enabled,c.interval_minutes,c.max_daily,c.start_hour,c.end_hour,c.token_encrypted, (SELECT COUNT(*) FROM channel_offers o WHERE o.channel_id=c.id AND o.status='ready') AS ready_count FROM telegram_channels c ORDER BY c.id").all()
   ]);
   return [{id:1,name:'Canal principal',category:'Geral',telegram_chat_id:legacy?.telegram_chat_id||'@achadinhosmlcr',
-    bot_mode:'principal',automation_enabled:legacy?.automation_enabled||0,
+    bot_mode:'principal',automation_enabled:legacy?.automation_enabled||0,telegram_enabled:legacy?.telegram_enabled||0,channel_registered:legacy?.channel_registered||0,
     interval_minutes:legacy?.interval_minutes||30,max_daily:legacy?.max_daily||12,ready_count:0},
     ...extras.results.map(sanitized)];
 }
@@ -395,4 +395,27 @@ export async function runMultiChannelScheduled(env){
     }
   }
   return {results};
+}
+
+
+// Envia ofertas da Shopee a canais existentes, sem alterar a fila do Mercado Livre.
+export async function sendPlatformTelegramText(env,targetId,text){
+  const id=Number(targetId);
+  let token,chat;
+  if(id===1){
+    const settings=await env.DB.prepare('SELECT telegram_chat_id,telegram_enabled,channel_registered FROM settings WHERE id=1').first();
+    if(!settings?.telegram_enabled||!settings.channel_registered)throw bad('Ative e autorize o canal Telegram principal antes de publicar ofertas da Shopee.');
+    if(!env.TELEGRAM_BOT_TOKEN)throw bad('Configure o token do bot Telegram principal.');
+    token=env.TELEGRAM_BOT_TOKEN;
+    chat=settings.telegram_chat_id;
+  }else{
+    const channel=await row(env,id);
+    if(!channel.telegram_enabled||!channel.channel_registered)throw bad('Ative e autorize o canal Telegram selecionado.');
+    token=await globalToken(env,channel);
+    chat=channel.telegram_chat_id;
+  }
+  await verifyChannel(token,chat);
+  const sent=await api(token,'sendMessage',{chat_id:chat,text,disable_web_page_preview:false});
+  if(!Number.isSafeInteger(sent?.message_id))throw bad('O Telegram não confirmou a mensagem; confira o canal antes de reenviar.');
+  return {message_id:String(sent.message_id)};
 }
