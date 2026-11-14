@@ -13,10 +13,19 @@ export function renderPage() {
         <div class="platform-side-divider"></div>
         <button class="platform-nav-item" type="button" data-panel="categories"><span>📁</span> Categorias</button>
         <button class="platform-nav-item" type="button" data-panel="activity"><span>📋</span> Atividade recente</button>
+        <button class="platform-nav-item" type="button" data-panel="affiliate"><span>🔐</span> Conexão de Afiliado</button>
         <div class="platform-side-divider"></div>
         <p class="platform-side-note">Cada plataforma possui suas próprias filas e configurações de divulgação.</p>
       </aside>
       ${CATEGORY_PAGE_HTML}
+      <section id="affiliate-page" class="card history hidden">
+        <div class="section-header"><div><h2>🔐 Conexão de Afiliado • Mercado Livre</h2>
+          <p>Integração da conta no menu lateral, sem interferir nas publicações que já funcionam.</p></div></div>
+        <p><strong>Estado:</strong> geração automática de links ainda não conectada.</p>
+        <p class="hint">O Gerador de Links e a Barra de Afiliados são ferramentas oficiais. Para automatizá-las seria necessária uma integração autorizada e um componente de navegador separado do Cloudflare Worker. Não cole cookies, senhas ou tokens de sessão no painel.</p>
+        <p><a class="outline affiliate-portal-link" href="https://www.mercadolivre.com.br/l/afiliados-gere-seus-links" target="_blank" rel="noopener noreferrer">Abrir o gerador oficial</a></p>
+        <p class="hint">Até validar a geração automática, somente links oficiais cadastrados por você entram na fila. Nenhuma comissão será presumida.</p>
+      </section>
       <section class="platform-context card" id="platform-context">
         <div class="platform-context-head">
           <div>
@@ -28,8 +37,12 @@ export function renderPage() {
             <button type="button" class="platform-network-button active" data-network="telegram">✈️ Telegram</button>
             <button type="button" class="platform-network-button" data-network="whatsapp">🟢 WhatsApp</button>
             <button type="button" class="platform-network-button" id="coupons-tab" data-coupons-tab="true">🎟️ Cupons</button>
+            <button type="button" class="platform-network-button" id="automation-tab">⚙️ Automação</button>
           </div>
         </div>
+        <label class="platform-target-label hidden" id="automation-network-wrap">Destino da automação Shopee
+          <select id="automation-network-select"><option value="telegram">Telegram</option><option value="whatsapp">WhatsApp</option></select>
+        </label>
         <label class="platform-target-label hidden" id="coupon-network-wrap">Modalidade do destino para vincular cupons
           <select id="coupon-target-network"><option value="telegram">Telegram</option><option value="whatsapp">WhatsApp</option></select>
         </label>
@@ -183,6 +196,21 @@ export function renderPage() {
           <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
           <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
+      <section class="card whatsapp-automation hidden" id="ml-wa-automation-panel">
+        <div class="section-header"><div><h2>🟢 Automação do WhatsApp principal</h2>
+          <p>Grupos e conexões ficam no WhatsApp. Configure aqui o intervalo e a ativação.</p></div></div>
+        <form id="auto-wa-form" class="whatsapp-form">
+          <label>Intervalo entre publicações do WhatsApp (minutos)
+            <input id="auto-wa-interval" type="number" min="1" max="1440" step="1" required>
+          </label>
+          <label class="check-row"><input id="auto-wa-enabled" type="checkbox"><span><b>Ativar publicações no WhatsApp</b>
+            <small>Exige grupo público cadastrado e conectado.</small></span></label>
+          <button type="submit" class="primary">Salvar automação WhatsApp</button>
+          <p id="auto-wa-feedback" class="feedback" role="status"></p>
+        </form>
+        <div class="section-header" style="margin-top:20px"><h2>Fila exclusiva do WhatsApp</h2></div>
+        <div id="ml-wa-automation-history"></div>
+      </section>
       <section class="card whatsapp-panel" id="whatsapp">
         <div class="section-header"><div><h2>🟢 WhatsApp • Evolution API</h2><p>Cadastre ofertas diretamente no WhatsApp ou espelhe as publicadas no Telegram. Cada destino respeita seu próprio intervalo.</p></div><span id="whatsapp-badge" class="tag">Desligado</span></div>
         <p class="hint">Use a Evolution API instalada na sua própria VPS. O WhatsApp não oficial pode sofrer bloqueios; não permite disparos privados ou importação de contatos. O grupo deve ser público, aberto e cadastrado como mídia na Central de Afiliados.</p>
@@ -545,7 +573,7 @@ export function renderPage() {
       </section>
       <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
       <section id="activity-page" class="card history hidden"><div class="section-header"><div><h2>📋 Atividade recente</h2><p>Registros de tentativas, publicações e mudanças.</p></div><button id="activity-refresh" type="button" class="outline">Atualizar</button></div><div id="log-list" class="logs">Ainda não há eventos.</div></section>
-      <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram multicanal • WhatsApp com Evolution API • Busca e links automáticos aguardam integração oficial.</footer>
+      <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram, WhatsApp, Cupons e Automação • Geração automática de links depende de integração autorizada.</footer>
     </section>
   </main></body></html>`;
 }
