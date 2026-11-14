@@ -157,3 +157,16 @@ test('bootstrap autentica rapidamente e só carrega integração da aba aberta',
   assert.doesNotMatch(refreshSource,/\s+await refreshWhatsApp\(\)/);
   assert.match(CLIENT_JS,/const pendingReads=new Map\(\)/);
 });
+
+
+test('aba Shopee WhatsApp não espera Evolution para exibir ofertas e configurações',()=>{
+  const from=CLIENT_JS.indexOf('async function refreshShopee(){');
+  const to=CLIENT_JS.indexOf('async function refreshShopeeWaConnection(',from);
+  assert.ok(from>=0&&to>from);
+  const source=CLIENT_JS.slice(from,to);
+  assert.match(source,/void Promise\.allSettled\(\[refreshShopeeWaConnection\(false\),loadShopeeGroupNames\(id\)\]\)/);
+  assert.doesNotMatch(source,/await refreshShopeeWaConnection\(/);
+  assert.doesNotMatch(source,/await loadShopeeGroupNames\(/);
+  assert.ok(source.indexOf('Promise.allSettled')<source.indexOf("('shopee-target-title').textContent"));
+  assert.match(source,/\$\('shopee-offers-rows'\)\.innerHTML=/);
+});
