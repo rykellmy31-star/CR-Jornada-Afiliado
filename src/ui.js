@@ -692,9 +692,6 @@ function rememberNavigation(){
   }catch{/* Armazenamento desativado: a navegação continua funcional. */}
 }
 restoreNavigationState();
-// A fila histórica permanece íntegra e é mostrada apenas na Central de Automação.
-const waHistory=document.querySelector('#wa-direct-card .table-scroll');
-if(waHistory)$('ml-wa-automation-history').appendChild(waHistory);
 let firstRefresh=true;
 function restoreScrollAfterRefresh(){
   if(!firstRefresh)return;
@@ -713,6 +710,9 @@ window.addEventListener('pagehide',()=>{
   try{sessionStorage.setItem(SCROLL_KEY,String(Math.max(0,window.scrollY||0)));}catch{}
 });
 let shoAccountState=null;
+// Reutiliza o histórico original do WhatsApp no painel de Automação, sem mexer no banco.
+const waHistory=document.querySelector('#wa-direct-card .table-scroll');
+if(waHistory)$('ml-wa-automation-history').appendChild(waHistory);
 let mlTopStatus='Robô desligado';
 function notice(text, isError=false, target='notice') { $(target).textContent = text; $(target).classList.toggle('error', isError); }
 // Requisições GET simultâneas à mesma rota compartilham o mesmo pedido.
