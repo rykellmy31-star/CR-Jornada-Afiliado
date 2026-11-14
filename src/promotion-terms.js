@@ -15,13 +15,16 @@ export function moneyCents(value){
  return Number.isSafeInteger(n)&&n>0&&n<=99999999?n:null;
 }
 const real=cents=>Number.isSafeInteger(cents)&&cents>0&&cents<=99999999;
-const brl=value=>(value/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const brl=value=>(value/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}).replace(/\u00a0/g,' ');
 export function extractPromotionTerms(input){
  if(typeof input!=='string')return null;
  const text=input.replace(/https:\/\/[^\s<>"']+/gi,' ').replace(/\s+/g,' ').slice(0,600);
  if(!text.trim())return null;
- const pair=text.match(rDePor),by=text.match(rPor),pixPrice=text.match(rPix),cardPrice=text.match(rCard);
+ const pair=text.match(rDePor),by=text.match(rPor),pixPrice=text.match(rPix);
  const installmentPrice=text.match(rInstallment);
+ const rawCardPrice=text.match(rCard);
+ // Não confunda o valor de uma parcela com o preço total no cartão.
+ const cardPrice=rawCardPrice&&installmentPrice&&rawCardPrice.index>=installmentPrice.index&&rawCardPrice.index<installmentPrice.index+installmentPrice[0].length?null:rawCardPrice;
  const installment=installmentPrice||text.match(rOnlyInstallment);
  const times=installment?Number(installment[1]):null;
  const validTimes=Number.isInteger(times)&&times>=2&&times<=24?times:null;

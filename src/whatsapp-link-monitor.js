@@ -1,7 +1,8 @@
 import {classifyProduct,ensureAutomationCenter} from './automation-center.js';
 import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './link-batches.js';
 import {listWhatsAppGroups} from './whatsapp.js';
-import {ensureRepeatMeta,extractOfferPriceCents,canRequeueProduct} from './monitor-repeat-policy.js';
+import {canRequeueProduct} from './monitor-repeat-policy.js';
+import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
 
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
@@ -116,7 +117,7 @@ export async function updateMonitorGroup(env,id,body){
  return {ok:true};
 }
 async function saveProduct(env,entry,source){
- const time=epoch(),price=extractOfferPriceCents(entry.hint);
+ const time=epoch(),deal=extractPromotionTerms(entry.hint),price=deal?.price_cents??null;
  const title=productTitle(source.url,entry.hint,source.product_id);
  await ensureAutomationCenter(env);
  const cats=(await env.DB.prepare('SELECT * FROM affiliate_group_categories WHERE enabled=1').all()).results;
@@ -124,8 +125,8 @@ async function saveProduct(env,entry,source){
  const category=classification.category?.name||'Geral';
  // Registre o último preço mencionado com precisão, inclusive NULL para mensagens sem preço.
  const prior=await env.DB.prepare("SELECT l.id,l.status,l.batch_id,b.status AS batch_status,b.imported_at,m.last_queued_at,m.last_queued_price_cents FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id WHERE l.product_id=?").bind(source.product_id).first();
- await env.DB.prepare("INSERT INTO ml_monitor_product_meta(product_id,last_seen_price_cents,last_seen_at) VALUES(?,?,?) ON CONFLICT(product_id) DO UPDATE SET last_seen_price_cents=excluded.last_seen_price_cents,last_seen_at=excluded.last_seen_at")
-   .bind(source.product_id,price,time).run();
+ await env.DB.prepare("INSERT INTO ml_monitor_product_meta(product_id,last_seen_price_cents,last_seen_deal_json,last_seen_at) VALUES(?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET last_seen_price_cents=excluded.last_seen_price_cents,last_seen_deal_json=excluded.last_seen_deal_json,last_seen_at=excluded.last_seen_at")
+   .bind(source.product_id,price,deal?JSON.stringify(deal):null,time).run();
  if(!prior){
    const inserted=await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) VALUES(?,?,?,?,?,?,?,'available',?)")
      .bind(entry.group_id,entry.message_id,source.product_id,source.url,title,category,classification.classification,time).run();
@@ -194,7 +195,7 @@ export async function prepareMonitorBatch(env,body){
  const ops=[];
  for(const x of rows){
   ops.push(env.DB.prepare("UPDATE ml_monitor_links SET status='batched',batch_id=? WHERE id=? AND status='available'").bind(batch.batch.id,x.id));
-  ops.push(env.DB.prepare("UPDATE ml_monitor_product_meta SET pending_batch_id=?,pending_price_cents=last_seen_price_cents WHERE product_id=(SELECT product_id FROM ml_monitor_links WHERE id=?)").bind(batch.batch.id,x.id));
+  ops.push(env.DB.prepare("UPDATE ml_monitor_product_meta SET pending_batch_id=?,pending_price_cents=last_seen_price_cents,pending_deal_json=last_seen_deal_json,pending_captured_at=last_seen_at WHERE product_id=(SELECT product_id FROM ml_monitor_links WHERE id=?)").bind(batch.batch.id,x.id));
  }
  const changes=await env.DB.batch(ops);
  if(changes.some(x=>x.meta?.changes!==1))throw fail('Um produto mudou durante a criação do lote. Revise os lotes salvos.',409);

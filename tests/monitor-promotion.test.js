@@ -6,7 +6,7 @@ import {extractPromotionTerms,promotionDescription,publishedPromotionLines,safeP
 import {composeOfferMessage} from '../src/logic.js';
 import {addMonitorGroup,saveMonitorSettings,ingestMonitorEvent,monitorState,prepareMonitorBatch} from '../src/whatsapp-link-monitor.js';
 import {importLinkBatch} from '../src/link-batches.js';
-const URL='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
+const PRODUCT_URL='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
 function fixture(){
  const db=new DatabaseSync(':memory:');
  db.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
@@ -25,13 +25,14 @@ function fixture(){
 function event(text,id='offer-1'){
  return {event:'messages.upsert',instance:'cr-jornada-afiliados',
    data:{key:{remoteJid:'120363000111222333@g.us',fromMe:false,id},
-   message:{extendedTextMessage:{text:'🔥 Furadeira de impacto '+text+' '+URL}}}};
+   message:{extendedTextMessage:{text:'🔥 Furadeira de impacto '+text+' '+PRODUCT_URL}}}};
 }
 test('preço antigo, Pix exclusivo e parcelamento preservados sem inventar juros',()=>{
  const t=extractPromotionTerms('De R$ 299,90 por R$ 199,90 somente no Pix. Ou 6x de R$ 40,00 no cartão');
  assert.equal(t.old_price_cents,29990);
  assert.equal(t.price_cents,19990);
  assert.equal(t.payment_mode,'pix_only');
+ assert.equal(t.card_price_cents,null);
  assert.equal(t.installments,6);
  assert.equal(t.installment_cents,4000);
  assert.equal(t.installments_no_interest,false);
