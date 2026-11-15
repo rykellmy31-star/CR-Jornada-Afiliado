@@ -1519,7 +1519,7 @@ test('vitrine real em revisão há 20 tentativas usa navegador e confirma SOMENT
   const id=DB.prepare('SELECT id FROM ml_monitor_shortlinks').first().id;
   DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',tries=20,reason='Vitrine encontrada, mas o botão do produto principal não pôde ser identificado no HTML público' WHERE id=?").bind(id).run();
   DB.prepare("INSERT INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) VALUES(?,?,?,?,0)")
-    .bind(id,1699999900,1699999500,20).run();
+    .bind(id,1700001800,1699999500,20).run();
   const groupId=DB.prepare('SELECT id FROM ml_monitor_groups').first().id;
   await updateMonitorGroup(env,groupId,{enabled:false});
   let browserCalls=0,htmlCalls=0;
