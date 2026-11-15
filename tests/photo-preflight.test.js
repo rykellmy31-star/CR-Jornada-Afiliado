@@ -29,7 +29,7 @@ function setup(){
 function mockImageFetch(counter){
  return async(url,options={})=>{
   const u=String(url);
-  if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
+  if(u===SOURCE)return new Response('<meta property="og:image" content="'+PREVIEW+'"><link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
   if(u===SHORT){counter.reads++;return new Response('<meta property="og:image" content="'+PREVIEW+'">',{headers:{'content-type':'text/html'}});}
   if(u===LARGE&&options.method==='HEAD')
    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'260000'}});
@@ -48,7 +48,7 @@ test('foto preparada antes do horário é reaproveitada no automático',async()=
   assert.equal((await runScheduled(env)).status,'published');
   assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
   assert.equal(counter.photos,1);
-  assert.equal(counter.reads,1,'cron reutiliza a foto que foi preparada');
+  assert.equal(counter.reads,0,'foto preparada a partir do anúncio original, sem usar o encurtador');
  }finally{globalThis.fetch=original;close();}
 });
 test('foto recuperada reabilita apenas falha explícita segura e limpa retries',async()=>{
