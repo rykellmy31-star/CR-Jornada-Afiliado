@@ -249,7 +249,7 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
 export async function monitorState(env){
  await ensureMonitor(env);
  await recoverMissingMonitorPrices(env);
- const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress,ignoredCoupons,workerHeartbeat]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress,ignoredCoupons,workerHeartbeat,browserUsage]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
@@ -287,7 +287,8 @@ export async function monitorState(env){
    "WHERE s.status='review'"
   ).first(),
   env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_ignored_links').first(),
-  env.DB.prepare('SELECT last_run_at,last_reviewed,last_resolved,last_ignored FROM ml_monitor_worker_heartbeat WHERE id=1').first()
+  env.DB.prepare('SELECT last_run_at,last_reviewed,last_resolved,last_ignored FROM ml_monitor_worker_heartbeat WHERE id=1').first(),
+  env.DB.prepare('SELECT day_key,daily_count,last_at FROM ml_monitor_browser_budget WHERE id=1').first()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -302,6 +303,9 @@ export async function monitorState(env){
    diagnostics:diagnostics||{},
    ignored_coupon_links:Number(ignoredCoupons?.total||0),
    worker_heartbeat:workerHeartbeat||{},
+   browser_usage:{used:browserUsage?.day_key===new Date().toISOString().slice(0,10)
+     ?Number(browserUsage.daily_count||0):0,
+     daily_limit:36,last_attempt_at:Number(browserUsage?.last_at||0)},
    retry_progress:{
      total:Number(retryProgress?.total||0),automatic:Number(retryProgress?.automatic||0),
      manual:Number(retryProgress?.manual||0),
