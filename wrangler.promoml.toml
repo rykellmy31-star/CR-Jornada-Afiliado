@@ -1,0 +1,16 @@
+# Worker exclusivamente público para links curtos. NÃO vincular a este hostname o painel admin.
+name = "promoml-encurtador"
+main = "src/promoml-shortener.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+[[routes]]
+pattern = "promoml.app"
+custom_domain = true
+
+# Usa o banco D1 dos links gravados em LOJAS, sem duplicar credenciais.
+[[d1_databases]]
+binding = "DB"
+database_name = "cr-jornada-afiliados-db"
+database_id = "fa5ae244-84dc-4ad4-8a5e-95be14523a34"
+migrations_dir = "migrations"
