@@ -153,3 +153,50 @@ test('link meli.la direto resolve anúncio oficial e recebe texto fixo com preç
   assert.equal(DB.prepare('SELECT source_url FROM affiliate_verified_sources WHERE affiliate_url=?').bind(AFF).first().source_url,PRODUCT_URL);
  }finally{DB.close();}
 });
+
+test('automático publica preço da API pública oficial quando o HTML do anúncio é bloqueado',async()=>{
+ const {env,DB}=envDb();
+ try{
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+   .bind(PRODUCT_URL,AFF).run();
+  const seen=[];
+  const fetcher=async url=>{
+   seen.push(String(url));
+   if(url===PRODUCT_URL)return new Response('Access denied',{status:403});
+   if(url==='https://api.mercadolibre.com/items/MLB12345678')
+    return Response.json({id:'MLB12345678',currency_id:'BRL',price:34.82,original_price:49.90});
+   throw Error('Endereço inesperado '+url);
+  };
+  const offer={id:72,title:'Kit de limpeza automotiva',affiliate_url:AFF,
+   created_at:Math.floor(Date.now()/1000),price_cents:null};
+  const result=await prepareAutomaticOfferPrice(env,offer,{fetcher,requireSite:true});
+  assert.equal(result.ok,true);
+  assert.equal(result.offer.price_cents,3482);
+  assert.equal(result.offer.old_price_cents,4990);
+  assert.equal(result.price_source,'mercadolivre');
+  assert.deepEqual(seen,[PRODUCT_URL,'https://api.mercadolibre.com/items/MLB12345678']);
+  assert.match(formatOfferMessage(result.offer,{network:'whatsapp',includeLink:true}),/Por R\$\s*34,82/);
+  const again=await prepareAutomaticOfferPrice(env,offer,{fetcher:async()=>{throw Error('Não deveria reler preço válido');},requireSite:true});
+  assert.equal(again.offer.price_cents,3482);
+ }finally{DB.close();}
+});
+test('API pública nunca aceita preço de ID diferente, moeda externa ou sem preço',async()=>{
+ const {env,DB}=envDb();
+ try{
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+   .bind(PRODUCT_URL,AFF).run();
+  const offer={id:73,title:'Produto verificado',affiliate_url:AFF,created_at:Math.floor(Date.now()/1000)};
+  for(const response of [
+   {id:'MLB99999999',currency_id:'BRL',price:1.00},
+   {id:'MLB12345678',currency_id:'USD',price:1.00},
+   {id:'MLB12345678',currency_id:'BRL',price:0}
+  ]){
+   const fetcher=async url=>{
+    if(url===PRODUCT_URL)return new Response('Forbidden',{status:403});
+    return Response.json(response);
+   };
+   const checked=await prepareAutomaticOfferPrice(env,offer,{fetcher,requireSite:true});
+   assert.equal(checked.ok,false);
+  }
+ }finally{DB.close();}
+});
