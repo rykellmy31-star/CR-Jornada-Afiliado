@@ -1,4 +1,4 @@
-import {monitorState,bulkValidateMonitorShortlinks} from './whatsapp-link-monitor.js';
+import {monitorState,bulkValidateMonitorShortlinks,prepareMonitorBatch} from './whatsapp-link-monitor.js';
 
 // Controle persistente no D1. A interface apenas solicita o trabalho;
 // o Cron da Cloudflare avança um link por execução, sem navegador aberto.
@@ -44,26 +44,50 @@ function publicJob(row){
   last_error:String(row?.last_error||'').slice(0,160)
  };
 }
+// Produtos já identificados e classificados entram no lote de CONVERSÃO,
+// nunca são publicados diretamente. Respeita o lote existente e seu limite 50.
+async function currentConversion(env){
+ const open=await env.DB.prepare(
+  "SELECT b.id,COUNT(i.id) AS total FROM ml_link_batches b "+
+  "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id "+
+  "WHERE b.status='awaiting_links' GROUP BY b.id ORDER BY b.id DESC LIMIT 1"
+ ).first();
+ const remaining=await env.DB.prepare(
+  "SELECT COALESCE(SUM(CASE WHEN category<>'Geral' AND trim(category)<>'' THEN 1 ELSE 0 END),0) AS eligible,"+
+  "COALESCE(SUM(CASE WHEN category='Geral' OR trim(category)='' THEN 1 ELSE 0 END),0) AS needs_category "+
+  "FROM ml_monitor_links WHERE status='available'"
+ ).first();
+ return {batch_id:Number(open?.id||0),batch_items:Number(open?.total||0),
+  eligible_waiting:Number(remaining?.eligible||0),
+  needs_category:Number(remaining?.needs_category||0)};
+}
+async function prepareConfirmedForConversion(env){
+ const existing=await currentConversion(env);
+ if(existing.batch_id||!existing.eligible_waiting)return {...existing,created:false};
+ const prepared=await prepareMonitorBatch(env,{automatic:true});
+ return {...await currentConversion(env),created:true,created_batch_id:Number(prepared.batch.id)};
+}
 export async function backgroundReviewState(env){
  if(!env?.DB)return publicJob(null);
  await ensureJob(env);
- return publicJob(await jobRow(env));
+ return {...publicJob(await jobRow(env)),conversion:await currentConversion(env)};
 }
 export async function queueBackgroundReview(env){
  if(!env?.DB)throw new Error('Banco de dados indisponível.');
  const state=await monitorState(env); // garante tabelas do monitor e autorização.
  await ensureJob(env);
  const old=await jobRow(env);
- if(ACTIVE.has(old?.status))return {ok:true,already_running:true,job:publicJob(old)};
+ if(ACTIVE.has(old?.status))return {ok:true,already_running:true,job:{...publicJob(old),conversion:await currentConversion(env)}};
  const t=stamp(),total=Number((state.shortlinks||[]).find(x=>x.status==='review')?.total||0);
  const automatic=Number(state.retry_progress?.automatic||0);
  if(!automatic){
+  const conversion=await prepareConfirmedForConversion(env);
   await env.DB.prepare(
    "UPDATE ml_monitor_background_review SET status='completed',total=?,cursor=0,"+
    "processed=0,resolved=0,not_confirmed=0,requires_manual=?,busy=0,"+
    "started_at=?,updated_at=?,last_run_at=0,next_run_at=0,lease_until=0,last_error='' WHERE id=1"
   ).bind(total,total,t,t).run();
-  return {ok:true,already_running:false,job:publicJob(await jobRow(env))};
+  return {ok:true,already_running:false,job:{...publicJob(await jobRow(env)),conversion}};
  }
  const status=state.enabled?'running':'waiting_monitor';
  // Atômico: cliques simultâneos não apagam o progresso de uma tarefa ativa.
@@ -73,7 +97,7 @@ export async function queueBackgroundReview(env){
   "started_at=?,updated_at=?,last_run_at=0,next_run_at=?,lease_until=0,last_error='' "+
   "WHERE id=1 AND status IN ('idle','completed','error')"
  ).bind(status,total,t,t,t).run();
- return {ok:true,already_running:false,job:publicJob(await jobRow(env))};
+ return {ok:true,already_running:false,job:{...publicJob(await jobRow(env)),conversion:await currentConversion(env)}};
 }
 async function updateJob(env,values){
  const keys=Object.keys(values);
@@ -115,7 +139,9 @@ export async function runBackgroundReview(env,{now=null}={}){
   }
   const checks=Number((result.results||[]).length);
   let status='running',cursor=advance,next=at+60;
+  let conversion=null;
   if(!result.has_more){
+   conversion=await prepareConfirmedForConversion(env);
    const latest=await monitorState(env);
    if(!Number(latest.retry_progress?.automatic||0)){
     status='completed';next=0;
@@ -135,7 +161,7 @@ export async function runBackgroundReview(env,{now=null}={}){
    busy:Number(row.busy||0)+Number(result.busy||0),
    next_run_at:next,last_run_at:at,updated_at:at,lease_until:0,last_error:''
   });
-  return {status,processed:checks,resolved:Number(result.resolved||0)};
+  return {status,processed:checks,resolved:Number(result.resolved||0),conversion};
  }catch(error){
   const reason=String(error?.message||error).slice(0,160);
   await updateJob(env,{status:'waiting_retry',next_run_at:at+120,last_run_at:at,updated_at:at,lease_until:0,last_error:reason});
