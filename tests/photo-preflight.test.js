@@ -8,9 +8,12 @@ import {runScheduled} from '../src/index.js';
 const SHORT='https://meli.la/2ESKGQw';
 const PREVIEW='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-P.webp';
 const LARGE='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-F.jpg';
+const SOURCE='https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678';
 function setup(){
  const sqlite=new DatabaseSync(':memory:');
  sqlite.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
+ sqlite.exec("CREATE TABLE ml_link_batch_items(id INTEGER PRIMARY KEY,source_url TEXT,affiliate_url TEXT,status TEXT)");
+ sqlite.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')").run(SOURCE,SHORT);
  const DB={prepare(sql){let params=[];return{
   bind(...values){params=values;return this;},
   first(){return sqlite.prepare(sql).get(...params)||null;},
@@ -26,6 +29,7 @@ function setup(){
 function mockImageFetch(counter){
  return async(url,options={})=>{
   const u=String(url);
+  if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
   if(u===SHORT){counter.reads++;return new Response('<meta property="og:image" content="'+PREVIEW+'">',{headers:{'content-type':'text/html'}});}
   if(u===LARGE&&options.method==='HEAD')
    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'260000'}});
