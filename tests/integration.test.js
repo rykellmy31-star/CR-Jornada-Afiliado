@@ -372,3 +372,39 @@ test('reenfileirar após 8 tentativas libera Cron e publica FOTO automática nov
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
+
+
+test('revisão de foto é recuperada no cron sem clicar em reenfileirar ou publicar',async()=>{
+ const DB=dbMock(),oldFetch=globalThis.fetch;
+ const env={DB,ADMIN_PASSWORD:'senha_teste',SESSION_SECRET:'chave_segura_para_os_testes_123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+ let sent=0;
+ try{
+  DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,start_hour=0,end_hour=24,max_daily=48 WHERE id=1").run();
+  const now=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,last_error,price_cents) VALUES(?,?,?,?,'needs_review','Foto real indisponível após seis tentativas automáticas. Nenhum texto foi enviado.',43225)")
+   .bind('Jogo ferramentas Vonder 110 peças','https://meli.la/276cd5n','Geral',now).run();
+  DB.prepare("CREATE TABLE telegram_photo_retries(offer_id INTEGER PRIMARY KEY,attempts INTEGER,next_retry_at INTEGER,reason TEXT,updated_at INTEGER)").run();
+  DB.prepare("INSERT INTO telegram_photo_retries VALUES(1,8,?,'Foto indisponível',?)").bind(now-10,now-2000).run();
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u==='https://meli.la/276cd5n')
+    return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_938176-MLB999-P.webp">',{headers:{'content-type':'text/html'}});
+   if(u==='https://http2.mlstatic.com/D_NQ_NP_938176-MLB999-F.jpg'&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'330000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.includes('/sendPhoto')){
+    sent++;const json=JSON.parse(opts.body);
+    assert.equal(json.photo,'https://http2.mlstatic.com/D_NQ_NP_938176-MLB999-F.jpg');
+    return Response.json({ok:true,result:{message_id:888}});
+   }
+   if(u.includes('/sendMessage'))throw Error('Nunca enviar texto');
+   throw Error('Unexpected URL: '+u);
+  };
+  const result=await runScheduled(env);
+  assert.equal(result.status,'published',JSON.stringify(result));
+  assert.equal(result.format,'photo');
+  assert.equal(sent,1);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
+  assert.equal(DB.prepare('SELECT attempts FROM telegram_photo_retries WHERE offer_id=1').first(),null);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
