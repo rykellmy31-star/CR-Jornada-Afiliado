@@ -212,8 +212,8 @@ test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()
    if(u.endsWith('/sendMessage')){previews++;throw Error('Envio de link em texto é proibido no automático');}
    throw Error('Unexpected URL '+u);
   };
-  assert.equal((await runScheduled(env)).status,'awaiting_price');
-  assert.equal((await runScheduled(env)).status,'published');
+  assert.equal((await runScheduled(env)).status,'published',
+   'segundo produto é publicado no mesmo Cron quando o primeiro não tem preço verificável');
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=2").first().status,'published');
   assert.equal(previews,0);
