@@ -351,6 +351,8 @@ export async function retryDirectWhatsAppOffer(env,id){
   if(!Number.isSafeInteger(offerId)||offerId<1)throw new Error('Oferta inválida.');
   const r=await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='ready',last_error=NULL WHERE id=? AND status='needs_review'").bind(offerId).run();
   if(r.meta?.changes!==1)throw Object.assign(new Error('Somente ofertas em revisão podem ser reenfileiradas após verificar o grupo.'),{status:409});
+  const offer=await env.DB.prepare('SELECT affiliate_url FROM whatsapp_direct_offers WHERE id=?').bind(offerId).first();
+  if(offer?.affiliate_url)await env.DB.prepare('DELETE FROM whatsapp_media_retries WHERE affiliate_url=?').bind(offer.affiliate_url).run();
   return {ok:true};
 }
 export async function publishDirectWhatsAppOffer(env,id){
