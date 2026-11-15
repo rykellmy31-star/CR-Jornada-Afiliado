@@ -128,63 +128,49 @@ test('não compartilhar mídia sem confirmação real de sendPhoto ou com URL ex
 });
 
 
-test('falha de foto no automático NÃO publica preview; quando imagem volta, Telegram envia foto e WhatsApp reutiliza exatamente a mesma',async()=>{
- const {DB,env}=setup(),native=globalThis.fetch;
- let ready=false,tgMedia=0,tgText=0,waMedia=0,waText=0,photoUsed=null;
+test('agendador usa exatamente o fallback de texto do modo manual e não duplica oferta',async()=>{
+ const {DB,env}=setup(),old=globalThis.fetch;
+ let tgText=0,tgMedia=0,waText=0;
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
-  const now=Math.floor(Date.now()/1000);
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
-   .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',now).run();
+   .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',Math.floor(Date.now()/1000)).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
-    if(u===SOURCE)return new Response((ready?'<meta property="og:image" content="'+PHOTO_PREVIEW+'">':'')+'<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
-   if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
-    return Response.json({ok:true,result:{type:'channel'}});
-   if(u===SHORT)return new Response(ready?
-    '<meta property="og:image" content="'+PHOTO_PREVIEW+'">':'<html><title>Vitrine JS sem produto no HTML</title></html>',
-    {headers:{'content-type':'text/html'}});
-   if(u===PHOTO_LARGE&&opts.method==='HEAD')
-    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'240000'}});
-   if(u.includes('api.telegram.org')&&u.includes('/sendPhoto')){
-    tgMedia++;
-    photoUsed=JSON.parse(opts.body).photo;
-    assert.equal(photoUsed,PHOTO_LARGE);
-    return Response.json({ok:true,result:{message_id:7373}});
-   }
-   if(u.includes('api.telegram.org')&&u.includes('/sendMessage')){tgText++;throw Error('automático não pode enviar mensagem com prévia');}
    if(u===EVOLUTION+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
     return Response.json([{id:GROUP,subject:'Achadinhos'}]);
-   if(u===EVOLUTION+'/message/sendMedia/'+INSTANCE){
-    waMedia++;
-    assert.equal(JSON.parse(opts.body).media,photoUsed);
-    return Response.json({key:{id:'EVOLUTION_PHOTO'}});
+   if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
+    return Response.json({ok:true,result:{type:'channel'}});
+   if(u===SOURCE||u===SHORT)
+    return new Response('<html>Sem foto oficial disponível</html>',{headers:{'content-type':'text/html'}});
+   if(u.endsWith('/sendMessage')){
+    const body=JSON.parse(opts.body);
+    assert.match(body.text,/Por R\$\s*79,90/);
+    assert.match(body.text,/https:\/\/meli\.la\/2ESKGQw/);
+    tgText++;
+    return Response.json({ok:true,result:{message_id:7373}});
    }
-   if(u===EVOLUTION+'/message/sendText/'+INSTANCE){waText++;throw Error('WhatsApp não pode enviar só texto');}
-   throw Error('Requisição inesperada: '+u);
+   if(u.endsWith('/sendPhoto')){tgMedia++;throw Error('Foto não disponível');}
+   if(u===EVOLUTION+'/message/sendText/'+INSTANCE){
+    const body=JSON.parse(opts.body);
+    assert.match(body.text,/https:\/\/meli\.la\/2ESKGQw/);
+    waText++;
+    return Response.json({key:{id:'EVOLUTION_TEXT'}});
+   }
+   throw Error('Unexpected URL: '+u);
   };
   await setupWhatsApp(env);
   const first=await runScheduled(env);
-  assert.equal(first.status,'awaiting_photo');
+  assert.equal(first.status,'published');
+  assert.equal(first.format,'text_no_image');
+  assert.equal(first.whatsapp.status,'sent');
+  assert.equal(tgText,1);
   assert.equal(tgMedia,0);
-  assert.equal(tgText,0);
-  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
-  assert.equal(DB.prepare("SELECT attempts FROM telegram_photo_retries WHERE offer_id=1").first().attempts,1);
-  assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'empty'});
-  ready=true;
-  DB.prepare('UPDATE telegram_photo_retries SET next_retry_at=0').run();
-  const second=await runScheduled(env);
-  assert.equal(second.status,'published');
-  assert.equal(second.format,'photo');
-  const wa=await runWhatsAppScheduled(env);
-  assert.deepEqual(wa,{skipped:'empty'},'WhatsApp já recebeu a foto na publicação automática');
-  assert.equal(waMedia,1);
-  assert.equal(waText,0);
-  assert.equal(tgMedia,1);
-  assert.equal(tgText,0);
-  assert.equal(await telegramSentPhoto(env,SHORT),PHOTO_LARGE);
-  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_photo_retries').first().n,0);
- }finally{globalThis.fetch=native;DB.close();}
+  assert.equal(waText,1);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
+  assert.equal((await runScheduled(env)).skipped,'interval_or_schedule');
+  assert.equal(tgText,1,'não reenviar a mesma oferta');
+ }finally{globalThis.fetch=old;DB.close();}
 });
 
 test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()=>{
