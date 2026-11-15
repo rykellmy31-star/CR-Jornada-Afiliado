@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
-import {extractMercadoLivrePagePrice,fetchMercadoLivrePrice,parseSiteMoney} from '../src/mercado-livre-price.js';
+import {extractMercadoLivrePagePrice,fetchMercadoLivrePrice,parseSiteMoney,extractFeaturedShowcasePrice} from '../src/mercado-livre-price.js';
 import {addMonitorGroup,saveMonitorSettings,ingestMonitorEvent,monitorState,refreshMonitorSitePrices,prepareMonitorBatch} from '../src/whatsapp-link-monitor.js';
 import {importLinkBatch} from '../src/link-batches.js';
 import {composeOfferMessage} from '../src/logic.js';
@@ -163,4 +163,36 @@ test('preço antigo e forma de pagamento são lidos somente no Product da págin
  assert.equal(extractMercadoLivrePagePrice(body,OTHER),null);
  const unsupported=body.replace('https://schema.org/StrikethroughPrice','https://schema.org/CurrentPrice');
  assert.equal(extractMercadoLivrePagePrice(unsupported,PRODUCT).old_price_cents,null);
+});
+
+export const FEATURED_SHOWCASE_HTML = '<div class="rl-card-featured-wrapper"><div class="poly-card">'+
+ '<a class="poly-component__title" href="'+PRODUCT+'?c_id=/home/card-featured/element">Furadeira de impacto</a>'+
+ '<div class="poly-component__price">'+
+ '<s class="andes-money-amount poly-price__previous"><span class="andes-money-amount__currency-symbol">R$</span>'+
+ '<span class="andes-money-amount__fraction">241</span><span class="andes-money-amount__cents">78</span></s>'+
+ '<div class="poly-price__current"><span class="andes-money-amount poly-price__amount">'+
+ '<span class="andes-money-amount__currency-symbol">R$</span>'+
+ '<span class="andes-money-amount__fraction">211</span><span class="andes-money-amount__cents">07</span></span>'+
+ '<span class="poly-price__disc-label">12% OFF no Pix</span></div>'+
+ '<span class="poly-price__installments">ou <span class="andes-money-amount polylabel-price">'+
+ '<span class="andes-money-amount__currency-symbol">R$</span><span class="andes-money-amount__fraction">234</span>'+
+ '<span class="andes-money-amount__cents">52</span></span> em 6x '+
+ '<span class="andes-money-amount polylabel-price"><span class="andes-money-amount__currency-symbol">R$</span>'+
+ '<span class="andes-money-amount__fraction">39</span><span class="andes-money-amount__cents">09</span></span> sem juros</span></div>'+
+ '<a class="poly-action-links__action--link" href="'+PRODUCT+'">Ir para produto</a></div></div>'+
+ '<div class="rl-card-recommendations"><a class="poly-component__title" href="'+OTHER+'">Outro produto</a>'+
+ '<div class="poly-component__price"><div class="poly-price__current"><span class="andes-money-amount poly-price__amount">'+
+ '<span class="andes-money-amount__currency-symbol">R$</span><span class="andes-money-amount__fraction">1</span></span></div></div></div>';
+
+test('preço da vitrine é apenas do produto principal confirmado e distingue Pix do cartão',()=>{
+ const actual=extractFeaturedShowcasePrice(FEATURED_SHOWCASE_HTML,'MLB12345678');
+ assert.equal(actual.price_cents,21107);
+ assert.equal(actual.old_price_cents,24178);
+ assert.equal(actual.card_price_cents,23452);
+ assert.equal(actual.payment_mode,'pix_only');
+ assert.equal(actual.installments,6);
+ assert.equal(actual.installment_cents,3909);
+ assert.equal(actual.installments_no_interest,true);
+ assert.equal(extractFeaturedShowcasePrice(FEATURED_SHOWCASE_HTML,'MLB87654321'),null,
+  'o preço de um recomendado jamais substitui o preço do produto principal');
 });
