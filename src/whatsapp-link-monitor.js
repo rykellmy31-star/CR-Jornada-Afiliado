@@ -1,6 +1,6 @@
 import {classifyProduct,ensureAutomationCenter} from './automation-center.js';
 import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './link-batches.js';
-import {listWhatsAppGroups} from './whatsapp.js';
+import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
 
@@ -34,30 +34,33 @@ export function extractUrls(text){
  return [...new Set((normalized.match(/https:\/\/[^\s<>"'()[\]{}]+/gi)||[])
   .map(url=>url.replace(/[.,;!?]+$/g,'')))].slice(0,30);
 }
-function extractMessageText(message){
- if(!message||typeof message!=='object')return {text:'',format:'outro'};
- let current=message,format='outro';
- // Formatos Evolution/Baileys: mensagens encaminhadas, efêmeras,
- // visualização única e documentos com legendas.
- for(let depth=0;depth<6;depth++){
-  const wrappers=['ephemeralMessage','viewOnceMessage','viewOnceMessageV2',
-   'viewOnceMessageV2Extension','documentWithCaptionMessage','editedMessage'];
-  const wrapping=wrappers.find(k=>current?.[k]?.message);
-  if(!wrapping)break;
-  current=current[wrapping].message;
+// Só visita texto e contêineres de mensagens, sem varrer base64 ou metadados.
+function extractMessageText(message,entry=null){
+ const values=[],seen=new Set(),visited=new Set();
+ const nested=['message','ephemeralMessage','viewOnceMessage','viewOnceMessageV2',
+  'viewOnceMessageV2Extension','documentWithCaptionMessage','editedMessage','imageMessage',
+  'videoMessage','documentMessage','extendedTextMessage','buttonsResponseMessage',
+  'interactiveMessage','textMessage','mediaMessage','content','messageContent','captionMessage'];
+ let format='outro',nodeCount=0;
+ function walk(node,label,depth){
+  if(depth>7||nodeCount++>80||!node||typeof node!=='object'||Array.isArray(node)||visited.has(node))return;
+  visited.add(node);
+  for(const field of ['conversation','text','caption','body','selectedDisplayText','messageText']){
+   const value=node[field];
+   if(typeof value==='string'&&value.trim()&&!seen.has(value)){
+    seen.add(value);values.push(value.slice(0,8000));
+    if(format==='outro')format=label==='outro'?field:label;
+   }
+  }
+  for(const field of nested){
+   const child=node[field],label2=['message','content','messageContent'].includes(field)?label:field;
+   if(field==='content'&&typeof child==='string'&&child.trim()&&!seen.has(child)){
+    seen.add(child);values.push(child.slice(0,8000));if(format==='outro')format='content';
+   }else if(child&&typeof child==='object')walk(child,label2,depth+1);
+  }
  }
- const fields=[
-  ['conversation',current.conversation],
-  ['extendedTextMessage',current.extendedTextMessage?.text],
-  ['imageMessage',current.imageMessage?.caption],
-  ['videoMessage',current.videoMessage?.caption],
-  ['documentMessage',current.documentMessage?.caption],
-  ['buttonsResponseMessage',current.buttonsResponseMessage?.selectedDisplayText],
-  ['interactiveMessage',current.interactiveMessage?.body?.text]
- ];
- const matches=fields.filter(([,value])=>typeof value==='string'&&value);
- if(matches.length)format=matches[0][0];
- return {text:matches.map(([,value])=>value).join('\n').slice(0,8000),format};
+ walk(message,'outro',0);if(entry&&entry!==message)walk(entry,'outro',0);
+ return {text:values.join('\n').slice(0,8000),format};
 }
 export function parseMonitorEvent(event,{includeNoLinks=false}={}){
  if(!event||typeof event!=='object'||!['messages.upsert','MESSAGES_UPSERT','messages-upsert'].includes(event.event))return [];
@@ -67,7 +70,7 @@ export function parseMonitorEvent(event,{includeNoLinks=false}={}){
  const result=[];
  for(const entry of input.slice(0,25)){
   if(!entry||entry.key?.fromMe!==false||typeof entry.key.remoteJid!=='string'||!GROUP.test(entry.key.remoteJid))continue;
-  const {text,format}=extractMessageText(entry.message||{});
+  const {text,format}=extractMessageText(entry.message||{},entry);
   const urls=extractUrls(text);
   if(!urls.length&&!includeNoLinks)continue;
   const hint=text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180);
@@ -195,6 +198,37 @@ async function saveProduct(env,entry,source){
    .bind(entry.group_id,entry.message_id,source.url,title,category,classification.classification,time,prior.id).run();
  return updated.meta?.changes===1;
 }
+// Quando a legenda não vem no webhook, consulta apenas essa mensagem do grupo permitido.
+async function recoverCaptionFromEvolution(env,msg){
+ if(!env.EVOLUTION_API_URL||!env.EVOLUTION_API_KEY||!INSTANCE.test(msg.instance)||
+  !GROUP.test(msg.group_jid)||!/^[A-Za-z0-9._:-]{4,150}$/.test(msg.message_id))return null;
+ try{
+  const url=evolutionOrigin(env.EVOLUTION_API_URL)+'/chat/findMessages/'+encodeURIComponent(msg.instance);
+  const res=await fetch(url,{method:'POST',redirect:'manual',
+   headers:{apikey:String(env.EVOLUTION_API_KEY).trim(),accept:'application/json','content-type':'application/json'},
+   body:JSON.stringify({where:{key:{remoteJid:msg.group_jid,id:msg.message_id}},limit:5}),
+   signal:AbortSignal.timeout(4500)});
+  if(!res.ok||Number(res.headers.get('content-length')||0)>1048576)return null;
+  const reader=res.body?.getReader();if(!reader)return null;const chunks=[];let bytes=0;
+  try{
+   for(;;){const {value,done}=await reader.read();if(done)break;
+    bytes+=value.byteLength;if(bytes>1048576){await reader.cancel();return null;}chunks.push(value);
+   }
+  }finally{reader.releaseLock();}
+  const payload=new Uint8Array(bytes);let offset=0;
+  for(const chunk of chunks){payload.set(chunk,offset);offset+=chunk.byteLength;}
+  const data=JSON.parse(new TextDecoder().decode(payload));
+  const records=Array.isArray(data)?data:Array.isArray(data?.messages?.records)?data.messages.records:
+   Array.isArray(data?.records)?data.records:Array.isArray(data?.messages)?data.messages:[];
+  const record=records.find(x=>x?.key?.remoteJid===msg.group_jid&&
+   x.key.id===msg.message_id&&x.key.fromMe===false);
+  if(!record)return null;
+  const recovered=extractMessageText(record.message||{},record),urls=extractUrls(recovered.text);
+  if(!urls.length)return null;
+  return {...msg,urls,format:'evolution:'+recovered.format,
+   hint:recovered.text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180)};
+ }catch{return null;}
+}
 export async function ingestMonitorEvent(env,payload){
  await ensureMonitor(env);
  const receivedAt=epoch();
@@ -231,9 +265,15 @@ export async function ingestMonitorEvent(env,payload){
  let captured=0,pending=0,authorized=0,recognized=0;
  const observations=[];
  const delivery=[];
- for(const msg of messages){
-   const group=groupList.find(x=>x.instance_name===msg.instance&&x.group_jid===msg.group_jid);
+ let recoveryBudget=2;
+ for(const original of messages){
+   const group=groupList.find(x=>x.instance_name===original.instance&&x.group_jid===original.group_jid);
    if(!group)continue;
+   let msg=original;
+   if(!msg.urls.length&&recoveryBudget>0){
+    recoveryBudget--;
+    msg=await recoverCaptionFromEvolution(env,msg)||msg;
+   }
    authorized++;
    delivery.push([group.id,Number(msg.urls.length>0),receivedAt,msg.format]);
    if(!msg.urls.length)observations.push([group.id,'—','nenhum_link_na_legenda',msg.format,receivedAt]);
