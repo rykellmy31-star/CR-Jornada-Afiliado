@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
@@ -1159,5 +1159,99 @@ test('revisão antiga com motivo genérico reavalia uma vez e substitui motivo p
   assert.match(row.reason,/intermediario\.example\.com/);
   await resolveMonitorShortlinks(env,{now:1700000031});
   assert.equal(requests,1,'não insiste indefinidamente em domínio externo desconhecido');
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+
+test('real tracking do Mercado Livre identifica o destaque mesmo sem classe rl-card-featured',()=>{
+ const featured='https://www.mercadolivre.com.br/parafusadeira-e-furadeira-sem-fio-bateria-38-10mm-com-maleta-e-acessorios-the-black-tools/p/MLB42162174';
+ const tracked=featured+'?matt_tool=40081166#polycard_client=recommendations_home_affiliate-profile&reco_item_pos=0&c_id=/home/card-featured/element';
+ const recommended='https://www.mercadolivre.com.br/parafusadeira-outro/p/MLB30144703?x=1#polycard_client=recommendations_home_affiliate_profile_v2p-recommendations&reco_item_pos=0&c_id=/home/affiliate-profile-recommendations/element';
+ const html='<html><body><a href="'+tracked.replaceAll('&','&amp;')+'">Produto destacado</a>'+
+  '<a href="'+tracked+'">Ir para produto</a>'+
+  '<h2>Você também pode gostar</h2><a href="'+recommended+'">Outra furadeira</a></body></html>';
+ const result=featuredProductFromHtml(html,'https://www.mercadolivre.com.br/social/prorelampago');
+ assert.equal(result?.product_id,'MLB42162174');
+ assert.equal(result?.url,featured);
+ const onlyRecommended='<html><a href="'+recommended+'">Ir para produto</a></html>';
+ assert.equal(featuredProductFromHtml(onlyRecommended,'https://www.mercadolivre.com.br/social/prorelampago'),null);
+});
+test('renderização JS reconhece botão do destaque após primeiro HTML não trazer o botão',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ const short='https://meli.la/1dt9xQD';
+ const social='https://www.mercadolivre.com.br/social/prorelampago?matt_word=test';
+ const featured='https://www.mercadolivre.com.br/parafusadeira-e-furadeira-sem-fio-bateria-38-10mm-com-maleta-e-acessorios-the-black-tools/p/MLB42162174';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Promo Ferramentas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Black Tools POR R$94,90 '+short));
+  let renderCalls=0;
+  env.BROWSER={
+   async quickAction(kind,opts){
+    renderCalls++;
+    assert.equal(kind,'content');
+    assert.equal(opts.url,social);
+    assert.equal(opts.gotoOptions.waitUntil,'networkidle2');
+    return new Response('<html><div class="rl-card-featured-wrapper">'+
+      '<div class="poly-action-links__action poly-action-links__action--link">'+
+      '<a class="poly-component__link poly-component__link--action-link" href="'+featured+'">Ir para produto</a>'+
+      '</div></div><section class="rl-card-recommendations">'+
+      '<a href="https://www.mercadolivre.com.br/alternativo/p/MLB99999999">Ir para produto</a></section></html>',
+      {status:200,headers:{'content-type':'text/html'}});
+   }
+  };
+  let requests=0;
+  globalThis.fetch=async url=>{
+   requests++;
+   if(String(url)===short)return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)===social)return new Response('<html><p>JavaScript carregando...</p></html>',{
+    status:200,headers:{'content-type':'text/html'}});
+   throw Error('URL inesperada '+url);
+  };
+  const result=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(result.resolved,1);
+  assert.equal(renderCalls,1);
+  assert.equal(requests,2);
+  const state=await monitorState(env);
+  assert.equal(state.links[0].product_id,'MLB42162174');
+  assert.equal(state.links[0].source_url,featured);
+  assert.equal(state.links[0].last_seen_price_cents,9490);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('orçamento de Browser Run limita 12 por dia e uma chamada a cada 65 segundos',async()=>{
+ const {env,DB}=setup();
+ try{
+  let used=0;
+  env.BROWSER={quickAction:async()=>new Response('')};
+  const start=1700000000;
+  assert.equal(await claimSocialBrowserBudget(env,start),true);used++;
+  assert.equal(await claimSocialBrowserBudget(env,start+30),false);
+  for(let k=1;k<12;k++){
+   assert.equal(await claimSocialBrowserBudget(env,start+k*66),true);
+   used++;
+  }
+  assert.equal(used,12);
+  assert.equal(await claimSocialBrowserBudget(env,start+12*66),false);
+  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,12);
+  assert.equal(await claimSocialBrowserBudget(env,start+86400),true);
+ }finally{DB.close();}
+});
+test('Browser Run não captura recomendações se a vitrine não entregar produto destacado',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Promo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.promo/s/TESTFALHA'));
+  env.BROWSER={quickAction:async()=>new Response('<html><h2>Você também pode gostar</h2>'+
+   '<a href="https://www.mercadolivre.com.br/furadeira-outra/p/MLB99999999">Ir para produto</a></html>',
+   {status:200,headers:{'content-type':'text/html'}})};
+  globalThis.fetch=async url=>String(url)==='https://meli.promo/s/TESTFALHA'
+   ?new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/social/teste'}})
+   :new Response('<html>Carregando...</html>',{status:200,headers:{'content-type':'text/html'}});
+  const outcome=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(outcome.resolved,0);
+  assert.equal(outcome.reviewed,1);
+  assert.equal((await monitorState(env)).counts.captured,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
 });
