@@ -337,14 +337,14 @@ async function sendOfferWithImage(env,token,chat,offer){
   catch(err){console.warn('Imagem indisponível para novo canal:',offer.id,String(err?.message||'').slice(0,80));}
   if(photo){
     try{
-      const msg=await api(token,'sendPhoto',{chat_id:chat,photo,caption:payload.text.slice(0,1024),reply_markup:payload.reply_markup});
+      const msg=await api(token,'sendPhoto',{chat_id:chat,photo,caption:payload.text,parse_mode:payload.parse_mode,reply_markup:payload.reply_markup});
       return {message:msg,format:'photo'};
     }catch(error){
       if(error.telegramStatus!==400)throw error;
       // Um erro 400 da foto é recusa explícita, seguro tentar enviar texto.
     }
   }
-  const msg=await api(token,'sendMessage',{...payload,text:payload.text+'\n'+offer.affiliate_url});
+  const msg=await api(token,'sendMessage',{...telegramPayload(offer,chat,Date.now(),{includeLink:true})});
   return {message:msg,format:photo?'text_photo_rejected':'text_no_image'};
 }
 export async function publishChannelOffer(env,id,offerId){
