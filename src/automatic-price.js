@@ -2,7 +2,7 @@
 // Uma falha temporária de preço nunca bloqueia os demais produtos.
 import {fetchMercadoLivrePrice,extractMercadoLivrePagePrice} from './mercado-livre-price.js';
 import {sourcePageForAffiliateImage} from './offer-images.js';
-import {inspectMonitorShortlink,browserFeaturedProduct} from './whatsapp-link-monitor.js';
+import {inspectMonitorShortlink,browserFeaturedProduct,claimSocialBrowserBudget} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
 import {safePromotionTerms,MAX_AGE_MS} from './promotion-terms.js';
 
@@ -98,7 +98,8 @@ export async function resolveOfferSource(env,affiliateUrl,{fetcher=fetch}={}){
  if(!source){
   try{
    const result=await inspectMonitorShortlink(affiliateUrl,{fetcher});
-   const identified=result?.product||(result?.social_url&&['showcase','auth'].includes(result.kind)
+   const identified=result?.product||(result?.social_url&&['showcase','auth'].includes(result.kind)&&
+      await claimSocialBrowserBudget(env)
      ?await browserFeaturedProduct(env,result.social_url):null);
    if(official(identified?.url))source=identified.url;
   }catch(error){

@@ -15,26 +15,40 @@ export async function prewarmTelegramQueue(env){
   .bind(REVIEW,category,category).all();
  for(const item of rows.results||[]){
   try{
-   // Antes de buscar a imagem, identifica o anúncio original e consulta seu preço.
-   try{
-    const price=await prepareAutomaticOfferPrice(env,{affiliate_url:item.affiliate_url},{requireSite:true});
-    if(!price.ok&&item.status==='ready')
-      await env.DB.prepare("UPDATE offers SET last_error=? WHERE id=? AND status='ready' AND (last_error IS NULL OR last_error LIKE 'Aguardando preço%')")
-       .bind('Aguardando preço atualizado no Mercado Livre: '+price.reason,item.id).run();
-   }catch(error){console.warn('Preparação do preço:',String(error?.message||error).slice(0,100));}
-   if(await cachedProductImage(env,item.affiliate_url))continue;
+   // Impede buscas repetitivas de preço e imagem no mesmo anúncio a cada minuto.
    const now=Math.floor(Date.now()/1000);
-   await env.DB.prepare('INSERT OR IGNORE INTO affiliate_photo_preflight(affiliate_url) VALUES(?)').bind(item.affiliate_url).run();
-   const slot=await env.DB.prepare('UPDATE affiliate_photo_preflight SET attempts=attempts+1,next_attempt_at=? WHERE affiliate_url=? AND next_attempt_at<=?')
-    .bind(now+120,item.affiliate_url,now).run();
+   await env.DB.prepare('INSERT OR IGNORE INTO affiliate_photo_preflight(affiliate_url) VALUES(?)')
+     .bind(item.affiliate_url).run();
+   const slot=await env.DB.prepare(
+    'UPDATE affiliate_photo_preflight SET attempts=attempts+1,next_attempt_at=? WHERE affiliate_url=? AND next_attempt_at<=?'
+   ).bind(now+120,item.affiliate_url,now).run();
    if(slot.meta?.changes!==1)continue;
-   const photo=await resolveProductImageWithRetry(env,item.affiliate_url,findProductImage,{retryOnMiss:true});
-   if(!photo)continue;
-   await env.DB.prepare('DELETE FROM affiliate_photo_preflight WHERE affiliate_url=?').bind(item.affiliate_url).run();
+   // Localiza o anúncio original para preencher tanto os preços quanto a foto.
+   try{
+    const quote=await prepareAutomaticOfferPrice(env,{affiliate_url:item.affiliate_url},{requireSite:true});
+    if(!quote.ok&&item.status==='ready')
+     await env.DB.prepare(
+      "UPDATE offers SET last_error=? WHERE id=? AND status='ready' AND (last_error IS NULL OR last_error LIKE 'Aguardando preço%')"
+     ).bind('Aguardando preço atualizado no Mercado Livre: '+quote.reason,item.id).run();
+   }catch(error){console.warn('Preparação de preço:',String(error?.message||error).slice(0,110));}
+   const cached=await cachedProductImage(env,item.affiliate_url);
+   const image=cached||await resolveProductImageWithRetry(
+     env,item.affiliate_url,findProductImage,{retryOnMiss:true});
+   if(!image)continue;
+   await env.DB.prepare('DELETE FROM affiliate_photo_preflight WHERE affiliate_url=?')
+     .bind(item.affiliate_url).run();
    try{await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(item.id).run();}catch{}
-   if(item.status==='ready')await env.DB.prepare("UPDATE offers SET last_error=NULL WHERE id=? AND status='ready' AND last_error LIKE 'Aguardando foto%'").bind(item.id).run();
-   else await env.DB.prepare("UPDATE offers SET status='ready',last_error=NULL WHERE id=? AND status='needs_review' AND last_error=?").bind(item.id,REVIEW).run();
-   return {status:'photo_ready',offer_id:item.id};
+   if(item.status==='ready'){
+    const changed=await env.DB.prepare(
+     "UPDATE offers SET last_error=NULL WHERE id=? AND status='ready' AND last_error LIKE 'Aguardando foto%'"
+    ).bind(item.id).run();
+    if(!cached||changed.meta?.changes)return {status:'photo_ready',offer_id:item.id};
+   }else{
+    const changed=await env.DB.prepare(
+     "UPDATE offers SET status='ready',last_error=NULL WHERE id=? AND status='needs_review' AND last_error=?"
+    ).bind(item.id,REVIEW).run();
+    if(changed.meta?.changes)return {status:'photo_ready',offer_id:item.id};
+   }
   }catch(error){console.warn('Pré-carregamento de foto:',String(error?.message||error).slice(0,120));}
  }
  return {skipped:'cached_or_waiting'};
