@@ -126,7 +126,7 @@ export async function importLinkBatch(env,id,body){
  // O preço usado na comparação é o que foi registrado ao preparar este lote.
  const hasMonitor=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_monitor_links'").first();
  if(hasMonitor){
-   const captured=(await env.DB.prepare("SELECT l.product_id,l.source_url,m.pending_deal_json,m.pending_captured_at FROM ml_monitor_links l JOIN ml_monitor_product_meta m ON m.product_id=l.product_id WHERE l.batch_id=? AND l.status='batched'").bind(Number(id)).all()).results;
+   const captured=(await env.DB.prepare("SELECT l.product_id,l.source_url,m.pending_deal_json,m.pending_captured_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id WHERE l.batch_id=? AND l.status='batched'").bind(Number(id)).all()).results;
    for(const item of captured){
      sourceDeals.set(item.source_url,item);
      ops.push(env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) VALUES(?,0)").bind(item.product_id));
@@ -136,8 +136,24 @@ export async function importLinkBatch(env,id,body){
  }
  chosen.forEach(x=>{
    const source=sourceDeals.get(x.source.source_url);
-   const promo=safePromotionTerms(source?.pending_deal_json);
-   const capturedAt=Number(source?.pending_captured_at);
+   const groupPromo=safePromotionTerms(source?.pending_deal_json);
+   const checkedAt=Number(source?.site_checked_at);
+   const sitePrice=Number(source?.site_price_cents);
+   const verifiedSite=source?.site_status==='ok'&&Number.isSafeInteger(sitePrice)&&sitePrice>0
+     &&Number.isSafeInteger(checkedAt)&&checkedAt>0&&t-checkedAt>=0&&t-checkedAt<=6*60*60;
+   // A mensagem do grupo tem prioridade. O preço oficial serve somente como
+   // alternativa quando falta preço confiável na legenda do WhatsApp.
+   const useSite=verifiedSite&&!(Number.isSafeInteger(groupPromo?.price_cents)&&groupPromo.price_cents>0);
+   const promo=useSite?{
+     price_cents:sitePrice,old_price_cents:null,price_source:'mercadolivre',
+     payment_mode:groupPromo?.payment_mode||'unspecified',
+     installments:groupPromo?.installments??null,
+     installment_cents:groupPromo?.installment_cents??null,
+     installments_no_interest:groupPromo?.installments_no_interest||false,
+     card_price_cents:groupPromo?.card_price_cents??null,
+     coupon_required:false,coupon_code:null
+   }:groupPromo;
+   const capturedAt=useSite?checkedAt:Number(source?.pending_captured_at);
    const offer=normalizeOffer({title:x.source.title,affiliate_url:x.affiliate_url,category:x.category,
      price:promo?.price_cents!=null?(promo.price_cents/100).toFixed(2):null,
      old_price:promo?.old_price_cents!=null?(promo.old_price_cents/100).toFixed(2):null,
