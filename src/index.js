@@ -291,6 +291,12 @@ async function runScheduled(env){
  ).bind(leaseUntil,stamp).run();
  if(acquired.meta?.changes!==1)return {skipped:'busy'};
  try{
+  // Limpar mensagens de preço herdadas da antiga validação bloqueante.
+  // Hoje o modo programado usa o próprio publicador manual.
+  await env.DB.prepare(
+   "UPDATE offers SET last_error=NULL WHERE status='ready' "+
+   "AND last_error LIKE 'Aguardando preço atualizado no Mercado Livre:%'"
+  ).run();
   const now=new Date(),day=localTimeParts(now).day;
   const [{total},latest]=await Promise.all([
    env.DB.prepare("SELECT COUNT(*) AS total FROM offers WHERE status='published' AND published_day=?").bind(day).first(),
