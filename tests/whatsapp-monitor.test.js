@@ -870,3 +870,68 @@ test('link antigo em revisão de vitrine é automaticamente reprocessado para pr
   assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
 });
+
+
+test('meli.promo/s/WUS7Tq reconhecido mesmo sem protocolo ou com linha quebrada',()=>{
+ const short='https://meli.promo/s/WUS7Tq';
+ assert.deepEqual(extractUrls('📢 Compre: '+short),[short]);
+ assert.deepEqual(extractUrls('📢 Compre: meli.promo/s/WUS7Tq'),[short]);
+ assert.deepEqual(extractUrls('📢 Compre: https://meli.promo/s/\nWUS7Tq'),[short]);
+ const parsed=parseMonitorEvent(event(GROUP,'JBL ST200 por R$ 105,00 '+short));
+ assert.equal(parsed.length,1);
+ assert.deepEqual(parsed[0].urls,[short]);
+});
+test('meli.promo/s/WUS7Tq segue vitrine e captura o destaque JBL, sem reutilizar afiliado',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ const short='https://meli.promo/s/WUS7Tq';
+ const social='https://www.mercadolivre.com.br/social/dafhbgecd60351?matt_word=gear';
+ const product='https://www.mercadolivre.com.br/jbl-super-tweeter-st200-preto/p/MLB12345678';
+ const recommendation='https://www.mercadolivre.com.br/fone-bluetooth/p/MLB99999999';
+ const page='<html><body><div class="rl-card-featured-wrapper"><div data-testid="poly-card">'+
+  '<h2>JBL Super Tweeter ST200 Preto</h2><span>R$ 105,73</span>'+
+  '<a class="poly-action-links__action--link" href="'+product+'?matt_tool=old-owner">Ir para produto</a>'+
+  '</div></div><section class="rl-card-recommendations"><h2>Você também pode gostar</h2>'+
+  '<a class="poly-action-links__action--link" href="'+recommendation+'">Ir para produto</a>'+
+  '</section></body></html>';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Gear Ofertas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const message='JBL ST200 POR 105 REAIS 🔥 ✅ De R$ 120,00 por R$ 105,00 🛒 '+short;
+  assert.equal((await ingestMonitorEvent(env,event(GROUP,message))).pending,1);
+  assert.equal(DB.prepare('SELECT short_url FROM ml_monitor_shortlinks').first().short_url,short);
+  const calls=[];
+  globalThis.fetch=async (url,options)=>{
+   calls.push(String(url));
+   assert.equal(options.redirect,'manual');
+   if(String(url)===short)return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)===social)return new Response(page,{status:200,headers:{'content-type':'text/html'}});
+   throw new Error('URL inesperada '+url);
+  };
+  const outcome=await resolveMonitorShortlinks(env);
+  assert.equal(outcome.resolved,1);
+  assert.deepEqual(calls,[short,social]);
+  const state=await monitorState(env);
+  assert.equal(state.counts.captured,1);
+  assert.equal(state.links[0].source_url,product);
+  assert.equal(state.links[0].last_seen_price_cents,10500);
+  assert.equal(state.shortlinks.find(x=>x.status==='resolved').total,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+test('meli.promo não libera link externo nem rotas incorretas',async()=>{
+ const invalid=parseMonitorEvent(event(GROUP,'https://meli.promo/admin/WUS7Tq'));
+ assert.equal(invalid.length,1);
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Gear Ofertas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.promo/admin/WUS7Tq'));
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_shortlinks').first().total,0);
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.promo/s/SHOPEE1'));
+  globalThis.fetch=async()=>new Response(null,{status:302,headers:{location:'https://shopee.com.br/produto'}})
+  const checked=await resolveMonitorShortlinks(env);
+  assert.equal(checked.resolved,0);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
+  assert.equal((await monitorState(env)).counts.captured,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
