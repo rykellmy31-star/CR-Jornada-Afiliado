@@ -3,6 +3,7 @@ import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './l
 import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
+import {fetchMercadoLivrePrice} from './mercado-livre-price.js';
 
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
@@ -16,7 +17,8 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_url_observations(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),domain TEXT NOT NULL,reason TEXT NOT NULL,message_format TEXT NOT NULL,created_at INTEGER NOT NULL)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_group_delivery(group_id INTEGER PRIMARY KEY REFERENCES ml_monitor_groups(id),received_messages INTEGER NOT NULL DEFAULT 0,with_urls INTEGER NOT NULL DEFAULT 0,last_received_at INTEGER,last_format TEXT NOT NULL DEFAULT 'desconhecido')",
  "CREATE TABLE IF NOT EXISTS ml_monitor_discard_reasons(reason TEXT PRIMARY KEY,occurrences INTEGER NOT NULL DEFAULT 0,last_at INTEGER)",
- "CREATE TABLE IF NOT EXISTS ml_monitor_price_recovery(product_id TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0)"
+ "CREATE TABLE IF NOT EXISTS ml_monitor_price_recovery(product_id TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_site_prices(product_id TEXT PRIMARY KEY,price_cents INTEGER,status TEXT NOT NULL DEFAULT 'unavailable' CHECK(status IN ('ok','unavailable')),checked_at INTEGER NOT NULL DEFAULT 0,tries INTEGER NOT NULL DEFAULT 0,method TEXT NOT NULL DEFAULT '')"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -144,13 +146,43 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={})
  }
  return {recovered,attempted};
 }
+// Consulta o preço público do anúncio validado sem modificar a condição do grupo.
+// Executado após a confirmação dos links, via agendador, também para URLs diretas.
+export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
+ await ensureMonitor(env);
+ const now=epoch();
+ const cap=Math.max(1,Math.min(5,Number.isSafeInteger(limit)?limit:3));
+ const rows=(await env.DB.prepare(
+  "SELECT l.product_id,l.source_url FROM ml_monitor_links l LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+  "WHERE l.status='available' AND (sp.product_id IS NULL "+
+  "OR (sp.status='ok' AND sp.checked_at<=?) "+
+  "OR (sp.status='unavailable' AND sp.checked_at<=?-(CASE WHEN sp.tries<=1 THEN 900 WHEN sp.tries=2 THEN 3600 ELSE 21600 END))) "+
+  "ORDER BY (sp.product_id IS NULL) DESC,l.created_at DESC LIMIT ?"
+ ).bind(now-21600,now,cap).all()).results;
+ let checked=0,found=0;
+ for(const item of rows){
+  let site=null;
+  try{site=await fetchMercadoLivrePrice(item.source_url,fetcher);}
+  catch{/* O site pode limitar o acesso; não altera o preço informado pelo grupo. */}
+  const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0;
+  await env.DB.prepare(
+   "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,?,?,?,?,?) "+
+   "ON CONFLICT(product_id) DO UPDATE SET "+
+   "price_cents=CASE WHEN excluded.status='ok' THEN excluded.price_cents ELSE ml_monitor_site_prices.price_cents END,"+
+   "status=excluded.status,checked_at=excluded.checked_at,"+
+   "tries=CASE WHEN excluded.status='ok' THEN 0 ELSE MIN(ml_monitor_site_prices.tries+1,3) END,method=excluded.method"
+  ).bind(item.product_id,valid?site.price_cents:null,valid?'ok':'unavailable',epoch(),valid?0:1,valid?site.source:'').run();
+  checked++;if(valid)found++;
+ }
+ return {checked,found};
+}
 export async function monitorState(env){
  await ensureMonitor(env);
  await recoverMissingMonitorPrices(env);
  const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
-  env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
+  env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
   env.DB.prepare("SELECT status,COUNT(*) AS total FROM ml_monitor_shortlinks GROUP BY status").all(),
   (async()=>{await ensureAutomationCenter(env);return env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1 ORDER BY name').all()})(),
   env.DB.prepare("SELECT COUNT(l.id) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id").first(),
