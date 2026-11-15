@@ -125,3 +125,31 @@ test('navegador não aceita preço de outro produto, nem publicará preço inven
   assert.equal(DB.prepare('SELECT COUNT(*) n FROM affiliate_verified_prices').first().n,0);
  }finally{DB.close();}
 });
+
+test('link meli.la direto resolve anúncio oficial e recebe texto fixo com preço antigo, atual e pagamento',async()=>{
+ const {env,DB}=envDb();
+ try{
+  const offer={title:'Tapete antiderrapante',affiliate_url:AFF,category:'Geral',id:44,created_at:Math.floor(Date.now()/1000)};
+  const fetcher=async(url)=>{
+   if(url===AFF)return new Response(null,{status:302,headers:{location:PRODUCT_URL}});
+   if(url===PRODUCT_URL)return new Response('<link rel="canonical" href="'+PRODUCT_URL+'">'+
+     '<script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:PRODUCT_URL,offers:{
+     price:'34.82',priceCurrency:'BRL',originalPrice:'49.90',paymentMethod:'CreditCard',
+     installments:{numberOfPayments:3,paymentAmount:'11.61',interestFree:true}
+    }})+'</script>',{headers:{'content-type':'text/html'}});
+   throw Error('Site externo não permitido: '+url);
+  };
+  const result=await prepareAutomaticOfferPrice(env,offer,{fetcher,requireSite:true});
+  assert.equal(result.ok,true);
+  assert.equal(result.offer.price_cents,3482);
+  assert.equal(result.offer.old_price_cents,4990);
+  const msg=formatOfferMessage(result.offer,{network:'whatsapp',includeLink:true});
+  assert.match(msg,/✨ CONFIRA ESTA OFERTA!/);
+  assert.match(msg,/De: ~R\$\s*49,90~/);
+  assert.match(msg,/Por R\$\s*34,82/);
+  assert.match(msg,/Pagamento: cartão/);
+  assert.match(msg,/Parcelamento: 3x de R\$\s*11,61 sem juros/);
+  assert.ok(msg.endsWith(AFF));
+  assert.equal(DB.prepare('SELECT source_url FROM affiliate_verified_sources WHERE affiliate_url=?').bind(AFF).first().source_url,PRODUCT_URL);
+ }finally{DB.close();}
+});

@@ -143,3 +143,24 @@ test('consulta negada nao apaga valor do grupo nem inventa preço do site',async
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{DB.close();}
 });
+
+test('preço antigo e forma de pagamento são lidos somente no Product da página oficial',()=>{
+ const body='<link rel="canonical" href="'+PRODUCT+'"><script type="application/ld+json">'+
+ JSON.stringify({'@type':'Product',url:PRODUCT,offers:{
+  '@type':'Offer',price:'34.82',priceCurrency:'BRL',
+  priceSpecification:{'@type':'UnitPriceSpecification',
+   priceType:'https://schema.org/StrikethroughPrice',price:'49.90',priceCurrency:'BRL'},
+  paymentMethod:'https://schema.org/CreditCard',
+  installmentPlan:{numberOfPayments:3,paymentAmount:'11.61',interestFree:true}
+ }})+'</script>';
+ const details=extractMercadoLivrePagePrice(body,PRODUCT);
+ assert.equal(details.price_cents,3482);
+ assert.equal(details.old_price_cents,4990);
+ assert.equal(details.payment_mode,'card');
+ assert.equal(details.installments,3);
+ assert.equal(details.installment_cents,1161);
+ assert.equal(details.installments_no_interest,true);
+ assert.equal(extractMercadoLivrePagePrice(body,OTHER),null);
+ const unsupported=body.replace('https://schema.org/StrikethroughPrice','https://schema.org/CurrentPrice');
+ assert.equal(extractMercadoLivrePagePrice(unsupported,PRODUCT).old_price_cents,null);
+});
