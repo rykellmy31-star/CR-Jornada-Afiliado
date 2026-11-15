@@ -84,7 +84,16 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   const DB=dbMock();
   const nativeFetch=globalThis.fetch;
   let calls=0;
-  globalThis.fetch=async(url)=>{if(String(url).includes('/getChat?'))return new Response(JSON.stringify({ok:true,result:{type:'channel'}}),{status:200}); if(String(url).startsWith('https://meli.la/')) return new Response('<html></html>',{status:200,headers:{'content-type':'text/html'}}); calls++;return new Response(JSON.stringify({ok:true,result:{message_id:900+calls}}),{status:200});};
+  globalThis.fetch=async(url,options={})=>{
+    const u=String(url);
+    if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+    if(u.startsWith('https://meli.la/'))
+      return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">',{status:200,headers:{'content-type':'text/html'}});
+    if(u==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-F.jpg'&&options.method==='HEAD')
+      return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'700000'}});
+    assert.match(u,/\/sendPhoto$/,'automático não deve enviar uma prévia textual');
+    calls++;return Response.json({ok:true,result:{message_id:900+calls}});
+  };
   try{
     DB.prepare("UPDATE settings SET automation_enabled=1, telegram_enabled=1, channel_registered=1, max_daily=1, interval_minutes=15, start_hour=0, end_hour=24 WHERE id=1").run();
     for(let i=0;i<2;i++) DB.prepare("INSERT INTO offers (title, affiliate_url, category,created_at) VALUES(?,?,?,?)")
