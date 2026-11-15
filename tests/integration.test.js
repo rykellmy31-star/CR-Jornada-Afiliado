@@ -88,7 +88,7 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
     const u=String(url);
     if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
     if(u==='https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678')
-      return new Response('<link rel="canonical" href="https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678"><script type="application/ld+json">'+
+      return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp"><link rel="canonical" href="https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678"><script type="application/ld+json">'+
        JSON.stringify({'@type':'Product',url:'https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678',offers:{price:'79.90',priceCurrency:'BRL'}})+
        '</script>',{headers:{'content-type':'text/html'}});
     if(u.startsWith('https://meli.la/'))
