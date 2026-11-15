@@ -256,59 +256,84 @@ async function sendOffer(env, offer, settings, {requirePhoto=false}={}) {
     return { status: 'needs_review', error: String(error.message || error) };
   }
 }
+// Um único ciclo de publicação por vez, mesmo quando o Cron anterior ainda
+// estiver verificando preços/fotos. A trava é liberada após cada execução.
 async function runScheduled(env) {
-  if (!env.DB) return;
-  const settings = await readSettings(env);
-  if (!settings) return;
-  const now = new Date();
-  const day = localTimeParts(now).day;
-  const [{ total }, latest] = await Promise.all([
-    env.DB.prepare("SELECT COUNT(*) AS total FROM offers WHERE status='published' AND published_day=?").bind(day).first(),
-    env.DB.prepare("SELECT MAX(published_at) AS published_at FROM offers WHERE status='published'").first()
+ if(!env.DB||env.MASTER_SCHEDULE_ENABLED===false)return;
+ const settings=await readSettings(env);
+ if(!settings||!env.TELEGRAM_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS affiliate_telegram_schedule_lease ("+
+  "id INTEGER PRIMARY KEY CHECK(id=1),lease_until INTEGER NOT NULL DEFAULT 0)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO affiliate_telegram_schedule_lease(id,lease_until) VALUES(1,0)").run();
+ const stamp=Math.floor(Date.now()/1000),leaseUntil=stamp+180;
+ const acquired=await env.DB.prepare(
+  "UPDATE affiliate_telegram_schedule_lease SET lease_until=? WHERE id=1 AND lease_until<=?"
+ ).bind(leaseUntil,stamp).run();
+ if(acquired.meta?.changes!==1)return {skipped:'busy'};
+ try{
+  // Recalcular após obter a trava: dois Crons concorrentes não podem ignorar
+  // o intervalo por terem lido o mesmo último envio.
+  const now=new Date(),day=localTimeParts(now).day;
+  const [{total},latest]=await Promise.all([
+   env.DB.prepare("SELECT COUNT(*) AS total FROM offers WHERE status='published' AND published_day=?").bind(day).first(),
+   env.DB.prepare("SELECT MAX(published_at) AS published_at FROM offers WHERE status='published'").first()
   ]);
-  if(env.MASTER_SCHEDULE_ENABLED===false)return;
-  // O controle geral não ignora a pausa ou a autorização individual do destino.
-  const effective=settings;
-  if (!shouldSend(effective, now, total, latest?.published_at ? latest.published_at * 1000 : null)) return;
-  if (!env.TELEGRAM_BOT_TOKEN) return;
+  if(!shouldSend(settings,now,total,latest?.published_at?latest.published_at*1000:null))
+   return {skipped:'interval_or_schedule'};
   await ensureCouponTable(env);
   await ensureTelegramPhotoRetries(env);
   await ensureAutomaticPrices(env);
-  const offer = await env.DB.prepare(OFFER_WITH_COUPON +
+  // Se o primeiro produto não tiver preço/foto verificável, tente os próximos
+  // nesta mesma pulsação. Nenhuma tentativa malsucedida consome o intervalo.
+  const candidates=(await env.DB.prepare(OFFER_WITH_COUPON+
    " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id"+
    " LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='telegram' AND apr.offer_id=o.id"+
    " WHERE o.status='ready' AND (tpr.offer_id IS NULL OR (tpr.attempts<? AND tpr.next_retry_at<=?))"+
    " AND (apr.offer_id IS NULL OR apr.next_retry_at<=?)"+
-   " AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC, o.id ASC LIMIT 1"
-  ).bind(PHOTO_RETRY_LIMIT,Math.floor(Date.now()/1000),Math.floor(Date.now()/1000),settings.category,settings.category).first();
-  if (!offer) return;
-  // Prepara o preço do site, depois chama o MESMO publicador usado pelo botão manual.
-  const quote=await prepareAutomaticOfferPrice(env,offer,{requireSite:true});
-  if(!quote.ok){
+   " AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC,o.id ASC LIMIT 3"
+  ).bind(PHOTO_RETRY_LIMIT,Math.floor(Date.now()/1000),Math.floor(Date.now()/1000),
+   settings.category,settings.category).all()).results;
+  let pending=null;
+  for(const offer of candidates){
+   const quote=await prepareAutomaticOfferPrice(env,offer,{requireSite:true});
+   if(!quote.ok){
     const retry=await recordAutomaticPriceRetry(env,'telegram',offer.id,quote.reason);
     await env.DB.prepare("UPDATE offers SET last_error=? WHERE id=? AND status='ready'")
-      .bind('Aguardando preço atualizado no Mercado Livre: '+quote.reason,offer.id).run();
+     .bind('Aguardando preço atualizado no Mercado Livre: '+quote.reason,offer.id).run();
     await log(env,'awaiting_price','Preço do site indisponível: '+quote.reason,offer.id);
-    return retry;
-  }
-  const prepared=quote.offer;
-  await ensureOfferPromoColumns(env);
-  await env.DB.prepare(
+    pending??=retry;
+    continue;
+   }
+   const prepared=quote.offer;
+   await ensureOfferPromoColumns(env);
+   await env.DB.prepare(
     "UPDATE offers SET price_cents=?,old_price_cents=?,promo_terms_json=?,promo_captured_at=?,last_error=NULL WHERE id=? AND status='ready'"
-  ).bind(prepared.price_cents,prepared.old_price_cents,prepared.promo_terms_json,prepared.promo_captured_at,offer.id).run();
-  await clearAutomaticPriceRetry(env,'telegram',offer.id);
-  const result=await sendOffer(env,prepared,effective,{requirePhoto:true});
-  if(result?.status==='published'){
+   ).bind(prepared.price_cents,prepared.old_price_cents,prepared.promo_terms_json,
+    prepared.promo_captured_at,offer.id).run();
+   await clearAutomaticPriceRetry(env,'telegram',offer.id);
+   // Exatamente o mesmo publicador do botão manual, exigindo a foto real.
+   const result=await sendOffer(env,prepared,settings,{requirePhoto:true});
+   if(result?.status==='published'){
     try{
-      const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
-      result.whatsapp=wa;
-      await log(env,'whatsapp_mirror','Espelhamento automático: '+String(wa.status||wa.skipped||wa.error||'desconhecido').slice(0,140),offer.id);
+     const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
+     result.whatsapp=wa;
+     await log(env,'whatsapp_mirror','Espelhamento automático: '+
+      String(wa.status||wa.skipped||wa.error||'desconhecido').slice(0,140),offer.id);
     }catch(error){
-      console.error('Espelhamento automático WhatsApp:',String(error?.message||error).slice(0,140));
-      result.whatsapp={skipped:'error',reason:String(error?.message||error).slice(0,140)};
+     console.error('Espelhamento automático WhatsApp:',String(error?.message||error).slice(0,140));
+     result.whatsapp={skipped:'error',reason:String(error?.message||error).slice(0,140)};
     }
+    return result;
+   }
+   // Produto sem foto ou com erro não bloqueia outros produtos da fila.
+   pending??=result;
   }
-  return result;
+  return pending;
+ }finally{
+  await env.DB.prepare(
+   "UPDATE affiliate_telegram_schedule_lease SET lease_until=0 WHERE id=1 AND lease_until=?"
+  ).bind(leaseUntil).run();
+ }
 }
 
 async function router(request, env, ctx=null) {
