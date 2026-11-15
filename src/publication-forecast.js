@@ -77,7 +77,7 @@ export async function readTelegramForecast(env,{settings,table='offers',channelI
    " WHERE status='published'"+condition+' GROUP BY published_day').bind(...param).all(),
   env.DB.prepare('SELECT MAX(published_at) AS t FROM '+table+
    " WHERE status='published'"+condition).bind(...param).first(),
-  env.DB.prepare('SELECT enabled FROM automation_master WHERE id=1').first().catch(()=>null)
+  (async()=>{try{return await env.DB.prepare('SELECT enabled FROM automation_master WHERE id=1').first();}catch{return null;}})()
  ]);
  const byDay=Object.fromEntries((published.results||[]).filter(row=>typeof row.published_day==='string').map(row=>[row.published_day,Number(row.total)||0]));
  return forecastTelegramQueue({settings,offers:ready.results||[],now,publishedByDay:byDay,
