@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {prepareAutomaticOfferPrice,recordAutomaticPriceRetry,ensureAutomaticPrices,officialPriceOverlay} from '../src/automatic-price.js';
 import {formatOfferMessage} from '../src/logic.js';
 const AFF='https://meli.la/KITLIMPEZA123';
-const URL='https://www.mercadolivre.com.br/kit-limpeza-automotiva-carro-moto/p/MLB12345678';
+const PRODUCT_URL='https://www.mercadolivre.com.br/kit-limpeza-automotiva-carro-moto/p/MLB12345678';
 function envDb(){
  const db=new DatabaseSync(':memory:');
  db.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
@@ -18,18 +18,18 @@ function envDb(){
  };},close(){db.close();}};
  return {env:{DB},DB};
 }
-const product=(url=URL,price='129.90',currency='BRL')=>
+const product=(url=PRODUCT_URL,price='129.90',currency='BRL')=>
  '<html><script type="application/ld+json">'+JSON.stringify({
  '@context':'https://schema.org','@type':'Product',url,
  offers:{'@type':'Offer',price,priceCurrency:currency}})+
  '</script></html>';
 test('busca valor real no anúncio original e monta legenda profissional Telegram + WhatsApp',async()=>{
  const {env,DB}=envDb();try{
-  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')").bind(URL,AFF).run();
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')").bind(PRODUCT_URL,AFF).run();
   let calls=0;
   const offer={title:'Kit para lavar carro, cera, pretinho e pano',affiliate_url:AFF,category:'Automotivo',
    created_at:Math.floor(Date.now()/1000),price_cents:null};
-  const fetcher=async(url,opts)=>{calls++;assert.equal(url,URL);assert.equal(opts.redirect,'manual');
+  const fetcher=async(url,opts)=>{calls++;assert.equal(url,PRODUCT_URL);assert.equal(opts.redirect,'manual');
    return new Response(product(),{headers:{'content-type':'text/html'}});};
   const result=await prepareAutomaticOfferPrice(env,offer,{fetcher});
   assert.equal(result.ok,true);
@@ -64,13 +64,13 @@ test('preço não verificado não inventa números, agenda retry e não ocupa a 
 });
 test('recusa preço de produto diferente, moeda USD e metadados conflitantes',async()=>{
  const {env,DB}=envDb();try{
-  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')").bind(URL,AFF).run();
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')").bind(PRODUCT_URL,AFF).run();
   const offer={id:22,title:'Produto',affiliate_url:AFF,created_at:Math.floor(Date.now()/1000)-90000};
   for(const html of [
    product('https://www.mercadolivre.com.br/outro/p/MLB99999999'),
-   product(URL,'129.90','USD'),
+   product(PRODUCT_URL,'129.90','USD'),
    '<html><script type="application/ld+json">'+JSON.stringify({
-     '@type':'Product',url:URL,offers:[{priceCurrency:'BRL',price:100},{priceCurrency:'BRL',price:129}]})+'</script></html>'
+     '@type':'Product',url:PRODUCT_URL,offers:[{priceCurrency:'BRL',price:100},{priceCurrency:'BRL',price:129}]})+'</script></html>'
   ]){
    const outcome=await prepareAutomaticOfferPrice(env,offer,{fetcher:async()=>new Response(html,{headers:{'content-type':'text/html'}})});
    assert.equal(outcome.ok,false);
