@@ -334,21 +334,27 @@ export async function runManagedWhatsAppScheduled(env){
    if(g.last_attempt_at&&time-g.last_attempt_at<g.interval_minutes*60)continue;
    const offer=await env.DB.prepare("SELECT o.* FROM whatsapp_group_offers o "+
      "LEFT JOIN whatsapp_group_media_retries pr ON pr.offer_id=o.id "+
-     "LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='wa-group' AND apr.offer_id=o.id "+
      "WHERE o.group_id=? AND o.status='ready' AND "+
      "(pr.offer_id IS NULL OR (pr.attempts<6 AND pr.next_attempt_at<=?)) AND "+
-     "(apr.offer_id IS NULL OR apr.next_retry_at<=?) AND "+
      "(lower(?)='geral' OR lower(o.category)=lower(?)) "+
      "ORDER BY o.created_at,o.id LIMIT 1")
-     .bind(g.id,time,time,g.category,g.category).first();
+     .bind(g.id,time,g.category,g.category).first();
    if(!offer)continue;
-   const price=await prepareAutomaticOfferPrice(env,offer);
-   if(!price.ok){
-     await recordAutomaticPriceRetry(env,'wa-group',offer.id,price.reason);
-     await log(env,g.id,'awaiting_price','Aguardando valor verificável: '+price.reason,offer.id);
-     continue;
+   // O anúncio e a imagem são as mesmas fontes utilizadas pelo botão manual.
+   // Preço oficial é uma melhoria opcional de legenda, jamais um bloqueio
+   // para postar uma foto real já disponível do mesmo produto.
+   let pricedOffer=offer;
+   try{
+     const price=await prepareAutomaticOfferPrice(env,offer);
+     if(price.ok){
+       pricedOffer=price.offer;
+       await clearAutomaticPriceRetry(env,'wa-group',offer.id);
+     }else{
+       await log(env,g.id,'price_unavailable','Preço não confirmado; seguindo com os dados existentes.',offer.id);
+     }
+   }catch(error){
+     await log(env,g.id,'price_unavailable',String(error?.message||error).slice(0,120),offer.id);
    }
-   await clearAutomaticPriceRetry(env,'wa-group',offer.id);
    // Só consome intervalo e compartilha o número quando a imagem estiver pronta.
    let image=null;
    try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage);}
@@ -384,7 +390,7 @@ export async function runManagedWhatsAppScheduled(env){
      await env.DB.prepare('UPDATE whatsapp_groups SET last_attempt_at=? WHERE id=? AND last_attempt_at=?').bind(g.last_attempt_at,g.id,time).run();
      continue;
    }
-   try{results.push({group_id:g.id,...await publishManagedWhatsAppOffer(env,g.id,offer.id,{photoUrl:image,requirePhoto:true,pricedOffer:price.offer})});}
+   try{results.push({group_id:g.id,...await publishManagedWhatsAppOffer(env,g.id,offer.id,{photoUrl:image,requirePhoto:true,pricedOffer})});}
    catch(e){await log(env,g.id,'schedule_error',String(e?.message||e).slice(0,140));results.push({group_id:g.id,status:'error'});}
  }
  return {results};

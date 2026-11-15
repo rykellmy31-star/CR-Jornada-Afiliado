@@ -369,17 +369,22 @@ export async function publishChannelOffer(env,id,offerId,{automatic=false}={}){
   if(!offer)throw bad('Oferta não encontrada neste canal.',404);
   let prepared=offer;
   if(automatic){
-    const price=await prepareAutomaticOfferPrice(env,offer);
-    if(!price.ok){
-      const retry=await recordAutomaticPriceRetry(env,'channel',offer.id,price.reason);
-      await log(env,c.id,'awaiting_price','Aguardando preço verificável no anúncio: '+price.reason,offer.id);
-      return retry;
+    // A tentativa de atualizar preço não deve atrasar uma foto pronta:
+    // mesma publicação do modo manual, sempre exigindo mídia no automático.
+    try{
+      const price=await prepareAutomaticOfferPrice(env,offer);
+      if(price.ok){
+        prepared=price.offer;
+        if(price.price_source==='mercadolivre')
+          await env.DB.prepare("UPDATE channel_offers SET price_cents=?,old_price_cents=NULL WHERE id=? AND status='ready'")
+            .bind(prepared.price_cents,offer.id).run();
+        await clearAutomaticPriceRetry(env,'channel',offer.id);
+      }else{
+        await log(env,c.id,'price_unavailable','Sem preço atualizado; mantendo legenda segura.',offer.id);
+      }
+    }catch(error){
+      await log(env,c.id,'price_unavailable',String(error?.message||error).slice(0,120),offer.id);
     }
-    prepared=price.offer;
-    if(price.price_source==='mercadolivre')
-      await env.DB.prepare("UPDATE channel_offers SET price_cents=?,old_price_cents=NULL WHERE id=? AND status='ready'")
-        .bind(prepared.price_cents,offer.id).run();
-    await clearAutomaticPriceRetry(env,'channel',offer.id);
   }
   const claim=await env.DB.prepare("UPDATE channel_offers SET status='sending',last_error=NULL WHERE id=? AND channel_id=? AND status='ready'").bind(offer.id,c.id).run();
   if(claim.meta?.changes!==1)throw bad('Oferta já publicada ou em revisão.',409);
@@ -440,12 +445,10 @@ export async function runMultiChannelScheduled(env){
     await ensureAutomaticPrices(env);
     const offer=await env.DB.prepare(
       "SELECT o.id FROM channel_offers o LEFT JOIN telegram_channel_photo_retries pr ON pr.offer_id=o.id "+
-      "LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='channel' AND apr.offer_id=o.id "+
       "WHERE o.channel_id=? AND o.status='ready' AND "+
       "(pr.offer_id IS NULL OR (pr.attempts<6 AND pr.next_retry_at<=?)) "+
-      "AND (apr.offer_id IS NULL OR apr.next_retry_at<=?) "+
       "AND (lower(?)='geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at,o.id LIMIT 1"
-    ).bind(c.id,epoch(),epoch(),c.category,c.category).first();
+    ).bind(c.id,epoch(),c.category,c.category).first();
     if(!offer)continue;
     const stamp=epoch();
     const slot=await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND automation_enabled=1 AND telegram_enabled=1 AND channel_registered=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')

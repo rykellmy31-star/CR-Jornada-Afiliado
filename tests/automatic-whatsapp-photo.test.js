@@ -120,7 +120,7 @@ test('não usa imagem de vitrine de outro vendedor como substituta da foto do it
 });
 
 
-test('WhatsApp automático usa o mesmo fallback do botão manual e mantém intervalo de 7 minutos',async()=>{
+test('WhatsApp automático não envia texto se a foto faltar e mantém o intervalo livre',async()=>{
  const {DB,env}=setup(),old=globalThis.fetch;
  let text=0,media=0;
  try{
@@ -131,13 +131,7 @@ test('WhatsApp automático usa o mesmo fallback do botão manual e mantém inter
     return Response.json([{id:GROUP,subject:'Achadinhos'}]);
    if(u===SHORT||u===ORIGINAL)
     return new Response('<html>Foto indisponível</html>',{headers:{'content-type':'text/html'}});
-   if(u===EVO+'/message/sendText/'+INSTANCE){
-    const body=JSON.parse(opts.body);
-    assert.match(body.text,/Por R\$\s*79,90/);
-    assert.match(body.text,/https:\/\/meli\.la\/1ZbJKkU/);
-    text++;
-    return Response.json({key:{id:'CONFIRMED_TEXT'}});
-   }
+   if(u===EVO+'/message/sendText/'+INSTANCE){text++;throw Error('Automático não envia texto');}
    if(u===EVO+'/message/sendMedia/'+INSTANCE){media++;throw Error('Não havia foto');}
    throw Error('Unexpected '+u);
   };
@@ -147,28 +141,33 @@ test('WhatsApp automático usa o mesmo fallback do botão manual e mantém inter
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day,price_cents) VALUES(?,?,?,?,'published',?,?,7990)")
    .bind('Azzaro The Most Wanted Intense',SHORT,'Geral',now-1,now,new Date().toISOString().slice(0,10)).run();
   const first=await runWhatsAppScheduled(env);
-  assert.equal(first.status,'sent');
-  assert.equal(first.format,'text');
-  assert.equal(text,1);
+  assert.equal(first.skipped,'awaiting_photo');
+  assert.equal(text,0);
   assert.equal(media,0);
-  assert.ok(DB.prepare('SELECT last_attempt_at FROM whatsapp_schedule_custom').first().last_attempt_at>0);
-  assert.equal(DB.prepare('SELECT status FROM whatsapp_deliveries').first().status,'sent');
-  assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'empty'},'Não reenviar o mesmo link');
+  assert.equal(DB.prepare('SELECT last_attempt_at FROM whatsapp_schedule_custom').first().last_attempt_at,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM whatsapp_deliveries').first().n,0);
+  assert.equal(DB.prepare('SELECT attempts FROM whatsapp_media_retries').first().attempts,1);
+  assert.equal((await runWhatsAppScheduled(env)).skipped,'awaiting_photo');
  }finally{globalThis.fetch=old;DB.close();}
 });
-test('WhatsApp respeita o intervalo salvo mesmo usando o modo manual no agendador',async()=>{
+test('WhatsApp automático com foto mantém intervalo salvo de 7 minutos entre ofertas',async()=>{
  const {DB,env}=setup(),old=globalThis.fetch;
- let sent=0;
+ let sent=0,text=0;
  try{
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
    if(u===EVO+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
     return Response.json([{id:GROUP,subject:'Achadinhos'}]);
-   if(u===SHORT||u==='https://meli.la/OTHERPRODUCT999')
+   if(u===SHORT)
+    return new Response('<meta property="og:image" content="'+PHOTO_SOURCE+'">',{headers:{'content-type':'text/html'}});
+   if(u==='https://meli.la/OTHERPRODUCT999')
     return new Response('<html>Sem foto</html>',{headers:{'content-type':'text/html'}});
-   if(u===EVO+'/message/sendText/'+INSTANCE){
-    sent++;return Response.json({key:{id:'TEXT_'+sent}});
+   if(u===PHOTO_LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'250000'}});
+   if(u===EVO+'/message/sendMedia/'+INSTANCE){
+    sent++;return Response.json({key:{id:'PHOTO_'+sent}});
    }
+   if(u===EVO+'/message/sendText/'+INSTANCE){text++;throw Error('Automático não envia só texto');}
    throw Error('Unexpected '+u);
   };
   await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:7});
@@ -180,8 +179,10 @@ test('WhatsApp respeita o intervalo salvo mesmo usando o modo manual no agendado
   }
   const first=await runWhatsAppScheduled(env);
   assert.equal(first.status,'sent');
+  assert.equal(first.format,'photo');
   assert.equal((await runWhatsAppScheduled(env)).skipped,'interval');
   assert.equal(sent,1);
+  assert.equal(text,0);
   assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM whatsapp_deliveries WHERE status='sent'").first().n,1);
  }finally{globalThis.fetch=old;DB.close();}
 });
