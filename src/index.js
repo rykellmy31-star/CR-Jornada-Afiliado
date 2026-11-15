@@ -257,8 +257,8 @@ async function sendOffer(env, offer, settings, {requirePhoto=false}={}) {
 // Este é o MESMO caminho do botão Publicar: a imagem, a legenda, os botões,
 // a confirmação do Telegram e o espelhamento WhatsApp são compartilhados.
 // O automático difere apenas pelo relógio; não cria outra exigência de preço/foto.
-async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manual'}={}){
- const result=await sendOffer(env,offer,settings);
+async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manual',requirePhoto=false}={}){
+ const result=await sendOffer(env,offer,settings,{requirePhoto});
  if(result?.status!=='published')return result;
  const dispatch=async()=>{
   const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
@@ -305,24 +305,24 @@ async function runScheduled(env){
   if(!shouldSend(settings,now,total,latest?.published_at?latest.published_at*1000:null))
    return {skipped:'interval_or_schedule'};
   await ensureCouponTable(env);
-  // Os itens que anteriormente foram para revisão APENAS por falta de foto
-  // nunca chegaram a ser enviados. Recuperá-los com segurança para a mesma
-  // rotina do botão manual, sem reabrir falhas ambíguas de Telegram/Evolution.
-  const restored=await env.DB.prepare(
-   "UPDATE offers SET status='ready',last_error=NULL WHERE status='needs_review' "+
-   "AND last_error='Foto real indisponível após seis tentativas automáticas. Nenhum texto foi enviado.'"
-  ).run();
-  if(restored.meta?.changes)await log(env,'photo_queue_restored',
-   'Ofertas sem confirmação de envio devolvidas à fila do publicador manual: '+restored.meta.changes);
-  // Não usar as antigas tabelas de retry de preço/foto para filtrar a fila.
-  // Os mesmos links que funcionam no botão Publicar devem chegar ao envio
-  // automático quando houver vaga, inclusive os antigos "Aguardando preço".
-  const offer=await env.DB.prepare(OFFER_WITH_COUPON+
-   " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?))"+
-   " ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
-  ).bind(settings.category,settings.category).first();
-  if(!offer)return {skipped:'empty'};
-  return await publishWithManualTools(env,offer,settings,{origin:'automático'});
+  // Diferentemente do envio manual, o automático NÃO faz fallback para texto.
+  // Retentativas de foto têm espera própria; um item sem imagem nunca bloqueia
+  // as demais ofertas da fila. No máximo uma publicação por ciclo/intervalo.
+  await ensureTelegramPhotoRetries(env);
+  for(let checked=0;checked<5;checked++){
+   const offer=await env.DB.prepare(OFFER_WITH_COUPON+
+     " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id "+
+     " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+
+     "AND (tpr.offer_id IS NULL OR (tpr.attempts<6 AND tpr.next_retry_at<=?))"+
+     " ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
+   ).bind(settings.category,settings.category,Math.floor(Date.now()/1000)).first();
+   if(!offer)return {skipped:checked?'awaiting_photo':'empty'};
+   const result=await publishWithManualTools(env,offer,settings,
+     {origin:'automático',requirePhoto:true});
+   if(result?.status==='awaiting_photo')continue;
+   return result;
+  }
+  return {skipped:'awaiting_photo',checked:5};
  }finally{
   await env.DB.prepare(
    "UPDATE affiliate_telegram_schedule_lease SET lease_until=0 WHERE id=1 AND lease_until=?"
