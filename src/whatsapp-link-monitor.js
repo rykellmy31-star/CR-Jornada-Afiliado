@@ -20,7 +20,9 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_price_recovery(product_id TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_site_prices(product_id TEXT PRIMARY KEY,price_cents INTEGER,status TEXT NOT NULL DEFAULT 'unavailable' CHECK(status IN ('ok','unavailable')),checked_at INTEGER NOT NULL DEFAULT 0,tries INTEGER NOT NULL DEFAULT 0,method TEXT NOT NULL DEFAULT '')",
  "CREATE TABLE IF NOT EXISTS ml_monitor_retry_schedule(shortlink_id INTEGER PRIMARY KEY REFERENCES ml_monitor_shortlinks(id),next_retry_at INTEGER NOT NULL DEFAULT 0,last_attempt_at INTEGER NOT NULL DEFAULT 0,auto_attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0)",
- "CREATE INDEX IF NOT EXISTS idx_ml_monitor_retry_due ON ml_monitor_retry_schedule(next_retry_at,lease_until)"
+ "CREATE INDEX IF NOT EXISTS idx_ml_monitor_retry_due ON ml_monitor_retry_schedule(next_retry_at,lease_until)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_browser_budget(id INTEGER PRIMARY KEY CHECK(id=1),day_key TEXT NOT NULL DEFAULT '',daily_count INTEGER NOT NULL DEFAULT 0,last_at INTEGER NOT NULL DEFAULT 0)",
+ "INSERT OR IGNORE INTO ml_monitor_browser_budget(id) VALUES(1)"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -637,7 +639,7 @@ function trustedHop(input){
 // A falha de resolução não prova que o domínio foi rejeitado: há vitrines,
 // páginas intermediárias, rate limit e links de outros sites. Informe o motivo.
 export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
- let current=value;const visited=new Set();
+ let current=value;const visited=new Set();let previousSocial=null;
  for(let hop=0;hop<7;hop++){
   let externalUrl;
   try{externalUrl=new URL(current);}catch{}
@@ -645,7 +647,7 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   const loginHost=['auth.mercadolivre.com.br','login.mercadolivre.com.br'].includes(host);
   const loginPath=REDIRECT_HOSTS.has(host)&&/^\/jms\/mlb\/lgz\/login(?:\/|$)/i.test(externalUrl.pathname);
   if(loginHost||loginPath)
-   return {product:null,kind:'auth',reason:'A vitrine do Mercado Livre solicitou login; não foi possível confirmar um produto público'};
+   return {product:null,kind:'auth',social_url:previousSocial,reason:'A vitrine do Mercado Livre solicitou login; não foi possível confirmar um produto público'};
   const u=trustedHop(current);
   if(!u){
    const embedded=trustedEmbeddedRedirect(current);
@@ -659,6 +661,7 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   const product=urlCandidate(u.href);
   if(product?.kind==='product')return {product,kind:'product',reason:null};
   const social=/^\/social(?:\/|$)/i.test(u.pathname)&&REDIRECT_HOSTS.has(u.hostname.toLowerCase());
+  if(social)previousSocial=u.href;
   let res;
   try{
    res=await fetcher(u.href,{redirect:'manual',method:'GET',signal:AbortSignal.timeout(4500),
@@ -681,7 +684,7 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
    if(social){
     const featured=await featuredProductFromShowcasePage(res,u.href);
     if(featured)return {product:featured,kind:'featured_product',reason:null};
-    return {product:null,kind:'showcase',reason:'Vitrine encontrada, mas o botão do produto principal não pôde ser identificado no HTML público'};
+    return {product:null,kind:'showcase',social_url:u.href,reason:'Vitrine encontrada, mas o botão do produto principal não pôde ser identificado no HTML público'};
    }
    const candidate=await productFromShortPage(res);
    if(candidate)return {product:candidate,kind:'product',reason:null};
@@ -690,6 +693,36 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   return {product:null,kind:'http',reason:'O link não apresentou produto verificável (HTTP '+res.status+')'};
  }
  return {product:null,kind:'redirect',reason:'O link passou por muitos redirecionamentos'};
+}
+// Browser Run é usado APENAS quando HTML estático não contém o CTA.
+// Acesso com quota diária fixa em D1 impede consumo descontrolado mesmo
+// quando o cron revalida links a cada 30 segundos.
+export async function claimSocialBrowserBudget(env,now=epoch()){
+ if(typeof env?.BROWSER?.quickAction!=='function')return false;
+ await ensureMonitor(env);
+ const day=new Date(now*1000).toISOString().slice(0,10);
+ const result=await env.DB.prepare(
+  "UPDATE ml_monitor_browser_budget SET "+
+  "daily_count=CASE WHEN day_key=? THEN daily_count+1 ELSE 1 END,day_key=?,last_at=? "+
+  "WHERE id=1 AND (day_key<>? OR daily_count<12) AND last_at<=?"
+ ).bind(day,day,now,day,now-65).run();
+ return result.meta?.changes===1;
+}
+export async function browserFeaturedProduct(env,socialUrl){
+ if(typeof env?.BROWSER?.quickAction!=='function')return null;
+ let u;
+ try{u=new URL(socialUrl);}catch{return null;}
+ if(u.protocol!=='https:'||!REDIRECT_HOSTS.has(u.hostname.toLowerCase())||
+    !/^\/social(?:\/|$)/i.test(u.pathname))return null;
+ try{
+  const rendered=await env.BROWSER.quickAction('content',{
+   url:u.href,
+   gotoOptions:{waitUntil:'networkidle2',timeout:14000},
+   rejectResourceTypes:['image','font','media']
+  });
+  if(!rendered?.ok)return null;
+  return await featuredProductFromShowcasePage(rendered,u.href);
+ }catch{return null;}
 }
 export async function redirectSource(value){
  return (await inspectMonitorShortlink(value)).product;
@@ -720,7 +753,7 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END, "+
   "COALESCE(rs.next_retry_at,0),s.created_at DESC LIMIT 5";
  const items=(await env.DB.prepare(query).bind(at,at).all()).results;
- let resolved=0,reviewed=0;
+ let resolved=0,reviewed=0,browserBudget=1;
  for(const item of items){
   // Primeiro seleciona/garante uma linha de controle para a URL.
   const created=await env.DB.prepare(
@@ -737,6 +770,17 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   let result;
   try{result=await inspectMonitorShortlink(item.short_url,{fetcher});}
   catch{result={product:null,kind:'temporary',reason:'Falha temporária ao verificar o produto'};}
+  // A vitrine renderiza o botão via React: tentar navegador verdadeiro somente
+  // nos primeiros testes e após algum tempo, nunca a cada repetição de 30s.
+  const tries=Number(item.auto_attempts||0);
+  if(!result.product&&result.social_url&&
+     ['showcase','auth'].includes(result.kind)&&browserBudget>0&&
+     (tries===0||tries===8||tries===16)&&
+     await claimSocialBrowserBudget(env,at)){
+    browserBudget--;
+    const rendered=await browserFeaturedProduct(env,result.social_url);
+    if(rendered)result={product:rendered,kind:'featured_product',reason:null};
+  }
   if(result.product){
    try{
     await saveProduct(env,{group_id:item.group_id,message_id:item.message_id,hint:item.message_hint},result.product);
