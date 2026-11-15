@@ -116,8 +116,9 @@ export async function sourcePageForAffiliateImage(env, affiliateUrl) {
   }
   if(!trustedProductPage(source)||source===affiliateUrl)return null;
   const url=new URL(source);
-  if(!/^(?:www\\.|produto\\.|m\\.)?mercadolivre\\.com\\.br$/i.test(url.hostname))return null;
-  if(!/\\/(?:p|up)\\/MLBU?\\d{6,}|(?:^|\\/)MLB-?\\d{6,}/i.test(url.pathname))return null;
+  if(!['www.mercadolivre.com.br','mercadolivre.com.br',
+   'produto.mercadolivre.com.br','m.mercadolivre.com.br'].includes(url.hostname.toLowerCase()))return null;
+  if(!/MLBU?[-_]?\\d{6,}/i.test(url.pathname))return null;
   return url.href;
  }catch{return null;}
 }
