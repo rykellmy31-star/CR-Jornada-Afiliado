@@ -727,8 +727,12 @@ test('meli.la de vitrine /social não é produto, diagnóstico identifica vitrin
     return new Response(null,{status:302,headers:{location:social}});
    return new Response('<html><body>Vitrine sem HTML público do destaque</body></html>',{status:200,headers:{'content-type':'text/html'}});
   };
-  assert.deepEqual(await resolveMonitorShortlinks(env),{resolved:0,reviewed:1});
-  assert.deepEqual(calls,['https://meli.la/1nATbu7',social]);
+  for(let i=0;i<3;i++){
+   const outcome=await resolveMonitorShortlinks(env);
+   assert.equal(outcome.resolved,0);
+   assert.equal(outcome.reviewed,i===2?1:0);
+  }
+  assert.deepEqual(calls,Array(3).fill(['https://meli.la/1nATbu7',social]).flat());
   const short=DB.prepare('SELECT status,reason FROM ml_monitor_shortlinks').first();
   assert.equal(short.status,'review');
   assert.match(short.reason,/Vitrine encontrada, mas o botão do produto principal/);
