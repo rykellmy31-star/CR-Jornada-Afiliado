@@ -133,10 +133,10 @@ test('somente Telegram nunca é espelhado, mas "ambos" envia uma vez em cada',as
       const pub=await api(env,cookie,'/api/offers/'+id+'/publish',{});
       assert.equal(pub.code,200);
     }
-    assert.deepEqual(sent.map(x=>x.destination),['telegram','telegram']);
+    assert.deepEqual(sent.map(x=>x.destination),['telegram','telegram','whatsapp'],
+      'publicação manual no Telegram já deve iniciar o espelhamento');
     const wa=await runWhatsAppScheduled(env);
-    assert.equal(wa.status,'sent');
-    assert.equal(wa.source,'mirrored');
+    assert.deepEqual(wa,{skipped:'empty'},'o Cron não pode duplicar mensagem já enviada');
     assert.equal(sent.length,3);
     assert.equal(sent[2].destination,'whatsapp');
     assert.match(sent[2].body.caption,/https:\/\/meli\.la\/FAKE22/);
