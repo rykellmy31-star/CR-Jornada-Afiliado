@@ -444,9 +444,10 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   let verifiedImage=null,prepared=offer;
   if(automatic){
     const price=await prepareAutomaticOfferPrice(env,offer);
-    if(!price.ok)return recordAutomaticPriceRetry(env,'whatsapp',offer.id,price.reason);
+    const priceQueue=source==='direct'?'wa-direct':'whatsapp';
+    if(!price.ok)return recordAutomaticPriceRetry(env,priceQueue,offer.id,price.reason);
     prepared=price.offer;
-    await clearAutomaticPriceRetry(env,'whatsapp',offer.id);
+    await clearAutomaticPriceRetry(env,priceQueue,offer.id);
     const checked=await preflightWhatsAppPhoto(env,offer,source,cfg);
     if(!checked.image)return checked;
     verifiedImage=checked.image;
@@ -542,7 +543,7 @@ export async function runWhatsAppScheduled(env){
         AND (lower(?)='geral' OR lower(o.category)=lower(?))
       ORDER BY o.published_at ASC,o.id ASC LIMIT 1`)
       .bind(cfg.group_jid,cfg.started_at,MEDIA_RETRY_LIMIT,nowSec(),nowSec(),cat,cat).first(),
-    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=d.affiliate_url LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='whatsapp' AND apr.offer_id=d.id WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?)) AND (apr.offer_id IS NULL OR apr.next_retry_at<=?) AND (lower(?)='geral' OR lower(d.category)=lower(?)) ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
+    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=d.affiliate_url LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='wa-direct' AND apr.offer_id=d.id WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?)) AND (apr.offer_id IS NULL OR apr.next_retry_at<=?) AND (lower(?)='geral' OR lower(d.category)=lower(?)) ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
       .bind(cfg.group_jid,cfg.instance_name,MEDIA_RETRY_LIMIT,nowSec(),nowSec(),cat,cat).first()
   ]);
   if(!mirrored&&!direct)return {skipped:'empty'};
