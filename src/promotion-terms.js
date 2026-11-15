@@ -3,6 +3,10 @@ const AMOUNT='\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?';
 const rPrice=new RegExp('R\\$\\s*('+AMOUNT+')(?![\\d,.])','gi');
 const rDePor=new RegExp('\\bde\\s*R\\$\\s*('+AMOUNT+')\\s*(?:por|→|->)\\s*R\\$\\s*('+AMOUNT+')','i');
 const rPor=new RegExp('\\b(?:por|agora|apenas|s[oó]\\s+hoje)\\s*(?:[:=-]\\s*)?R\\$\\s*('+AMOUNT+')','i');
+// O preço condicionado a cupom prevalece sobre o preço normal anunciado.
+const rWithCoupon=new RegExp('\\bcom\\s+(?:o\\s+)?cupom\\b[^\\dA-Za-z]{0,24}R\\$\\s*('+AMOUNT+')','i');
+const rCouponAfter=new RegExp('R\\$\\s*('+AMOUNT+')\\s*(?:com\\s+(?:o\\s+)?cupom|usando\\s+(?:o\\s+)?cupom)\\b','i');
+const rCouponCode=/\b(?:cupom|c[oó]digo)(?:\s+de\s+desconto)?\s*[:=\-]\s*([A-Za-z0-9][A-Za-z0-9_-]{3,31})\b/i;
 const rPix=new RegExp('R\\$\\s*('+AMOUNT+')\\s*(?:somente|apenas|s[oó]|exclusiv[oa])?\\s*(?:no|via|pelo|para|em)\\s+pix','i');
 const rCard=new RegExp('R\\$\\s*('+AMOUNT+')\\s*(?:no|pelo|via|em)\\s+(?:cart[aã]o|cr[eé]dito)','i');
 const rInstallment=new RegExp('\\b(\\d{1,2})\\s*x\\s*(?:de\\s*)?R\\$\\s*('+AMOUNT+')','i');
@@ -21,6 +25,10 @@ export function extractPromotionTerms(input){
  const text=input.replace(/https:\/\/[^\s<>"']+/gi,' ').replace(/\s+/g,' ').slice(0,600);
  if(!text.trim())return null;
  const pair=text.match(rDePor),by=text.match(rPor),pixPrice=text.match(rPix);
+ const couponMatch=text.match(rWithCoupon)||text.match(rCouponAfter);
+ const couponCents=couponMatch?moneyCents(couponMatch[1]):null;
+ const couponCodeMatch=text.match(rCouponCode);
+ const couponCode=couponCodeMatch?couponCodeMatch[1].toUpperCase():null;
  const installmentPrice=text.match(rInstallment);
  const rawCardPrice=text.match(rCard);
  // Não confunda o valor de uma parcela com o preço total no cartão.
@@ -31,7 +39,12 @@ export function extractPromotionTerms(input){
  const partCents=installmentPrice&&validTimes?moneyCents(installmentPrice[2]):null;
  const offers=[...text.matchAll(rPrice)].filter(x=>!/\b\d{1,2}\s*x\s*(?:de\s*)?$/i.test(text.slice(Math.max(0,x.index-18),x.index))).map(x=>moneyCents(x[1])).filter(real);
  let price=null,old=null;
- if(pair){
+ if(real(couponCents)){
+   price=couponCents;
+   // O preço de referência só é seguro quando está explícito e é maior.
+   const beforeCoupon=pair?moneyCents(pair[1]):null;
+   if(real(beforeCoupon)&&beforeCoupon>price)old=beforeCoupon;
+ }else if(pair){
    old=moneyCents(pair[1]);price=moneyCents(pair[2]);
    if(!real(old)||!real(price)||old<=price){old=null;price=null;}
  } else if(by){price=moneyCents(by[1]);}
@@ -48,6 +61,7 @@ export function extractPromotionTerms(input){
  const cardPriceCents=(pix&&real(explicitCardPrice)&&explicitCardPrice!==price)?explicitCardPrice:null;
  if(!real(price)&&!validTimes&&!real(cardPriceCents))return null;
  return {price_cents:real(price)?price:null,old_price_cents:real(old)?old:null,
+   coupon_required:real(couponCents),coupon_code:real(couponCents)?couponCode:null,
    payment_mode:paymentMode,installments:validTimes,installment_cents:real(partCents)?partCents:null,
    installments_no_interest:interestFree,card_price_cents:real(cardPriceCents)?cardPriceCents:null};
 }
@@ -59,7 +73,9 @@ export function safePromotionTerms(value){
  if(!numeric('price_cents')||!numeric('old_price_cents')||!numeric('installment_cents')||
     !numeric('card_price_cents')||!inRange||
     !['unspecified','pix','pix_only','card'].includes(t.payment_mode)||
-    typeof t.installments_no_interest!=='boolean')return null;
+    typeof t.installments_no_interest!=='boolean'||
+    (t.coupon_required!==undefined&&typeof t.coupon_required!=='boolean')||
+    (t.coupon_code!==undefined&&t.coupon_code!==null&&!/^[A-Za-z0-9][A-Za-z0-9_-]{3,31}$/.test(t.coupon_code)))return null;
  return t;
 }
 export function promotionDescription(value){
@@ -70,6 +86,10 @@ export function promotionDescription(value){
   if(real(t.old_price_cents)&&t.old_price_cents>t.price_cents)
    out.push('🏷️ Oferta anunciada no grupo: de '+brl(t.old_price_cents)+' por '+brl(t.price_cents));
   else out.push('💰 Preço anunciado no grupo: '+brl(t.price_cents));
+ }
+ if(t.coupon_required===true){
+  out.push('🎟️ Preço anunciado condicionado ao uso de cupom');
+  if(t.coupon_code)out.push('🏷️ Cupom informado: '+t.coupon_code);
  }
  if(t.payment_mode==='pix_only')out.push('💠 Condição anunciada: somente no Pix');
  else if(t.payment_mode==='pix')out.push('💠 Condição anunciada: no Pix');
