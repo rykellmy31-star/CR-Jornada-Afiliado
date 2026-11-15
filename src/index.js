@@ -289,6 +289,12 @@ async function runScheduled(env){
   // Retentativas de foto têm espera própria; um item sem imagem nunca bloqueia
   // as demais ofertas da fila. No máximo uma publicação por ciclo/intervalo.
   await ensureTelegramPhotoRetries(env);
+  // Reparar filas antigas reenfileiradas com contador >=6. Sem isto o SQL
+  // deixa a oferta 'Na fila' mas jamais tenta enviá-la automaticamente.
+  await env.DB.prepare(
+   "DELETE FROM telegram_photo_retries WHERE attempts>=6 "+
+   "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
+  ).run();
   for(let checked=0;checked<5;checked++){
    const offer=await env.DB.prepare(OFFER_WITH_COUPON+
      " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id "+

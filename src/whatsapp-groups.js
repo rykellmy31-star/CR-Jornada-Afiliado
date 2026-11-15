@@ -2,6 +2,7 @@ import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
+import {photoForWhatsApp} from './whatsapp-photo.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,resolveOfferSource} from './automatic-price.js';
 import { categoryMatches,normalizeChannelCategory } from './multichannel.js';
 import { listWhatsAppGroups,connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,evolutionOrigin,ensureWhatsAppTables } from './whatsapp.js';
@@ -273,8 +274,9 @@ async function sendWhatsApp(env,g,offer,{photoUrl=null}={}){
   photo=await sharedWhatsAppProductPhoto(env,link,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});
  }catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
  if(!photo)throw fail('Imagem real não confirmada. Nenhuma publicação sem foto foi enviada.');
- const body={number:g.group_jid,mediatype:'image',mimetype:photo.endsWith('.png')?'image/png':'image/jpeg',
-  media:photo,caption:text,fileName:'oferta-mercado-livre.jpg'};
+ const prepared=await photoForWhatsApp(photo);
+ const body={number:g.group_jid,mediatype:'image',mimetype:prepared.mimetype,
+  media:prepared.media,caption:text,fileName:prepared.filename};
  const reply=await evo(env,'/message/sendMedia/'+encodeURIComponent(g.instance_name),
   {method:'POST',body});
  if(typeof reply.key?.id!=='string'||!reply.key.id)

@@ -121,21 +121,21 @@ export function highQualityPhotoCandidates(value) {
   return candidates;
 }
 
-function acceptableImageResponse(response, ranged = false) {
+function acceptableImageResponse(response, ranged = false, allowWebp = false) {
   if (!response.ok) return false;
   const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (type !== 'image/jpeg' && type !== 'image/png') return false;
+  if (type !== 'image/jpeg' && type !== 'image/png' && !(allowWebp && type === 'image/webp')) return false;
   const rangeTotal = ranged ? /\/(\d+)$/.exec(response.headers.get('content-range') || '') : null;
   const length = Number(rangeTotal?.[1] || response.headers.get('content-length') || 0);
   return Number.isFinite(length) && (length === 0 || length <= MAX_PHOTO_BYTES);
 }
 
-async function candidateExists(url, fetcher) {
+async function candidateExists(url, fetcher, allowWebp = false) {
   try {
     const head = await fetcher(url, {
       method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(4500)
     });
-    if (acceptableImageResponse(head)) return true;
+    if (acceptableImageResponse(head, false, allowWebp)) return true;
     // Alguns servidores de mídia não implementam HEAD. Verificamos MIME e tamanho
     // com GET parcial, sem baixar o arquivo inteiro no Worker.
     // Algumas CDNs negam HEAD (403) embora aceitem GET com Range.
@@ -148,7 +148,7 @@ async function candidateExists(url, fetcher) {
       method: 'GET', headers: { range: 'bytes=0-1023' },
       redirect: 'manual', signal: AbortSignal.timeout(4500)
     });
-    const good = acceptableImageResponse(probe, true);
+    const good = acceptableImageResponse(probe, true, allowWebp);
     try { await probe.body?.cancel(); } catch {}
     return good;
   } catch { return false; }
@@ -161,8 +161,12 @@ async function acceptedPhoto(url, fetcher) {
   for (const candidate of highQualityPhotoCandidates(url)) {
     if (await candidateExists(candidate, fetcher)) return candidate;
   }
-  // Não envia URL inexistente ou HTML disfarçado de foto. Se não houver imagem
-  // válida, o publicador preserva a oferta com texto, link e prévia.
+  // A foto original do destaque pode existir apenas em WebP (-V.webp).
+  // É o arquivo REAL servido pela vitrine do ML, não uma prévia do link.
+  // Aceite somente se o CDN confirmar MIME e tamanho; na publicação o
+  // WebP será convertido em JPEG para envio de mídia ao destinatário.
+  if (/\.webp(?:\?|$)/i.test(url) && trustedProductImage(url) &&
+      await candidateExists(url,fetcher,true)) return url;
   return null;
 }
 

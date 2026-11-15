@@ -949,7 +949,7 @@ async function claimMonitorItemBrowserAttempt(env,shortlinkId,at){
 // Primeira alternativa: HTML completo do produto principal. Se o ML renderizar
 // o botão só depois, use scrape com seletores restritos à vitrine principal.
 // Nunca seleciona um link de "Quem viu este produto também comprou".
-export async function browserFeaturedProduct(env,socialUrl){
+export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false}={}){
  if(typeof env?.BROWSER?.quickAction!=='function')return null;
  let u;
  try{u=new URL(socialUrl);}catch{return null;}
@@ -960,8 +960,14 @@ export async function browserFeaturedProduct(env,socialUrl){
  try{
   const rendered=await env.BROWSER.quickAction('content',opts);
   if(rendered?.ok){
+    const copy=includeDetails&&typeof rendered.clone==='function'?rendered.clone():null;
     const candidate=await featuredProductFromShowcasePage(rendered,u.href);
-    if(candidate)return candidate;
+    if(candidate){
+     if(!copy)return candidate;
+     let featured_price=null;
+     try{featured_price=extractFeaturedShowcasePrice((await copy.text()).slice(0,5500000),candidate.product_id);}catch{}
+     return {...candidate,featured_price};
+    }
   }else console.warn('Browser Run vitrine HTML:',rendered?.status||'sem resposta');
  }catch(error){console.warn('Browser Run vitrine HTML:',String(error?.message||error).slice(0,130));}
  try{

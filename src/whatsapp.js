@@ -1,6 +1,7 @@
 import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
+import {photoForWhatsApp} from './whatsapp-photo.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,hasFreshOfferPrice,resolveOfferSource} from './automatic-price.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
@@ -396,8 +397,9 @@ async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null}={}){
    {retryOnMiss:true,sourceLookup:resolveOfferSource});
  }catch(error){console.warn('Foto WhatsApp:',String(error?.message||error).slice(0,100));}
  if(!image)throw Object.assign(new Error('Foto do produto indisponível; publicação sem imagem bloqueada.'),{code:'PHOTO_NOT_FOUND'});
- const body={number:cfg.group_jid,mediatype:'image',mimetype:image.endsWith('.png')?'image/png':'image/jpeg',
-  media:image,caption:text,fileName:'oferta-mercado-livre.jpg',filename:'oferta-mercado-livre.jpg'};
+ const photo=await photoForWhatsApp(image);
+ const body={number:cfg.group_jid,mediatype:'image',mimetype:photo.mimetype,
+  media:photo.media,caption:text,fileName:photo.filename,filename:photo.filename};
  const data=await evoFetch(env,cfg.instance_name,'/message/sendMedia',{method:'POST',body:JSON.stringify(body)});
  if(typeof data.key?.id!=='string'||!data.key.id)throw new Error('Evolution não confirmou o envio; confira o grupo antes de reenviar.');
  return {message_id:data.key.id,format:'photo'};

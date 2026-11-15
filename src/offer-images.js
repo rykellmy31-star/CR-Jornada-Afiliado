@@ -192,6 +192,15 @@ export async function resolveProductImageWithRetry(env,affiliateUrl,lookup,{retr
    }
   }catch(error){console.warn('Nova leitura da foto no anúncio:',String(error?.message||error).slice(0,90));}
  }
+ // A página do produto pode negar o Worker, embora a vitrine carregue.
+ // Recupere a FOTO do cartão destacado também se a origem já era conhecida.
+ if(typeof sourceLookup==='function'){
+  try{
+   await sourceLookup(env,affiliateUrl,{refreshFeaturedMedia:true});
+   const found=await cachedProductImage(env,affiliateUrl);
+   if(found)return found;
+  }catch(error){console.warn('Foto da vitrine:',String(error?.message||error).slice(0,100));}
+ }
  try{return await resolveProductImage(env,affiliateUrl,lookup);}
  catch(error){
   console.warn('Segunda tentativa de foto indisponível:',String(error?.message||error).slice(0,90));
