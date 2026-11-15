@@ -95,9 +95,9 @@ test('imagem publicada no Telegram é reutilizada no WhatsApp sem visitar meli.l
     assert.equal(publish.status,200);
     assert.equal(telegramPhotos,1);
     assert.equal(await cachedProductImage(env,LINK),IMAGE);
+    assert.equal(mediaSent,1,'publicação manual envia também ao WhatsApp sem depender do Cron');
     const sent=await runWhatsAppScheduled(env);
-    assert.equal(sent.status,'sent');
-    assert.equal(sent.format,'photo');
+    assert.deepEqual(sent,{skipped:'empty'},'Cron não repete imagem já publicada');
     assert.equal(pageReads,1);
     assert.equal(headReads,1);
     assert.equal(mediaSent,1);
