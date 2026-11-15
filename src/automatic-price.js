@@ -1,7 +1,8 @@
 // Pré-verificação de preço para ofertas automáticas do Mercado Livre.
 // Uma falha temporária de preço nunca bloqueia os demais produtos.
 import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractMercadoLivrePagePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
-import {sourcePageForAffiliateImage} from './offer-images.js';
+import {sourcePageForAffiliateImage,rememberProductImage} from './offer-images.js';
+import {validatedProductPhoto} from './images.js';
 import {inspectMonitorShortlink,browserFeaturedProduct,claimSocialBrowserBudget} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
 import {safePromotionTerms,MAX_AGE_MS} from './promotion-terms.js';
@@ -175,6 +176,17 @@ export async function prepareAutomaticOfferPrice(env,offer,
     if(positive(rendered?.price_cents))details=rendered;
    }
    if(positive(details?.price_cents)){
+    // Foto do MESMO cartão principal, validada na CDN. A imagem é reutilizada
+    // no envio manual/automático e no espelhamento para WhatsApp.
+    if(details.image_url){
+     try{
+      const photo=await validatedProductPhoto(details.image_url,fetcher);
+      if(photo){
+       await rememberProductImage(env,offer.affiliate_url,photo);
+       await rememberProductImage(env,source,photo);
+      }
+     }catch(error){console.warn('Foto da vitrine:',String(error?.message||error).slice(0,95));}
+    }
     await env.DB.prepare(
       'INSERT INTO affiliate_verified_offer_details(affiliate_url,source_url,details_json,checked_at) VALUES(?,?,?,?) '+
       'ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,details_json=excluded.details_json,checked_at=excluded.checked_at'
