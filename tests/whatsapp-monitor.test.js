@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 const TOKEN='monitor-test-webhook-token-strong-123456';
@@ -634,4 +634,81 @@ test('reconhece formatos comuns de link sem protocolo e ignora loja externa',()=
   message:{extendedTextMessage:{text:'Mensagem sem link',contextInfo:{quotedMessage:{conversation:'Outro usuário: https://melila.me/AAJLUPqiqmsu'}}}}
  }};
  assert.deepEqual(parseMonitorEvent(quoted),[],'não extrai URL de mensagem citada');
+});
+
+test('painel mostra opção para aprovar e revalidar links em revisão',()=>{
+ const html=renderPage();
+ assert.match(html,/id="ml-monitor-review-list"/);
+ assert.match(CLIENT_JS,/mlMonitorApplyReviews/);
+ assert.match(CLIENT_JS,/Aprovar produto para conversão/);
+ assert.match(CLIENT_JS,/Tentar validar novamente/);
+ assert.doesNotThrow(()=>new Function(CLIENT_JS));
+});
+test('aprovação manual exige endereço do Mercado Livre e confirmação',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta https://meli.la/MANUAL12345'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review'").run();
+  const id=DB.prepare("SELECT id FROM ml_monitor_shortlinks").first().id;
+  const approve=(source_url,confirm_same_product=true)=>
+    reviewMonitorShortlink(env,id,{action:'approve',source_url,confirm_same_product});
+  assert.equal((await monitorState(env)).recent_shortlinks[0].id,id);
+  await assert.rejects(approve(PRODUCT,false),/Confirme que abriu/);
+  await assert.rejects(approve('https://www.netshoes.com.br/tenis'),/Mercado Livre/);
+  await assert.rejects(approve('https://meli.la/OTHER12345'),/Mercado Livre/);
+  globalThis.fetch=async()=>new Response('Forbidden',{status:403});
+  const result=await approve(PRODUCT,true);
+  assert.equal(result.resolved,true);
+  assert.equal(result.manual,true);
+  const state=await monitorState(env);
+  assert.equal(state.links.length,1);
+  assert.equal(state.links[0].source_url,PRODUCT);
+  assert.equal(state.shortlinks.find(x=>x.status==='resolved').total,1);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM offers").first().total,0);
+  await assert.rejects(approve(PRODUCT),/não está mais em revisão/);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+test('revalidar resolve link ou mantém em revisão se destino indisponível',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'De R$ 100 por R$ 50 https://meli.la/RETRY12345'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review'").run();
+  const id=DB.prepare("SELECT id FROM ml_monitor_shortlinks").first().id;
+  globalThis.fetch=async()=>new Response('Forbidden',{status:403});
+  assert.equal((await reviewMonitorShortlink(env,id,{action:'retry'})).resolved,false);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
+  globalThis.fetch=async()=>new Response(null,{status:302,headers:{location:RAW}});
+  assert.equal((await reviewMonitorShortlink(env,id,{action:'retry'})).resolved,true);
+  assert.equal((await monitorState(env)).links[0].last_seen_price_cents,5000);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM offers").first().total,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+test('não aprova endereço manual divergente do produto verificado',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.la/MISMATCH12345'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review'").run();
+  const id=DB.prepare("SELECT id FROM ml_monitor_shortlinks").first().id;
+  globalThis.fetch=async()=>new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/outro/p/MLB99999999'}});
+  await assert.rejects(reviewMonitorShortlink(env,id,{
+   action:'approve',source_url:PRODUCT,confirm_same_product:true
+  }),/não corresponde/);
+  assert.equal((await monitorState(env)).counts.captured,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+test('API de revisão requer login',async()=>{
+ const {env,DB}=setup();
+ try{
+  const response=await worker.fetch(new Request('https://afiliados.example.test/api/monitor/shortlinks/1/review',{
+   method:'POST',headers:{origin:'https://afiliados.example.test','content-type':'application/json'},
+   body:JSON.stringify({action:'approve',source_url:PRODUCT,confirm_same_product:true})
+  }),env);
+  assert.equal(response.status,401);
+ }finally{DB.close();}
 });
