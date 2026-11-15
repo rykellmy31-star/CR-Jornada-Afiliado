@@ -798,27 +798,48 @@ async function claimMonitorItemBrowserAttempt(env,shortlinkId,at){
  ).bind(shortlinkId,at,at-600).run();
  return result.meta?.changes===1;
 }
+// Primeira alternativa: HTML completo do produto principal. Se o ML renderizar
+// o botão só depois, use scrape com seletores restritos à vitrine principal.
+// Nunca seleciona um link de "Quem viu este produto também comprou".
 export async function browserFeaturedProduct(env,socialUrl){
  if(typeof env?.BROWSER?.quickAction!=='function')return null;
  let u;
  try{u=new URL(socialUrl);}catch{return null;}
  if(u.protocol!=='https:'||!REDIRECT_HOSTS.has(u.hostname.toLowerCase())||
     !/^\/social(?:\/|$)/i.test(u.pathname))return null;
+ const opts={url:u.href,gotoOptions:{waitUntil:'networkidle2',timeout:20000},
+  rejectResourceTypes:['image','font','media']};
  try{
-  const rendered=await env.BROWSER.quickAction('content',{
-   url:u.href,
-   gotoOptions:{waitUntil:'networkidle2',timeout:20000},
-   rejectResourceTypes:['image','font','media']
+  const rendered=await env.BROWSER.quickAction('content',opts);
+  if(rendered?.ok){
+    const candidate=await featuredProductFromShowcasePage(rendered,u.href);
+    if(candidate)return candidate;
+  }else console.warn('Browser Run vitrine HTML:',rendered?.status||'sem resposta');
+ }catch(error){console.warn('Browser Run vitrine HTML:',String(error?.message||error).slice(0,130));}
+ try{
+  const scraped=await env.BROWSER.quickAction('scrape',{
+   ...opts,elements:[
+    {selector:'.rl-card-featured-wrapper a[href]'},
+    {selector:'[class*="card-featured"] a[href]'}
+   ]
   });
-  if(!rendered?.ok){
-    console.warn('Browser Run vitrine: HTTP',rendered?.status||'sem resposta');
-    return null;
+  if(!scraped?.ok||typeof scraped.json!=='function')return null;
+  const payload=await scraped.json();
+  const sections=Array.isArray(payload)?payload:Array.isArray(payload?.result)?payload.result:[];
+  const identified=new Map();
+  for(const section of sections){
+   if(!['.rl-card-featured-wrapper a[href]','[class*="card-featured"] a[href]'].includes(section?.selector))continue;
+   for(const element of (section?.results||[]).slice(0,25)){
+    if(!/ir\s+para\s+(?:o\s+)?produto/i.test(String(element?.text||'')))continue;
+    const href=(element.attributes||[]).find(x=>x.name==='href')?.value;
+    let absolute;try{absolute=new URL(href,u.href).href;}catch{continue;}
+    const candidate=urlCandidate(absolute);
+    if(candidate?.kind==='product')identified.set(candidate.product_id,candidate);
+   }
   }
-  return await featuredProductFromShowcasePage(rendered,u.href);
- }catch(error){
-  console.warn('Browser Run vitrine:',String(error?.message||error).slice(0,140));
-  return null;
- }
+  return identified.size===1?[...identified.values()][0]:null;
+ }catch(error){console.warn('Browser Run vitrine scrape:',String(error?.message||error).slice(0,130));}
+ return null;
 }
 export async function redirectSource(value){
  return (await inspectMonitorShortlink(value)).product;
