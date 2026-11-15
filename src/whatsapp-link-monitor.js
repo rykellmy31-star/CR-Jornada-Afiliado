@@ -211,7 +211,7 @@ export async function monitorState(env){
   env.DB.prepare("SELECT COUNT(l.id) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id").first(),
   env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all(),
   env.DB.prepare("SELECT events_received,events_while_off,messages_with_links,authorized_messages,links_recognized,last_event_at,last_authorized_at,last_link_at FROM ml_monitor_diagnostics WHERE id=1").first(),
-  env.DB.prepare("SELECT s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status IN ('pending','review') ORDER BY s.id DESC LIMIT 8").all(),
+  env.DB.prepare("SELECT s.id,s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status IN ('pending','review') ORDER BY s.id DESC LIMIT 25").all(),
   env.DB.prepare("SELECT o.domain,o.reason,o.message_format,o.created_at,g.group_name FROM ml_monitor_url_observations o JOIN ml_monitor_groups g ON g.id=o.group_id ORDER BY o.id DESC LIMIT 12").all(),
   env.DB.prepare("SELECT group_id,received_messages,with_urls,last_received_at,last_format FROM ml_monitor_group_delivery").all(),
   env.DB.prepare("SELECT reason,occurrences,last_at FROM ml_monitor_discard_reasons ORDER BY occurrences DESC LIMIT 8").all()
@@ -411,6 +411,51 @@ export async function ingestMonitorEvent(env,payload){
    await env.DB.prepare("DELETE FROM ml_monitor_url_observations WHERE id NOT IN (SELECT id FROM ml_monitor_url_observations ORDER BY id DESC LIMIT 120)").run();
  }
  return {ok:true,captured,pending};
+}
+// Não permite aprovar arbitrariamente um encurtador: exige um produto
+// específico no domínio oficial e confirmação explícita da correspondência.
+// Mesmo aprovado, salva SOMENTE a URL comum para posterior conversão própria.
+export async function reviewMonitorShortlink(env,id,body){
+ await ensureMonitor(env);
+ const n=Number(id),action=body?.action;
+ if(!Number.isSafeInteger(n)||n<1)throw fail('Link de revisão inválido.');
+ if(!['retry','approve'].includes(action))throw fail('Escolha revalidar ou aprovar produto.');
+ const short=await env.DB.prepare(
+  "SELECT s.*,g.enabled,g.authorized FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.id=?"
+ ).bind(n).first();
+ if(!short)throw fail('Link não encontrado.',404);
+ if(short.status!=='review')throw fail('Este link não está mais em revisão. Atualize a lista.',409);
+ if(!short.enabled||!short.authorized)throw fail('Ative e autorize o grupo antes de revisar o link.',403);
+ let candidate;
+ if(action==='retry'){
+  try{candidate=await redirectSource(short.short_url);}
+  catch{candidate=null;}
+  if(!candidate){
+   await env.DB.prepare(
+    "UPDATE ml_monitor_shortlinks SET tries=tries+1,reason='Ainda sem destino verificável; confira manualmente' WHERE id=? AND status='review'"
+   ).bind(n).run();
+   return {ok:true,resolved:false,reason:'Ainda não foi possível verificar o produto automaticamente. Abra o link e, se for Mercado Livre, use a aprovação manual.'};
+  }
+ }else{
+  if(body?.confirm_same_product!==true)
+   throw fail('Confirme que abriu o link encurtado e verificou que ele leva ao mesmo produto.');
+  const raw=typeof body?.source_url==='string'?body.source_url.trim():'';
+  if(raw.length>2048)throw fail('Endereço de produto muito longo.');
+  candidate=urlCandidate(raw);
+  if(!candidate||candidate.kind!=='product')
+   throw fail('Cole o endereço HTTPS do produto no Mercado Livre com código MLB/MLBU. Outros sites e encurtadores não podem ser aprovados.');
+  // Se o destino encurtado puder ser verificado, nunca aceite outra mercadoria.
+  let verified=null;
+  try{verified=await redirectSource(short.short_url);}catch{}
+  if(verified?.product_id&&verified.product_id!==candidate.product_id)
+   throw fail('O endereço informado não corresponde ao produto identificado no link encurtado.',409);
+ }
+ await saveProduct(env,{group_id:short.group_id,message_id:short.message_id,hint:short.message_hint},candidate);
+ const result=await env.DB.prepare(
+  "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=? WHERE id=? AND status='review'"
+ ).bind(action==='approve'?'Produto associado por confirmação manual':null,n).run();
+ if(result.meta?.changes!==1)throw fail('O link foi alterado durante a revisão. Atualize a lista.',409);
+ return {ok:true,resolved:true,manual:action==='approve',product_id:candidate.product_id};
 }
 export async function updateMonitorLinkCategory(env,id,body){
  await ensureMonitor(env);await ensureAutomationCenter(env);
