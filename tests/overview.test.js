@@ -40,6 +40,8 @@ test('Visão Geral preserva navegação e mantém seções fechadas no início',
   assert.match(CLIENT_JS,/refreshOverview\(\)/);
   assert.match(page,/data-platform="mercadolivre"/);
   assert.match(page,/data-platform="shopee"/);
+  assert.match(page,/Telegram cadastrados/);
+  assert.match(page,/id="overview-telegram-active"/);
 });
 
 test('Visão Geral vazia retorna zeros, sem escrever nem criar tabelas',async()=>{
@@ -67,7 +69,7 @@ test('Visão Geral soma dados das filas e distingue habilitação de conexão',a
     "FROM ml_monitor_groups":{total:3},
     "FROM ml_monitor_settings":{enabled:1},
     "FROM ml_monitor_diagnostics":{last_event_at:1730000000,last_link_at:1730000010},
-    "FROM settings WHERE":{telegram_enabled:1,channel_registered:1,automation_enabled:1},
+    "FROM settings WHERE":{telegram_chat_id:"@achadinhosmlcr",telegram_enabled:1,channel_registered:1,automation_enabled:1},
     "FROM telegram_channels WHERE":{total:2},
     "FROM whatsapp_settings":{enabled:1,public_registered:1},
     "FROM whatsapp_groups WHERE":{total:3}
@@ -78,10 +80,33 @@ test('Visão Geral soma dados das filas e distingue habilitação de conexão',a
   assert.deepEqual(state.counts,{captured:14,queued:6,published:9,review:4});
   assert.equal(state.monitor.enabled,true);
   assert.equal(state.monitor.authorized_groups,3);
+  assert.equal(state.destinations.telegram_configured,3);
   assert.equal(state.destinations.telegram_active,3);
   assert.equal(state.destinations.whatsapp_active,4);
   assert.equal(state.destinations.connection_verified,false);
   assert.equal(state.events.length,1);
+  assert.equal(DB.writes,0);
+});
+
+
+test('Canal Telegram existente continua contado quando a automação está desligada',async()=>{
+  const DB=makeDB(['settings','telegram_channels'],{},{
+    'FROM settings WHERE':{telegram_chat_id:'@achadinhosmlcr',telegram_enabled:1,channel_registered:1,automation_enabled:0},
+    'FROM telegram_channels WHERE':{total:0}
+  });
+  const state=await overviewState({DB});
+  assert.equal(state.destinations.telegram_configured,1);
+  assert.equal(state.destinations.telegram_active,1);
+  assert.equal(DB.writes,0);
+});
+
+test('Canal cadastrado mas pausado aparece sem alegar que está habilitado',async()=>{
+  const DB=makeDB(['settings'],{},{
+    'FROM settings WHERE':{telegram_chat_id:'@achadinhosmlcr',telegram_enabled:0,channel_registered:1,automation_enabled:0}
+  });
+  const state=await overviewState({DB});
+  assert.equal(state.destinations.telegram_configured,1);
+  assert.equal(state.destinations.telegram_active,0);
   assert.equal(DB.writes,0);
 });
 
