@@ -173,40 +173,43 @@ test('agendador usa exatamente o fallback de texto do modo manual e não duplica
  }finally{globalThis.fetch=old;DB.close();}
 });
 
-test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()=>{
- const {DB,env}=setup(),native=globalThis.fetch;
- let sent=0,previews=0;
+test('fila não fica presa na antiga verificação de preço e respeita o intervalo entre duas ofertas',async()=>{
+ const {DB,env}=setup(),old=globalThis.fetch;
+ let media=0,text=0;
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
-  const t=Math.floor(Date.now()/1000);
+  const now=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents,last_error) VALUES(?,?,?,'ready',?,7990,?)")
+   .bind('Produto sem foto disponível','https://meli.la/SERPROBLEMA','Geral',now-20,'Aguardando preço atualizado no Mercado Livre').run();
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
-    .bind('Vitrine temporária sem foto','https://meli.la/SERPROBLEMA','Geral',t-20).run();
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
-    .bind('Produto com foto real',SHORT,'Geral',t-10).run();
+   .bind('Produto com foto disponível',SHORT,'Geral',now-10).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
-    if(u===SOURCE)return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'"><link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
-   if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
-    return Response.json({ok:true,result:{type:'channel'}});
-   if(u==='https://meli.la/SERPROBLEMA')
-    return new Response('<html>Vitrine sem foto</html>',{headers:{'content-type':'text/html'}});
-   if(u===SHORT)
-    return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'">',{headers:{'content-type':'text/html'}});
+   if(u===SOURCE||u===SHORT)return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'">',{headers:{'content-type':'text/html'}});
+   if(u==='https://meli.la/SERPROBLEMA')return new Response('<html>Sem foto</html>',{headers:{'content-type':'text/html'}});
    if(u===PHOTO_LARGE&&opts.method==='HEAD')
     return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'240000'}});
-   if(u.endsWith('/sendPhoto')){sent++;return Response.json({ok:true,result:{message_id:8888}});}
-   if(u.endsWith('/sendMessage')){previews++;throw Error('Envio de link em texto é proibido no automático');}
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendMessage')){text++;return Response.json({ok:true,result:{message_id:8111}});}
+   if(u.endsWith('/sendPhoto')){media++;return Response.json({ok:true,result:{message_id:8222}});}
    throw Error('Unexpected URL '+u);
   };
-  assert.equal((await runScheduled(env)).status,'published',
-   'segundo produto é publicado no mesmo Cron quando o primeiro não tem preço verificável');
-  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
+  const first=await runScheduled(env);
+  assert.equal(first.status,'published');
+  assert.equal(first.format,'text_no_image');
+  assert.equal(DB.prepare("SELECT last_error FROM offers WHERE id=1").first().last_error,null);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=2").first().status,'ready');
+  assert.equal((await runScheduled(env)).skipped,'interval_or_schedule');
+  // Simula a passagem do intervalo sem aguardar um minuto real.
+  DB.prepare('UPDATE offers SET published_at=? WHERE id=1').bind(now-120).run();
+  const second=await runScheduled(env);
+  assert.equal(second.status,'published');
+  assert.equal(second.format,'photo');
+  assert.equal(text,1);
+  assert.equal(media,1);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=2").first().status,'published');
-  assert.equal(previews,0);
-  assert.equal(sent,1);
- }finally{globalThis.fetch=native;DB.close();}
+ }finally{globalThis.fetch=old;DB.close();}
 });
-
 
 test('foto Telegram liberada automaticamente reativa entrega WhatsApp antiga somente se o erro era falta de imagem',async()=>{
  const {env,DB}=setup();
