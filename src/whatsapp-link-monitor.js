@@ -73,7 +73,7 @@ export function parseMonitorEvent(event,{includeNoLinks=false}={}){
   const {text,format}=extractMessageText(entry.message||{},entry);
   const urls=extractUrls(text);
   if(!urls.length&&!includeNoLinks)continue;
-  const hint=text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180);
+  const hint=text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,800);
   result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,urls,format});
  }
  return result;
@@ -226,7 +226,7 @@ async function recoverCaptionFromEvolution(env,msg){
   const recovered=extractMessageText(record.message||{},record),urls=extractUrls(recovered.text);
   if(!urls.length)return null;
   return {...msg,urls,format:'evolution:'+recovered.format,
-   hint:recovered.text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,180)};
+   hint:recovered.text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,800)};
  }catch{return null;}
 }
 export async function ingestMonitorEvent(env,payload){
