@@ -55,7 +55,7 @@ test('preço não verificado não inventa números, agenda retry e não ocupa a 
    created_at:Math.floor(Date.now()/1000)-86400,price_cents:8990};
   const result=await prepareAutomaticOfferPrice(env,oldOffer);
   assert.equal(result.ok,false);
-  assert.match(result.reason,/preço não informado/);
+  assert.match(result.reason,/página original do produto/);
   const retry=await recordAutomaticPriceRetry(env,'telegram',oldOffer.id,result.reason,1700000000);
   assert.equal(retry.status,'awaiting_price');
   assert.equal(DB.prepare('SELECT next_retry_at FROM affiliate_auto_price_retries WHERE offer_id=12').first().next_retry_at,1700000180);
@@ -81,7 +81,8 @@ test('a legenda nunca inventa preço anterior nem desconto ao consultar preço p
  const offer=officialPriceOverlay({title:'Kit Caraíva',affiliate_url:AFF,category:'Automotivo'},13490);
  const caption=formatOfferMessage(offer,{network:'telegram'});
  assert.match(caption,/R\$\s*134,90/);
- assert.doesNotMatch(caption,/De:|OFF|desconto de \d/);
+ assert.match(caption,/De: não informado no anúncio/);
+ assert.doesNotMatch(caption,/OFF|desconto de \d/);
 });
 
 test('quando HTTP do anúncio retorna 403, Browser Run confirma preço na página original',async()=>{

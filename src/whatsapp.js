@@ -1,7 +1,7 @@
 import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
-import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,hasFreshOfferPrice} from './automatic-price.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
 
@@ -443,7 +443,8 @@ async function preflightWhatsAppPhoto(env,offer,source,cfg){
 async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}){
   let verifiedImage=null,prepared=offer;
   if(automatic){
-    const price=await prepareAutomaticOfferPrice(env,offer);
+    const price=source==='mirrored'&&hasFreshOfferPrice(offer)
+      ?{ok:true,offer}:await prepareAutomaticOfferPrice(env,offer);
     const priceQueue=source==='direct'?'wa-direct':'whatsapp';
     if(!price.ok)return recordAutomaticPriceRetry(env,priceQueue,offer.id,price.reason);
     prepared=price.offer;
