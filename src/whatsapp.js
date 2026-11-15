@@ -526,7 +526,16 @@ export async function runWhatsAppScheduled(env){
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
   await ensureCouponTable(env);
-  await ensureAutomaticPrices(env);
+  // A rotina manual não usa retries extras de preço/foto. Restaura somente
+  // ofertas de mídia com não envio explicitamente confirmado.
+  await env.DB.prepare(
+    "UPDATE whatsapp_direct_offers SET status='ready',last_error=NULL "+
+    "WHERE status='needs_review' AND last_error LIKE 'Foto indisponível após%Nenhuma mensagem sem foto foi enviada.%'"
+  ).run();
+  await env.DB.prepare(
+    "DELETE FROM whatsapp_deliveries WHERE status='needs_review' "+
+    "AND last_error LIKE 'Foto indisponível após%Nenhuma mensagem sem foto foi enviada.%'"
+  ).run();
   const cat=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
   const [mirrored,direct]=await Promise.all([
     env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
@@ -535,23 +544,22 @@ export async function runWhatsAppScheduled(env){
       FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
       LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
       LEFT JOIN offer_delivery_routing r ON r.offer_id=o.id
-      LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=o.affiliate_url
-      LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='whatsapp' AND apr.offer_id=o.id
       WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
-        AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?))
-        AND (apr.offer_id IS NULL OR apr.next_retry_at<=?)
         AND (r.delivery_mode IS NULL OR r.delivery_mode='both')
         AND (lower(?)='geral' OR lower(o.category)=lower(?))
       ORDER BY o.published_at ASC,o.id ASC LIMIT 1`)
-      .bind(cfg.group_jid,cfg.started_at,MEDIA_RETRY_LIMIT,nowSec(),nowSec(),cat,cat).first(),
-    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=d.affiliate_url LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='wa-direct' AND apr.offer_id=d.id WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?)) AND (apr.offer_id IS NULL OR apr.next_retry_at<=?) AND (lower(?)='geral' OR lower(d.category)=lower(?)) ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
-      .bind(cfg.group_jid,cfg.instance_name,MEDIA_RETRY_LIMIT,nowSec(),nowSec(),cat,cat).first()
+      .bind(cfg.group_jid,cfg.started_at,cat,cat).first(),
+    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d "+
+      "WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? "+
+      "AND (lower(?)='geral' OR lower(d.category)=lower(?)) "+
+      "ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
+      .bind(cfg.group_jid,cfg.instance_name,cat,cat).first()
   ]);
   if(!mirrored&&!direct)return {skipped:'empty'};
-  // Prioridade cronológica impede que a fila direta ou o espelhamento bloqueiem
-  // permanentemente a outra fila.
   const chooseDirect=!!direct&&(!mirrored||direct.created_at<=(mirrored.published_at||0));
-  return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored',{automatic:true});
+  // Usa o MESMO publicador do botão manual, respeitando os horários e intervalos
+  // da instância. Não exige confirmação adicional de preço ou foto.
+  return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored');
 }
 // A publicação manual do Telegram deve iniciar o espelhamento deste item,
 // sem aguardar o próximo Cron nem enviar outra oferta mais antiga por engano.
@@ -580,7 +588,8 @@ export async function dispatchPublishedOfferToWhatsApp(env,offerId){
      AND (lower(?)='geral' OR lower(o.category)=lower(?)) LIMIT 1`
  ).bind(cfg.group_jid,Number(offerId),cfg.started_at,category,category).first();
  if(!offer)return {skipped:'not_eligible_or_already_sent'};
- return await dispatchPrimaryWhatsApp(env,cfg,offer,'mirrored',{automatic:true});
+ // Mesma função do envio manual, inclusive foto e legenda já confirmadas.
+ return await dispatchPrimaryWhatsApp(env,cfg,offer,'mirrored');
 }
 
 export async function retryWhatsAppDelivery(env,offerId){
