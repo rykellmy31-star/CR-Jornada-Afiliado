@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup,monitorCouponOnly} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
@@ -1389,4 +1389,117 @@ test('diagnóstico distingue revisão automática, bloqueio externo e links de g
   assert.match(MONITOR_CLIENT_JS,/A pausa não interrompe a revalidação/);
   assert.equal(state.groups[0].enabled,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+
+test('aviso exclusivo de cupom é ignorado, mas produto anunciado COM cupom continua capturado',async()=>{
+ const {env,DB}=setup(),old=globalThis.fetch;
+ const coupon='https://meli.promo/s/CUPOMEXCLUSIVO',product='https://meli.la/PRODUTOCOMCUPOM';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Ofertas autorizadas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  assert.equal(monitorCouponOnly('Cupom liberado! Resgate para compras',null),true);
+  assert.equal(monitorCouponOnly('Kit de perfumes por R$ 79 com cupom',null),false);
+  for(const [id,message] of [['ID_COUPON','CUPOM LIBERADO! '+coupon],['ID_PRODUCT','Kit de perfumes por R$ 79 com cupom '+product]]){
+   const payload=event(GROUP,message);payload.data.key.id=id;
+   await ingestMonitorEvent(env,payload);
+  }
+  await updateMonitorGroup(env,DB.prepare('SELECT id FROM ml_monitor_groups').first().id,{enabled:false});
+  globalThis.fetch=async url=>String(url)===coupon
+   ?new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/cupons/'}})
+   :new Response(null,{status:302,headers:{location:PRODUCT}});
+  const outcome=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(outcome.resolved,1);
+  assert.equal(outcome.reviewed,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_ignored_links').first().n,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks').first().n,1);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'resolved');
+  assert.equal((await monitorState(env)).ignored_coupon_links,1);
+  assert.equal(DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
+ }finally{globalThis.fetch=old;DB.close();}
+});
+test('links antigos de cupom em revisão externa são retirados sem bloquear o produto seguinte',async()=>{
+ const {env,DB}=setup(),old=globalThis.fetch;
+ const coupon='https://meli.promo/s/CUPOMANTIGO',product='https://meli.la/PRODUTOANTIGO';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Achadinhos',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const c=event(GROUP,'Cupom liberado! Resgate seu desconto '+coupon);c.data.key.id='OLD_CUPOM';
+  const p=event(GROUP,'Produto por R$ 89 '+product);p.data.key.id='OLD_PRODUCT';
+  await ingestMonitorEvent(env,c);await ingestMonitorEvent(env,p);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Destino fora dos domínios permitidos do Mercado Livre' WHERE short_url=?")
+    .bind(coupon).run();
+  await updateMonitorGroup(env,DB.prepare('SELECT id FROM ml_monitor_groups').first().id,{enabled:false});
+  let couponRequests=0;
+  globalThis.fetch=async url=>{
+   if(String(url)===coupon){couponRequests++;throw Error('cupom antigo não deve ocupar consulta');}
+   return new Response(null,{status:302,headers:{location:PRODUCT}});
+  };
+  const outcome=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(outcome.resolved,1);
+  assert.equal(couponRequests,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_ignored_links').first().n,1);
+  assert.equal((await monitorState(env)).counts.captured,1);
+ }finally{globalThis.fetch=old;DB.close();}
+});
+test('39 links com grupos pausados: cupom não bloqueia os outros 38, mesmo com um item lento',async()=>{
+ const {env,DB}=setup(),old=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Pausados',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  for(let i=0;i<39;i++){
+   const short='https://meli.la/LOTE'+String(i).padStart(7,'0');
+   const e=event(GROUP,i===0?'Cupom liberado, resgate aqui '+short:'Produto oferta '+i+' por R$ 89 '+short);
+   e.data.key.id='EVT'+String(i).padStart(6,'0');
+   await ingestMonitorEvent(env,e);
+  }
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks').first().n,39);
+  const groupId=DB.prepare('SELECT id FROM ml_monitor_groups').first().id;
+  await updateMonitorGroup(env,groupId,{enabled:false});
+  let totalFetch=0;
+  const fetcher=async url=>{
+   totalFetch++;
+   const i=Number(String(url).split('LOTE')[1]);
+   if(i===0)return new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/cupons/'}});
+   return new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/produto-'+i+'/p/MLB'+String(10000000+i)}});
+  };
+  let resolved=0;
+  for(let cycle=0;cycle<7;cycle++){
+   const outcome=await resolveMonitorShortlinks(env,{now:1700000000+cycle*60,fetcher});
+   resolved+=outcome.resolved;
+  }
+  assert.equal(resolved,38);
+  assert.equal(totalFetch,39);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks WHERE status=\'resolved\'').first().n,38);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_ignored_links').first().n,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks WHERE status IN (\'review\',\'pending\')').first().n,0);
+  const state=await monitorState(env);
+  assert.equal(state.counts.captured,38);
+  assert.equal(state.retry_progress.total,0);
+  assert.equal(state.groups[0].enabled,0);
+  assert.equal(state.worker_heartbeat.last_resolved>=0,true);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=old;DB.close();}
+});
+test('uma consulta bloqueada não cancela as outras revisões do mesmo ciclo',async()=>{
+ const {env,DB}=setup(),old=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  for(let i=0;i<6;i++){
+   const e=event(GROUP,'Oferta '+i+' https://meli.la/ISOLATE'+i+'123456');
+   e.data.key.id='EV'+String(i).padStart(7,'0');
+   await ingestMonitorEvent(env,e);
+  }
+  const fetcher=async url=>{
+   if(String(url).includes('ISOLATE0123456'))throw new Error('erro de rede somente neste link');
+   return new Response(null,{status:302,headers:{location:PRODUCT}});
+  };
+  const result=await resolveMonitorShortlinks(env,{now:1700000000,fetcher});
+  assert.equal(result.reviewed,1);
+  assert.equal(result.resolved,5);
+  const remaining=DB.prepare("SELECT reason FROM ml_monitor_shortlinks WHERE status='review'").first();
+  assert.match(remaining.reason,/Falha de conexão/);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks WHERE status=\'resolved\'').first().n,5);
+ }finally{globalThis.fetch=old;DB.close();}
 });
