@@ -1255,3 +1255,34 @@ test('Browser Run não captura recomendações se a vitrine não entregar produt
   assert.equal((await monitorState(env)).counts.captured,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
 });
+
+
+test('meli.promo vitrine com JS captura principal JBL após renderização e ignora sugestões',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ const short='https://meli.promo/s/WUS7Tq';
+ const social='https://www.mercadolivre.com.br/social/gearofertas';
+ const jbl='https://www.mercadolivre.com.br/jbl-super-tweeter-st200-preto/p/MLB42162174';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Gear Ofertas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'JBL Super Tweeter ST200 por R$ 105,00 '+short));
+  globalThis.fetch=async url=>String(url)===short
+   ?new Response(null,{status:302,headers:{location:social}})
+   :new Response('<html>Aplicativo carregando</html>',{status:200,headers:{'content-type':'text/html'}});
+  let renderCalls=0;
+  env.BROWSER={async quickAction(){
+   renderCalls++;
+   return new Response('<html><div class="rl-card-featured-wrapper">'+
+    '<a class="poly-component__link poly-component__link--action-link" href="'+jbl+'">Ir para produto</a>'+
+    '</div><section class="rl-card-recommendations">'+
+    '<a href="https://www.mercadolivre.com.br/outro/p/MLB99999999">Ir para produto</a></section></html>',
+    {headers:{'content-type':'text/html'}});
+  }};
+  assert.equal((await resolveMonitorShortlinks(env,{now:1700000000})).resolved,1);
+  assert.equal(renderCalls,1);
+  const state=await monitorState(env);
+  assert.equal(state.links[0].source_url,jbl);
+  assert.equal(state.links[0].last_seen_price_cents,10500);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
