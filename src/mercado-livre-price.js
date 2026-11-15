@@ -207,3 +207,69 @@ export async function fetchMercadoLivrePublicPrice(sourceUrl,fetcher=fetch){
  }
  return null;
 }
+
+// A vitrine /social é uma página oficial do ML. Aceitar SOMENTE o cartão
+// destacado com o mesmo MLB/MLBU do anúncio já confirmado. Nunca ler preços
+// da lista de recomendações abaixo dele.
+export function extractFeaturedShowcasePrice(html,expectedProductId){
+ if(typeof html!=='string'||html.length>5500000||
+  !/^MLBU?\d{6,}$/.test(String(expectedProductId||'')))return null;
+ const start=html.search(/<(?:div|section)\b[^>]{0,1200}class=["'][^"']*\brl-card-featured-wrapper\b[^"']*["'][^>]*>/i);
+ if(start<0)return null;
+ let scope=html.slice(start,start+180000);
+ const boundary=scope.search(/rl-card-recommendations|affiliate-profile-recommendations|Quem viu este produto tamb/i);
+ if(boundary>=0)scope=scope.slice(0,boundary);
+ const ids=new Set();
+ for(const tag of scope.match(/<a\b[^>]{0,6500}>/gi)||[]){
+  if(!/\bpoly-component__title\b/i.test(attr(tag,'class')||''))continue;
+  let path;try{const u=new URL((attr(tag,'href')||'').replace(/&amp;/gi,'&'));
+   if(!ALLOWED_HOSTS.has(u.hostname.toLowerCase()))continue;
+   path=u.pathname;
+  }catch{continue;}
+  const id=productId(path);
+  if(id)ids.add(id);
+ }
+ if(ids.size!==1||!ids.has(expectedProductId))return null;
+ const begin=scope.search(/<div\b[^>]*class=["'][^"']*\bpoly-component__price\b[^"']*["'][^>]*>/i);
+ if(begin<0)return null;
+ const block=scope.slice(begin,begin+9000);
+ const current=block.indexOf('poly-price__current');
+ if(current<0)return null;
+ const parseAmount=fragment=>{
+  if(!fragment.includes('andes-money-amount__currency-symbol')||!fragment.includes('R$'))return null;
+  const fraction=fragment.match(/andes-money-amount__fraction[^>]*>\s*([\d.]+)\s*</i)?.[1];
+  if(!fraction)return null;
+  const cents=fragment.match(/andes-money-amount__cents(?:\s|["'][^>]*|--[^>]*)>\s*(\d{1,2})\s*</i)?.[1]||'00';
+  const whole=fraction.replace(/\./g,'');
+  return /^\d{1,6}$/.test(whole)?parseSiteMoney(Number(whole+'.'+cents.padStart(2,'0'))):null;
+ };
+ const currentChunk=block.slice(current,current+1400);
+ const price=parseAmount(currentChunk);
+ if(!price)return null;
+ const oldAt=block.search(/<s\b[^>]*class=["'][^"']*\bpoly-price__previous\b/i);
+ const old=oldAt>=0&&oldAt<current?parseAmount(block.slice(oldAt,oldAt+850)):null;
+ const discount=block.slice(current,current+1900);
+ const pixOnly=/\bOFF\s+no\s+Pix\b|(?:somente|apenas)\s+(?:no\s+)?Pix/i.test(discount.replace(/<[^>]*>/g,' '));
+ let installments=null,installment_cents=null,card_price_cents=null,installments_no_interest=false;
+ const instAt=block.indexOf('poly-price__installments');
+ if(instAt>=0){
+  const inst=block.slice(instAt,instAt+4200);
+  const plain=inst.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ');
+  const count=Number(plain.match(/\b(\d{1,2})\s*x\b/i)?.[1]);
+  if(Number.isInteger(count)&&count>=2&&count<=24){
+   const tags=[...inst.matchAll(/<span\b[^>]*class=["'][^"']*andes-money-amount[^"']*\bpolylabel-price\b[^"']*["'][^>]*>/gi)];
+   const amounts=tags.slice(0,3).map(x=>parseAmount(inst.slice(x.index,x.index+750))).filter(Boolean);
+   const part=amounts.length>=2?amounts[1]:amounts[0]||null;
+   if(part){
+    installments=count;
+    installment_cents=part;
+    installments_no_interest=/\bsem\s+juros\b/i.test(plain);
+    if(pixOnly&&amounts.length>=2&&amounts[0]>price)
+     card_price_cents=amounts[0];
+   }
+  }
+ }
+ return {price_cents:price,old_price_cents:old&&old>price?old:null,
+  payment_mode:pixOnly?'pix_only':'unspecified',installments,installment_cents,
+  installments_no_interest,card_price_cents,source:'vitrine oficial do produto principal'};
+}
