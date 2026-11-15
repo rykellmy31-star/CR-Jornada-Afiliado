@@ -67,6 +67,34 @@ async function getBody(req) {
   if (text.length > 20_000) throw new Error('Requisição grande demais.');
   try { return JSON.parse(text); } catch { throw new Error('JSON inválido.'); }
 }
+// A Evolution pode incluir a imagem codificada em base64 no evento, mesmo
+// quando só precisamos da legenda. Limite por bytes e leitura incremental
+// impedem rejeitar fotos comuns sem permitir payload ilimitado.
+async function getMonitorWebhookBody(req) {
+  const limit=8*1024*1024;
+  const declared=Number(req.headers.get('content-length')||0);
+  if(!Number.isFinite(declared)||declared>limit)
+    throw Object.assign(new Error('Evento de mídia muito grande.'),{status:413});
+  const reader=req.body?.getReader();
+  if(!reader)throw Object.assign(new Error('Evento vazio.'),{status:400});
+  const chunks=[];let bytes=0;
+  try {
+    for(;;){
+      const {done,value}=await reader.read();
+      if(done)break;
+      bytes+=value.byteLength;
+      if(bytes>limit){
+        await reader.cancel();
+        throw Object.assign(new Error('Evento de mídia muito grande.'),{status:413});
+      }
+      chunks.push(value);
+    }
+  }finally{reader.releaseLock();}
+  const data=new Uint8Array(bytes);let offset=0;
+  for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.byteLength;}
+  try{return JSON.parse(new TextDecoder().decode(data));}
+  catch{throw Object.assign(new Error('JSON inválido.'),{status:400});}
+}
 async function log(env, event, detail = '', offerId = null) {
   await env.DB.prepare('INSERT INTO logs (offer_id,event,detail,created_at) VALUES (?,?,?,?)')
     .bind(offerId, event, String(detail).slice(0, 400), Math.floor(Date.now() / 1000)).run();
@@ -210,8 +238,7 @@ async function router(request, env) {
     if(typeof env.MONITOR_WEBHOOK_TOKEN!=='string'||env.MONITOR_WEBHOOK_TOKEN.length<24||
       !await secureEqual(receiver[1],env.MONITOR_WEBHOOK_TOKEN))return fail('Não encontrado.',404);
     if(!request.headers.get('content-type')?.startsWith('application/json'))return fail('Envie JSON.',415);
-    if(Number(request.headers.get('content-length')||0)>20000)return fail('Conteúdo muito extenso.',413);
-    const event=await getBody(request);
+    const event=await getMonitorWebhookBody(request);
     return json(await ingestMonitorEvent(env,event));
   }
   if (!u.pathname.startsWith('/api/')) return fail('Não encontrado.', 404);
