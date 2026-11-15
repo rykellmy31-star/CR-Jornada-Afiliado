@@ -59,8 +59,8 @@ function detailsFromOffer(offer,product){
  const oldCandidates=[];
  for(const spec of specs){
   if(spec.priceCurrency&&String(spec.priceCurrency).toUpperCase()!=='BRL')continue;
-  if(!/^(?:https?:\\/\\/schema\\.org\\/)?(?:strikethroughprice|listprice|regularprice|originalprice|wasprice)$/i
-   .test(String(spec.priceType||'')))continue;
+  const kind=String(spec.priceType||'').split('/').at(-1).toLowerCase();
+  if(!['strikethroughprice','listprice','regularprice','originalprice','wasprice'].includes(kind))continue;
   const previous=parseSiteMoney(spec.price);
   if(previous&&previous>current)oldCandidates.push(previous);
  }

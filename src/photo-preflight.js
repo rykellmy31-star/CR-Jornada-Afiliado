@@ -1,6 +1,7 @@
 // Mesmo resolvedor de fotos do botão manual, antes do disparo do Cron.
 import {findProductImage} from './images.js';
 import {getPrimaryCategory} from './multichannel.js';
+import {prepareAutomaticOfferPrice} from './automatic-price.js';
 import {cachedProductImage,resolveProductImageWithRetry} from './offer-images.js';
 const TABLE="CREATE TABLE IF NOT EXISTS affiliate_photo_preflight (affiliate_url TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0)";
 const REVIEW='Foto real indisponível após seis tentativas automáticas. Nenhum texto foi enviado.';
@@ -14,6 +15,13 @@ export async function prewarmTelegramQueue(env){
   .bind(REVIEW,category,category).all();
  for(const item of rows.results||[]){
   try{
+   // Antes de buscar a imagem, identifica o anúncio original e consulta seu preço.
+   try{
+    const price=await prepareAutomaticOfferPrice(env,{affiliate_url:item.affiliate_url},{requireSite:true});
+    if(!price.ok&&item.status==='ready')
+      await env.DB.prepare("UPDATE offers SET last_error=? WHERE id=? AND status='ready' AND (last_error IS NULL OR last_error LIKE 'Aguardando preço%')")
+       .bind('Aguardando preço atualizado no Mercado Livre: '+price.reason,item.id).run();
+   }catch(error){console.warn('Preparação do preço:',String(error?.message||error).slice(0,100));}
    if(await cachedProductImage(env,item.affiliate_url))continue;
    const now=Math.floor(Date.now()/1000);
    await env.DB.prepare('INSERT OR IGNORE INTO affiliate_photo_preflight(affiliate_url) VALUES(?)').bind(item.affiliate_url).run();
@@ -21,7 +29,7 @@ export async function prewarmTelegramQueue(env){
     .bind(now+120,item.affiliate_url,now).run();
    if(slot.meta?.changes!==1)continue;
    const photo=await resolveProductImageWithRetry(env,item.affiliate_url,findProductImage,{retryOnMiss:true});
-   if(!photo)return {status:'photo_pending',offer_id:item.id};
+   if(!photo)continue;
    await env.DB.prepare('DELETE FROM affiliate_photo_preflight WHERE affiliate_url=?').bind(item.affiliate_url).run();
    try{await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(item.id).run();}catch{}
    if(item.status==='ready')await env.DB.prepare("UPDATE offers SET last_error=NULL WHERE id=? AND status='ready' AND last_error LIKE 'Aguardando foto%'").bind(item.id).run();

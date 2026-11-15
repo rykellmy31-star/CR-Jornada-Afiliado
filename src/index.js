@@ -224,30 +224,14 @@ async function sendOfferWithImage(env, chat, offer, {requirePhoto=false}={}) {
   return { message, format: imageUrl ? 'text_photo_rejected' : 'text_no_image' };
 }
 
-async function sendOffer(env, offer, settings, {automatic=false}={}) {
+async function sendOffer(env, offer, settings, {requirePhoto=false}={}) {
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
-  let prepared=offer;
-  if(automatic){
-    const price=await prepareAutomaticOfferPrice(env,offer);
-    if(!price.ok){
-      const retry=await recordAutomaticPriceRetry(env,'telegram',offer.id,price.reason);
-      await log(env,'awaiting_price','Aguardando preço verificável no anúncio: '+price.reason,offer.id);
-      return retry;
-    }
-    prepared=price.offer;
-    if(price.price_source==='mercadolivre'){
-      await env.DB.prepare(
-        "UPDATE offers SET price_cents=?,old_price_cents=NULL,promo_terms_json=?,promo_captured_at=? WHERE id=? AND status='ready'"
-      ).bind(prepared.price_cents,prepared.promo_terms_json,prepared.promo_captured_at,offer.id).run();
-    }
-    await clearAutomaticPriceRetry(env,'telegram',offer.id);
-  }
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
   try {
-    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, prepared,{requirePhoto:automatic});
+    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer,{requirePhoto});
     const timestamp = Math.floor(Date.now() / 1000);
     const localDay = localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE offers SET status='published', published_at=?, published_day=?, telegram_message_id=? WHERE id=? AND status='sending'")
@@ -258,7 +242,7 @@ async function sendOffer(env, offer, settings, {automatic=false}={}) {
   } catch (error) {
     // Ausência/recusa EXPLÍCITA de foto é segura para tentar novamente:
     // nenhuma publicação foi confirmada. Falha ambígua continua em revisão.
-    if(automatic && error?.code==='PHOTO_NOT_READY'){
+    if(requirePhoto && error?.code==='PHOTO_NOT_READY'){
       const retry=await recordTelegramPhotoRetry(env,offer,error);
       await log(env,retry.status,'Telegram aguardando foto real do produto • tentativa '+retry.attempts,offer.id);
       return retry;
@@ -295,7 +279,21 @@ async function runScheduled(env) {
    " AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC, o.id ASC LIMIT 1"
   ).bind(PHOTO_RETRY_LIMIT,Math.floor(Date.now()/1000),Math.floor(Date.now()/1000),settings.category,settings.category).first();
   if (!offer) return;
-  const result=await sendOffer(env,offer,effective,{automatic:true});
+  // Prepara o preço do site, depois chama o MESMO publicador usado pelo botão manual.
+  const quote=await prepareAutomaticOfferPrice(env,offer,{requireSite:true});
+  if(!quote.ok){
+    const retry=await recordAutomaticPriceRetry(env,'telegram',offer.id,quote.reason);
+    await env.DB.prepare("UPDATE offers SET last_error=? WHERE id=? AND status='ready'")
+      .bind('Aguardando preço atualizado no Mercado Livre: '+quote.reason,offer.id).run();
+    await log(env,'awaiting_price','Preço do site indisponível: '+quote.reason,offer.id);
+    return retry;
+  }
+  const prepared=quote.offer;
+  await env.DB.prepare(
+    "UPDATE offers SET price_cents=?,old_price_cents=?,promo_terms_json=?,promo_captured_at=?,last_error=NULL WHERE id=? AND status='ready'"
+  ).bind(prepared.price_cents,prepared.old_price_cents,prepared.promo_terms_json,prepared.promo_captured_at,offer.id).run();
+  await clearAutomaticPriceRetry(env,'telegram',offer.id);
+  const result=await sendOffer(env,prepared,effective,{requirePhoto:true});
   if(result?.status==='published'){
     try{
       const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
