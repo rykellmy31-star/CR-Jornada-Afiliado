@@ -2,7 +2,7 @@ import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
-import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,resolveOfferSource} from './automatic-price.js';
 import { categoryMatches,normalizeChannelCategory } from './multichannel.js';
 import { listWhatsAppGroups,connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,evolutionOrigin,ensureWhatsAppTables } from './whatsapp.js';
 
