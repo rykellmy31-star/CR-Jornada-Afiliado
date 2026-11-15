@@ -336,7 +336,8 @@ export async function requeueChannelOffer(env,id,offerId){
   const res=await env.DB.prepare("UPDATE channel_offers SET status='ready',last_error=NULL WHERE id=? AND channel_id=? AND status='needs_review'")
     .bind(Number(offerId),c.id).run();
   if(res.meta?.changes!==1)throw bad('Somente ofertas em revisão podem ser reenfileiradas.',409);
-  await log(env,c.id,'manual_requeue','Reenfileiramento após conferência.',Number(offerId));
+  await env.DB.prepare('DELETE FROM telegram_channel_photo_retries WHERE offer_id=?').bind(Number(offerId)).run();
+  await log(env,c.id,'manual_requeue','Tentativas de foto reiniciadas após conferência.',Number(offerId));
   return {ok:true};
 }
 async function sendOfferWithImage(env,token,chat,offer){
