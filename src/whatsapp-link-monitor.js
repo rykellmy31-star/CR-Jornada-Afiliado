@@ -40,7 +40,7 @@ function extractMessageText(message,entry=null){
  const nested=['message','ephemeralMessage','viewOnceMessage','viewOnceMessageV2',
   'viewOnceMessageV2Extension','documentWithCaptionMessage','editedMessage','imageMessage',
   'videoMessage','documentMessage','extendedTextMessage','buttonsResponseMessage',
-  'interactiveMessage','textMessage','mediaMessage','content','messageContent','captionMessage'];
+  'interactiveMessage','textMessage','mediaMessage','content','body','messageContent','captionMessage'];
  let format='outro',nodeCount=0;
  function walk(node,label,depth){
   if(depth>7||nodeCount++>80||!node||typeof node!=='object'||Array.isArray(node)||visited.has(node))return;
@@ -54,7 +54,7 @@ function extractMessageText(message,entry=null){
   }
   for(const field of nested){
    const child=node[field],label2=['message','content','messageContent'].includes(field)?label:field;
-   if(field==='content'&&typeof child==='string'&&child.trim()&&!seen.has(child)){
+   if((field==='content'||field==='message')&&typeof child==='string'&&child.trim()&&!seen.has(child)){
     seen.add(child);values.push(child.slice(0,8000));if(format==='outro')format='content';
    }else if(child&&typeof child==='object')walk(child,label2,depth+1);
   }
