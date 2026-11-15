@@ -813,11 +813,28 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  const state=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
  if(!state?.enabled)return {skipped:'disabled'};
  const at=Number.isSafeInteger(now)&&now>0?now:epoch();
+ // Uma pulsação por cron. Se a data parar de avançar, o painel denuncia
+ // claramente que o Worker não está rodando em vez de dizer "em revisão".
+ await env.DB.prepare('UPDATE ml_monitor_worker_heartbeat SET last_run_at=? WHERE id=1').bind(at).run();
+ let ignoredFromBacklog=0;
+ // Recupera os cupons antigos parados em "revisão manual". Não exclui URL
+ // externa genérica nem ofertas que apenas anunciam desconto com cupom.
+ const oldCouponReviews=(await env.DB.prepare(
+  "SELECT s.id,s.group_id,s.short_url,s.message_hint,s.reason FROM ml_monitor_shortlinks s "+
+  "JOIN ml_monitor_groups g ON g.id=s.group_id WHERE g.authorized=1 "+
+  "AND s.status='review' AND s.reason LIKE 'Redirecionamento para domínio não verificado%' "+
+  "AND s.message_hint LIKE '%cupom%' ORDER BY s.id LIMIT 80"
+ ).all()).results;
+ for(const item of oldCouponReviews){
+  if(!couponOnlyAnnouncement(item.message_hint))continue;
+  try{await ignoreMonitorCoupon(env,item,at,'Aviso exclusivo de cupom com destino externo; ignorado para não bloquear ofertas');ignoredFromBacklog++;}
+  catch(error){console.warn('Cupom antigo não pôde ser isolado:',String(error?.message||error).slice(0,90));}
+ }
  const query=
   "SELECT s.*,g.instance_name,g.group_jid,rs.next_retry_at,rs.lease_until,rs.auto_attempts "+
   "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
   "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
-  // Pausar grupo impede novas capturas, mas não interrompe a verificação de links já recebidos.
+  // Uma pausa no grupo bloqueia apenas captação nova; autorização continua.
   "WHERE g.authorized=1 "+
   "AND (s.status='pending' OR (s.status='review' AND ("+
   "s.reason IS NULL OR s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR ("+
@@ -825,65 +842,97 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   "s.reason NOT LIKE 'Redirecionamento circular%' AND "+
   "s.reason NOT LIKE 'Produto associado por confirmação manual%')))) "+
   "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? "+
+  // Não permitir que os links mais recentes e os retries ruins deixem os
+  // antigos permanentemente para trás. Toda linha recebe seu próprio lease.
   "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END, "+
-  "COALESCE(rs.next_retry_at,0),s.created_at DESC LIMIT 5";
+  "COALESCE(rs.next_retry_at,0),s.created_at ASC,s.id ASC LIMIT 6";
  const items=(await env.DB.prepare(query).bind(at,at).all()).results;
- let resolved=0,reviewed=0,browserBudget=1;
- for(const item of items){
-  // Primeiro seleciona/garante uma linha de controle para a URL.
-  const created=await env.DB.prepare(
-   "INSERT OR IGNORE INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) "+
-   "VALUES(?,0,0,0,?)"
-  ).bind(item.id,at+120).run();
-  if(created.meta?.changes!==1){
-   const claimed=await env.DB.prepare(
-    "UPDATE ml_monitor_retry_schedule SET lease_until=? "+
-    "WHERE shortlink_id=? AND next_retry_at<=? AND lease_until<=?"
-   ).bind(at+120,item.id,at,at).run();
-   if(claimed.meta?.changes!==1)continue;
-  }
-  let result;
-  try{result=await inspectMonitorShortlink(item.short_url,{fetcher});}
-  catch{result={product:null,kind:'temporary',reason:'Falha temporária ao verificar o produto'};}
-  // A vitrine renderiza o botão via React: tentar navegador verdadeiro somente
-  // nos primeiros testes e após algum tempo, nunca a cada repetição de 30s.
-  const tries=Number(item.auto_attempts||0);
-  if(!result.product&&result.social_url&&
-     ['showcase','auth'].includes(result.kind)&&browserBudget>0&&
-     (tries===0||tries===8||tries===16)&&
-     await claimSocialBrowserBudget(env,at)){
-    browserBudget--;
-    const rendered=await browserFeaturedProduct(env,result.social_url);
-    if(rendered)result={product:rendered,kind:'featured_product',reason:null};
-  }
-  if(result.product){
-   try{
-    await saveProduct(env,{group_id:item.group_id,message_id:item.message_id,hint:item.message_hint},result.product);
-    const updated=await env.DB.prepare(
-     "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL "+
-     "WHERE id=? AND status IN ('pending','review')"
-    ).bind(item.id).run();
-    await env.DB.prepare("DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?").bind(item.id).run();
-    if(updated.meta?.changes===1)resolved++;
-    continue;
-   }catch{
-    result={product:null,kind:'temporary',reason:'Erro temporário ao salvar produto verificado'};
+ let browserBudget=1;
+ const outcomes=await Promise.allSettled(items.map(async item=>{
+  let claimed=false;
+  try{
+   const created=await env.DB.prepare(
+    "INSERT OR IGNORE INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) "+
+    "VALUES(?,0,0,0,?)"
+   ).bind(item.id,at+90).run();
+   if(created.meta?.changes===1)claimed=true;
+   else{
+    const row=await env.DB.prepare(
+     "UPDATE ml_monitor_retry_schedule SET lease_until=? "+
+     "WHERE shortlink_id=? AND next_retry_at<=? AND lease_until<=?"
+    ).bind(at+90,item.id,at,at).run();
+    claimed=row.meta?.changes===1;
    }
+   if(!claimed)return {resolved:0,reviewed:0,ignored:0};
+   let result;
+   try{result=await inspectMonitorShortlink(item.short_url,{fetcher});}
+   catch{result={product:null,kind:'temporary',reason:'Erro temporário consultando anúncio'};}
+   const tries=Number(item.auto_attempts||0);
+   // No máximo um Browser Run por pulsação. A quota diária permanece em D1.
+   const shouldBrowser=!result.product&&result.social_url&&
+    ['showcase','auth'].includes(result.kind)&&(tries===0||tries===8||tries===16);
+   if(shouldBrowser&&browserBudget>0){
+    browserBudget=0; // reservar antes do await, evitando concorrência
+    if(await claimSocialBrowserBudget(env,at)){
+     const rendered=await browserFeaturedProduct(env,result.social_url);
+     if(rendered)result={product:rendered,kind:'featured_product',reason:null};
+    }
+   }
+   if(result.product){
+    try{
+     await saveProduct(env,{group_id:item.group_id,message_id:item.message_id,hint:item.message_hint},result.product);
+     const updated=await env.DB.prepare(
+      "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL "+
+      "WHERE id=? AND status IN ('pending','review')"
+     ).bind(item.id).run();
+     await env.DB.prepare('DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?').bind(item.id).run();
+     return {resolved:updated.meta?.changes===1?1:0,reviewed:0,ignored:0};
+    }catch{
+     result={product:null,kind:'temporary',reason:'Erro temporário ao salvar o produto confirmado'};
+    }
+   }
+   // Descartar somente quando o destino É uma página de cupom, ou quando
+   // a mensagem é explicitamente só um anúncio de cupom sem item anunciado.
+   if(result.kind==='coupon'||couponOnlyAnnouncement(item.message_hint)){
+    await ignoreMonitorCoupon(env,item,at,result.kind==='coupon'
+     ?'Destino confirmado como página de cupons, não anúncio de produto'
+     :'Mensagem exclusiva de cupom sem produto individual confirmado');
+    return {resolved:0,reviewed:0,ignored:1};
+   }
+   // As demais falhas não viram produto; são reavaliadas com backoff.
+   const retryable=!['external','loop'].includes(result.kind);
+   const attempts=tries+1;
+   const delay=retryable?monitorRetryDelaySeconds(attempts):86400;
+   await env.DB.prepare(
+    "UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason=? "+
+    "WHERE id=? AND status IN ('pending','review')"
+   ).bind(result.reason||'Destino não verificável automaticamente',item.id).run();
+   await env.DB.prepare(
+    "UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 "+
+    "WHERE shortlink_id=?"
+   ).bind(at,at+delay,item.id).run();
+   return {resolved:0,reviewed:1,ignored:0};
+  }catch(error){
+   // Falhar em um item não deve abortar os outros 5 nem manter seu lease preso.
+   console.warn('Falha isolada na revisão do link',item.id,String(error?.message||error).slice(0,100));
+   if(claimed)try{
+    await env.DB.prepare(
+     "UPDATE ml_monitor_retry_schedule SET lease_until=0,next_retry_at=? "+
+     "WHERE shortlink_id=?"
+    ).bind(at+60,item.id).run();
+   }catch{}
+   return {resolved:0,reviewed:0,ignored:0};
   }
-  // Continua sem revisão humana nas falhas recuperáveis. Um site externo
-  // nunca é promovido a produto válido.
-  const retryable=!['external','loop'].includes(result.kind);
-  const attempts=Number(item.auto_attempts||0)+1;
-  const delay=retryable?monitorRetryDelaySeconds(attempts):86400;
-  await env.DB.prepare(
-   "UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason=? "+
-   "WHERE id=? AND status IN ('pending','review')"
-  ).bind(result.reason||'Destino não verificável automaticamente',item.id).run();
-  await env.DB.prepare(
-   "UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 "+
-   "WHERE shortlink_id=?"
-  ).bind(at,at+delay,item.id).run();
-  reviewed++;
+ }));
+ const totals={resolved:0,reviewed:0,ignored:ignoredFromBacklog};
+ for(const o of outcomes){
+  if(o.status!=='fulfilled')continue;
+  totals.resolved+=o.value.resolved||0;
+  totals.reviewed+=o.value.reviewed||0;
+  totals.ignored+=o.value.ignored||0;
  }
- return {resolved,reviewed};
+ await env.DB.prepare(
+  'UPDATE ml_monitor_worker_heartbeat SET last_run_at=?,last_reviewed=?,last_resolved=?,last_ignored=? WHERE id=1'
+ ).bind(at,totals.reviewed,totals.resolved,totals.ignored).run();
+ return {resolved:totals.resolved,reviewed:totals.reviewed};
 }
