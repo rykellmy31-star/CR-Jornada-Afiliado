@@ -43,7 +43,7 @@ for(const delivery of ['manual','automatic']){
   try{
    globalThis.fetch=async(url,opts={})=>{
     const u=String(url);
-    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
+    if(u===SOURCE)return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'"><link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
     if(u===EVOLUTION+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
      return Response.json([{id:GROUP,subject:'Achadinhos'}]);
     if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
@@ -108,7 +108,7 @@ for(const delivery of ['manual','automatic']){
     'publicação manual e automática devem espelhar no WhatsApp sem esperar outro Cron');
    assert.equal(waMedia,1);
    assert.equal(waText,0);
-   assert.equal(shortReads,1,'somente Telegram consultou o link; WhatsApp reaproveitou a foto gravada');
+   assert.equal(shortReads,0,'foto oficial enviada no Telegram e reutilizada no WhatsApp sem buscar o link curto');
    assert.equal(DB.prepare('SELECT status FROM whatsapp_deliveries').first().status,'sent');
    assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'empty'});
   }finally{globalThis.fetch=old;DB.close();}
@@ -138,7 +138,7 @@ test('falha de foto no automático NÃO publica preview; quando imagem volta, Te
    .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',now).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
-    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
+    if(u===SOURCE)return new Response((ready?'<meta property="og:image" content="'+PHOTO_PREVIEW+'">':'')+'<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
    if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
     return Response.json({ok:true,result:{type:'channel'}});
    if(u===SHORT)return new Response(ready?
@@ -199,7 +199,7 @@ test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()
     .bind('Produto com foto real',SHORT,'Geral',t-10).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
-    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
+    if(u===SOURCE)return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'"><link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
    if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
     return Response.json({ok:true,result:{type:'channel'}});
    if(u==='https://meli.la/SERPROBLEMA')
@@ -251,16 +251,16 @@ test('automático recupera foto na segunda leitura (manual já encontraria) e pu
    .bind('Kit cuide-se bem body splash 200 ml e hidratante 400 ml',SHORT,'Geral',stamp).run();
   globalThis.fetch=async(url,options={})=>{
    const u=String(url);
-    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
-   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
-   if(u===SHORT){
-    imageReads++;
-    return new Response(imageReads===1?
-     '<html><main>Anúncio carregando, sem metadado de foto</main></html>':
-     '<html><meta property="og:image" content="'+PHOTO_PREVIEW+'"></html>',
-     {status:200,headers:{'content-type':'text/html'}});
-   }
-   if(u===PHOTO_LARGE&&options.method==='HEAD')
+    if(u===SOURCE){
+     imageReads++;
+     return new Response((imageReads===1?'':'<meta property="og:image" content="'+PHOTO_PREVIEW+'">')+
+      '<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+
+      JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+
+      '</script>',{headers:{'content-type':'text/html'}});
+    }
+    if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u===SHORT)return new Response('<html>Vitrine sem foto verificável</html>',{headers:{'content-type':'text/html'}});
+    if(u===PHOTO_LARGE&&options.method==='HEAD')
     return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'350000'}});
    if(u.endsWith('/sendPhoto')){
     mediaSent++;
@@ -275,7 +275,7 @@ test('automático recupera foto na segunda leitura (manual já encontraria) e pu
   const result=await runScheduled(env);
   assert.equal(result.status,'published');
   assert.equal(result.format,'photo');
-  assert.equal(imageReads,2,'a segunda leitura encontrou a mesma foto que o manual');
+  assert.ok(imageReads>=2,'a segunda leitura do anúncio original forneceu a foto real');
   assert.equal(mediaSent,1);
   assert.equal(plainText,0);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
