@@ -11,7 +11,9 @@ const SCHEMA=[
  // Complementar e compatível com lotes existentes: o CHECK legado não
  // permite adicionar 'ineligible' à coluna status de ml_link_batch_items.
  "CREATE TABLE IF NOT EXISTS ml_link_batch_ineligible(item_id INTEGER PRIMARY KEY REFERENCES ml_link_batch_items(id),batch_id INTEGER NOT NULL REFERENCES ml_link_batches(id),reason TEXT NOT NULL,created_at INTEGER NOT NULL)",
- "CREATE INDEX IF NOT EXISTS idx_ml_link_batch_ineligible_batch ON ml_link_batch_ineligible(batch_id)"
+ "CREATE INDEX IF NOT EXISTS idx_ml_link_batch_ineligible_batch ON ml_link_batch_ineligible(batch_id)",
+ "CREATE TABLE IF NOT EXISTS ml_link_batch_duplicates(item_id INTEGER PRIMARY KEY REFERENCES ml_link_batch_items(id),batch_id INTEGER NOT NULL REFERENCES ml_link_batches(id),affiliate_url TEXT NOT NULL,existing_queues TEXT NOT NULL,created_at INTEGER NOT NULL)",
+ "CREATE INDEX IF NOT EXISTS idx_ml_link_batch_duplicates_batch ON ml_link_batch_duplicates(batch_id)"
 ];
 const now=()=>Math.floor(Date.now()/1000);
 const bad=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -78,9 +80,11 @@ export async function readLinkBatch(env,id){
  if(!batch)throw bad('Lote não encontrado.',404);
  const result=await env.DB.prepare(
   "SELECT i.id,i.position,i.title,i.source_url,i.category,i.classification,i.affiliate_url,i.offer_id,"+
-  "CASE WHEN skipped.item_id IS NOT NULL THEN 'ineligible' ELSE i.status END AS status,"+
-  "skipped.reason AS ineligible_reason "+
+  "CASE WHEN skipped.item_id IS NOT NULL THEN 'ineligible' "+
+  "WHEN dup.item_id IS NOT NULL THEN 'duplicate' ELSE i.status END AS status,"+
+  "skipped.reason AS ineligible_reason,dup.existing_queues AS duplicate_queues,dup.affiliate_url AS duplicate_url "+
   "FROM ml_link_batch_items i LEFT JOIN ml_link_batch_ineligible skipped ON skipped.item_id=i.id "+
+  "LEFT JOIN ml_link_batch_duplicates dup ON dup.item_id=i.id "+
   "WHERE i.batch_id=? ORDER BY i.position"
  ).bind(n).all();
  return {batch,items:result.results};
@@ -120,6 +124,47 @@ export function validatePairs(items,links){
    throw bad('Este lote não possui links convertidos válidos.');
  return result;
 }
+// Detectar duplicidade pelo link de afiliado idêntico, sem supor equivalência
+// entre ofertas de produtos diferentes. A identificação mantém a ordem.
+async function registeredLinkDestinations(env,links){
+ const urls=[...new Set(links)];
+ if(!urls.length)return new Map();
+ const qs=urls.map(()=>'?').join(',');
+ const tables=[
+  ['offers','Telegram principal'],
+  ['channel_offers','Telegram multicanal'],
+  ['whatsapp_direct_offers','WhatsApp']
+ ];
+ const found=await Promise.all(tables.map(async([table,destination])=>({
+  destination,
+  rows:(await env.DB.prepare('SELECT affiliate_url FROM '+table+' WHERE affiliate_url IN ('+qs+')').bind(...urls).all()).results
+ })));
+ const map=new Map();
+ for(const collection of found)for(const row of collection.rows){
+  const queues=map.get(row.affiliate_url)||[];
+  if(!queues.includes(collection.destination))queues.push(collection.destination);
+  map.set(row.affiliate_url,queues);
+ }
+ return map;
+}
+export async function previewLinkBatchDuplicates(env,id,body){
+ const data=await readLinkBatch(env,id);
+ if(data.batch.status!=='awaiting_links')throw bad('Este lote já foi importado.',409);
+ const pairs=validatePairs(data.items,body?.links);
+ await ensureAutomationCenter(env);
+ await ensureWhatsAppTables(env);
+ await getPrimaryCategory(env);
+ const eligible=pairs.filter(x=>!x.ineligible);
+ const registered=await registeredLinkDestinations(env,eligible.map(x=>x.affiliate_url));
+ const duplicates=eligible.filter(x=>registered.has(x.affiliate_url)).map(x=>({
+  position:x.source.position,title:x.source.title,affiliate_url:x.affiliate_url,
+  queues:registered.get(x.affiliate_url)
+ }));
+ return {ok:true,batch_id:Number(id),total:pairs.length,
+  new_count:eligible.length-duplicates.length,
+  duplicate_count:duplicates.length,
+  ineligible_count:pairs.length-eligible.length,duplicates};
+}
 export async function importLinkBatch(env,id,body){
  const data=await readLinkBatch(env,id);
  if(data.batch.status!=='awaiting_links')throw bad('Este lote já foi importado.',409);
@@ -129,25 +174,21 @@ export async function importLinkBatch(env,id,body){
  await ensureAutomationCenter(env);
  const cats=(await env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1').all()).results;
  const skipped=pairs.filter(x=>x.ineligible);
- const chosen=pairs.filter(x=>!x.ineligible).map(x=>{
+ const eligible=pairs.filter(x=>!x.ineligible);
+ await ensureWhatsAppTables(env);
+ const allowed=await getPrimaryCategory(env);
+ const registered=await registeredLinkDestinations(env,eligible.map(x=>x.affiliate_url));
+ // Ignora somente links que já existem numa fila, sem duplicar publicação.
+ const duplicates=eligible.filter(x=>registered.has(x.affiliate_url));
+ const chosen=eligible.filter(x=>!registered.has(x.affiliate_url)).map(x=>{
    const i=x.source.position-1;
    const c=String(body.links[i].category||x.source.category||'').trim();
    if(c!=='Geral'&&!cats.some(y=>y.name.toLocaleLowerCase('pt-BR')===c.toLocaleLowerCase('pt-BR')))
      throw bad('Categoria não cadastrada na linha '+(i+1)+'.');
    return {...x,category:c||'Geral'};
  });
- await ensureWhatsAppTables(env);
- const allowed=await getPrimaryCategory(env);
  if(chosen.some(x=>!categoryMatches(x.category,allowed)))
    throw bad('Seu canal principal aceita somente '+allowed+'. Ajuste a categoria do canal ou do lote.');
- const urls=chosen.map(x=>x.affiliate_url),qs=urls.map(()=>'?').join(',');
- const queries=[
-   'SELECT affiliate_url FROM offers WHERE affiliate_url IN ('+qs+')',
-   'SELECT affiliate_url FROM channel_offers WHERE affiliate_url IN ('+qs+')',
-   'SELECT affiliate_url FROM whatsapp_direct_offers WHERE affiliate_url IN ('+qs+')'
- ];
- const duplicates=await Promise.all(queries.map(sql=>env.DB.prepare(sql).bind(...urls).all()));
- if(duplicates.some(r=>r.results.length))throw bad('Um dos links já está cadastrado em outra fila. Revise antes de continuar.',409);
  const t=now(),ops=[],sourceDeals=new Map();
  // Registre os dois avisos em uma operação transacional, sem acrescentar
  // ofertas e sem consumir um link convertido de outra posição.
@@ -155,6 +196,11 @@ export async function importLinkBatch(env,id,body){
    ops.push(env.DB.prepare(
      'INSERT INTO ml_link_batch_ineligible(item_id,batch_id,reason,created_at) VALUES(?,?,?,?)'
    ).bind(item.source.id,Number(id),item.reason,t));
+ }
+ for(const item of duplicates){
+   ops.push(env.DB.prepare(
+     'INSERT INTO ml_link_batch_duplicates(item_id,batch_id,affiliate_url,existing_queues,created_at) VALUES(?,?,?,?,?)'
+   ).bind(item.source.id,Number(id),item.affiliate_url,registered.get(item.affiliate_url).join(', '),t));
  }
  // A janela de sete dias começa ao colocar o produto monitorado na fila.
  // O preço usado na comparação é o que foi registrado ao preparar este lote.
@@ -206,5 +252,11 @@ export async function importLinkBatch(env,id,body){
  for(const x of chosen)try{
    await upsertProductCategory(env,'mercadolivre',{title:x.source.title,affiliate_url:x.affiliate_url,category:x.category});
  }catch(err){console.warn('Classificação pendente:',String(err.message||err).slice(0,100));}
- return {ok:true,batch_id:Number(id),queued:chosen.length,ineligible:skipped.length};
+ return {ok:true,batch_id:Number(id),queued:chosen.length,ineligible:skipped.length,
+  duplicates:duplicates.length,
+  duplicate_items:duplicates.map(x=>({
+   position:x.source.position,title:x.source.title,affiliate_url:x.affiliate_url,
+   queues:registered.get(x.affiliate_url)
+  }))
+ };
 }

@@ -1,7 +1,7 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { overviewState } from './overview.js';
 import {affiliateStoreState,connectAffiliateStore,previewAffiliateLink,createAffiliateShortlink,followAffiliateShortlink} from './affiliate-stores.js';
-import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
+import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLinkBatchDuplicates} from './link-batches.js';
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import { listActivity } from './activity.js';
@@ -456,6 +456,8 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/link-batches'&&method==='POST')return json(await createLinkBatch(env,await getBody(request)),201);
   const singleBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)$/);
   if(singleBatch&&method==='GET')return json(await readLinkBatch(env,singleBatch[1]));
+  const checkBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)\/check$/);
+  if(checkBatch&&method==='POST')return json(await previewLinkBatchDuplicates(env,checkBatch[1],await getBody(request)));
   const importBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)\/import$/);
   if(importBatch&&method==='POST'){
     const result=await importLinkBatch(env,importBatch[1],await getBody(request));
