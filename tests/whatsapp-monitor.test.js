@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 const TOKEN='monitor-test-webhook-token-strong-123456';
@@ -723,13 +723,15 @@ test('meli.la de vitrine /social não é produto, diagnóstico identifica vitrin
   const calls=[];
   globalThis.fetch=async url=>{
    calls.push(String(url));
-   return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)==='https://meli.la/1nATbu7')
+    return new Response(null,{status:302,headers:{location:social}});
+   return new Response('<html><body>Vitrine sem HTML público do destaque</body></html>',{status:200,headers:{'content-type':'text/html'}});
   };
   assert.deepEqual(await resolveMonitorShortlinks(env),{resolved:0,reviewed:1});
-  assert.deepEqual(calls,['https://meli.la/1nATbu7']);
+  assert.deepEqual(calls,['https://meli.la/1nATbu7',social]);
   const short=DB.prepare('SELECT status,reason FROM ml_monitor_shortlinks').first();
   assert.equal(short.status,'review');
-  assert.match(short.reason,/vitrine com vários produtos/);
+  assert.match(short.reason,/Vitrine encontrada, mas o botão do produto principal/);
   assert.equal((await monitorState(env)).counts.captured,0);
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
@@ -791,7 +793,9 @@ test('revisa automaticamente erros genéricos antigos de meli.la uma vez sem apr
 });
 test('inspecionar erro de vitrine ou redirect externo retorna causa em vez de falso sucesso',async()=>{
  const gallery=await inspectMonitorShortlink('https://meli.la/1nATbu7',{
-  fetcher:async()=>new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/social/lojavitrine'}})
+  fetcher:async url=>String(url)==='https://meli.la/1nATbu7'
+   ?new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/social/lojavitrine'}})
+   :new Response('<html>Vitrine sem renderização</html>',{status:200,headers:{'content-type':'text/html'}})
  });
  assert.equal(gallery.kind,'showcase');
  assert.equal(gallery.product,null);
@@ -800,4 +804,65 @@ test('inspecionar erro de vitrine ou redirect externo retorna causa em vez de fa
  });
  assert.equal(outside.kind,'external');
  assert.equal(outside.product,null);
+});
+
+const FEATURED_SOCIAL_URL='https://www.mercadolivre.com.br/social/fabriciotechcombr';
+const FEATURED_PRODUCT_URL='https://www.mercadolivre.com.br/capa-de-cobrir-moto-protetora-sol-chuva-impermeavel-p-m-g/up/MLBU1714113915?pdp_filters=item_id:MLB6593318302';
+const RECOMMENDED_PRODUCT_URL='https://www.mercadolivre.com.br/alto-falante-aleatorio/p/MLB88888888';
+function socialGalleryHtml({withFeatured=true,otherMain=false}={}){
+ return '<!DOCTYPE html><html><body>'+
+  '<div class="rl-card-featured-wrapper"><div data-testid="poly-card">'+
+  '<h2>Capa De Cobrir Moto Protetora Sol Chuva Impermeável P M G Preto G</h2><span>R$ 59,90</span>'+
+  (withFeatured?'<a class="poly-action-links__action--link" href="'+
+   (otherMain?RECOMMENDED_PRODUCT_URL:FEATURED_PRODUCT_URL.replace('&','&amp;'))+'">Ir para produto</a>':'')+
+  '</div></div>'+
+  '<section class="rl-card-recommendations"><h2>Você também pode gostar</h2>'+
+  '<a class="poly-action-links__action--link" href="'+RECOMMENDED_PRODUCT_URL+'">Ir para produto</a></section>'+
+  '</body></html>';
+}
+test('exemplo real meli.la: segue o botão do destaque acima das recomendações',()=>{
+ const found=featuredProductFromHtml(socialGalleryHtml(),FEATURED_SOCIAL_URL);
+ assert.equal(found?.kind,'product');
+ assert.equal(found?.product_id,'MLBU1714113915');
+ assert.equal(found?.url,FEATURED_PRODUCT_URL.split('?')[0]);
+});
+test('vitrine sem botão do destaque não escolhe produtos sugeridos',()=>{
+ assert.equal(featuredProductFromHtml(socialGalleryHtml({withFeatured:false}),FEATURED_SOCIAL_URL),null);
+ assert.equal(featuredProductFromHtml('<a href="'+FEATURED_PRODUCT_URL+'">Ir para produto</a>',FEATURED_SOCIAL_URL),null);
+});
+test('inspeção meli.la > /social > botão Ir para produto identifica apenas produto principal',async()=>{
+ const called=[];
+ const inspected=await inspectMonitorShortlink('https://meli.la/1nATbu7',{
+  fetcher:async url=>{
+   called.push(String(url));
+   if(String(url)==='https://meli.la/1nATbu7')
+    return new Response(null,{status:302,headers:{location:FEATURED_SOCIAL_URL}});
+   if(String(url)===FEATURED_SOCIAL_URL)
+    return new Response(socialGalleryHtml(),{status:200,headers:{'content-type':'text/html; charset=utf-8'}});
+   throw new Error('unexpected '+url);
+  }
+ });
+ assert.deepEqual(called,['https://meli.la/1nATbu7',FEATURED_SOCIAL_URL]);
+ assert.equal(inspected.kind,'featured_product');
+ assert.equal(inspected.product?.product_id,'MLBU1714113915');
+ assert.equal(inspected.product?.url,FEATURED_PRODUCT_URL.split('?')[0]);
+});
+test('link antigo em revisão de vitrine é automaticamente reprocessado para produto principal',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Galeria de Produtos',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Protetor de moto de R$ 135 por R$ 59,90 https://meli.la/1nATbu7'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Link abre uma vitrine com vários produtos, não um anúncio individual',tries=1").run();
+  globalThis.fetch=async url=>String(url)==='https://meli.la/1nATbu7'
+   ?new Response(null,{status:302,headers:{location:FEATURED_SOCIAL_URL}})
+   :new Response(socialGalleryHtml(),{status:200,headers:{'content-type':'text/html'}});
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  const state=await monitorState(env);
+  assert.equal(state.links.length,1);
+  assert.equal(state.links[0].source_url,FEATURED_PRODUCT_URL.split('?')[0]);
+  assert.equal(state.links[0].last_seen_price_cents,5990);
+  assert.equal(state.shortlinks.find(x=>x.status==='resolved')?.total,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
 });
