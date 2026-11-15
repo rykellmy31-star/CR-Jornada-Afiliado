@@ -7,10 +7,17 @@ const api=(token)=>'https://api.telegram.org/bot'+token+'/sendPhoto';
 
 async function readImage(url,fetcher){
  if(!trustedProductImage(url))throw new Error('URL de foto não autorizada.');
- const response=await fetcher(url,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(12000)});
+ const webp=/\.webp(?:\?|$)/i.test(url);
+ // Telegram exige foto exibível. Se a vitrine entregar apenas WebP,
+ // o Worker solicita ao serviço de imagens da Cloudflare o mesmo arquivo em JPEG.
+ const response=await fetcher(url,{
+  method:'GET',redirect:'manual',
+  ...(webp?{cf:{image:{format:'jpeg',fit:'scale-down',width:1200,quality:90}}}:{}),
+  signal:AbortSignal.timeout(12000)
+ });
  if(!response.ok)throw new Error('Imagem original indisponível na CDN (HTTP '+response.status+').');
  const mime=(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
- if(!['image/jpeg','image/png'].includes(mime))throw new Error('O servidor do produto não retornou JPEG/PNG.');
+ if(!['image/jpeg','image/png'].includes(mime))throw new Error(webp?'Cloudflare não converteu WebP para JPEG (verifique Image Transformations).':'O servidor do produto não retornou JPEG/PNG.');
  const length=Number(response.headers.get('content-length')||0);
  if(!Number.isSafeInteger(length)||length>LIMIT)throw new Error('Foto original muito grande.');
  const reader=response.body?.getReader();
