@@ -525,7 +525,7 @@ test('imagem de oferta reconhecida em formatos alternativos da Evolution e legen
   assert.equal(items.length,1,'formato '+i);
   assert.deepEqual(items[0].urls,[short],'formato '+i);
  }
- const newline='https://melila.me/\\nMpuhFvqiqmsu';
+ const newline=['https://melila.me/','MpuhFvqiqmsu'].join(String.fromCharCode(10));
  assert.deepEqual(extractUrls(newline),[short]);
 });
 
