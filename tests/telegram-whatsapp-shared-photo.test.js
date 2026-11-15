@@ -282,3 +282,42 @@ test('automático recupera foto na segunda leitura (manual já encontraria) e pu
   assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM telegram_photo_retries").first().total,0);
  }finally{globalThis.fetch=original;DB.close();}
 });
+
+test('Crons simultâneos publicam somente uma oferta e respeitam o intervalo configurado',async()=>{
+ const {DB,env}=setup(),old=globalThis.fetch;
+ let sends=0;
+ try{
+  const other='https://meli.la/SEGUNDAOFERTA1';
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+   .bind(SOURCE,other).run();
+  DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=15,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
+  const now=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
+   .bind('Primeiro produto',SHORT,'Geral',now-30).run();
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
+   .bind('Segundo produto',other,'Geral',now-20).run();
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===SOURCE)return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'"><link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({
+    '@type':'Product',url:SOURCE,offers:{price:'79.90',priceCurrency:'BRL'}
+   })+'</script>',{headers:{'content-type':'text/html'}});
+   if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
+    return Response.json({ok:true,result:{type:'channel'}});
+   if(u===PHOTO_LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'250000'}});
+   if(u.endsWith('/sendPhoto')){
+    sends++;
+    await new Promise(resolve=>setTimeout(resolve,60));
+    return Response.json({ok:true,result:{message_id:4000+sends}});
+   }
+   throw Error('Unexpected URL '+u);
+  };
+  const [first,second]=await Promise.all([runScheduled(env),runScheduled(env)]);
+  assert.equal([first?.status,second?.status].filter(x=>x==='published').length,1);
+  assert.equal(sends,1);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE status='published'").first().n,1);
+  const after=await runScheduled(env);
+  assert.equal(after.skipped,'interval_or_schedule');
+  assert.equal(sends,1,'nenhum segundo disparo antes dos 15 minutos');
+ }finally{globalThis.fetch=old;DB.close();}
+});
