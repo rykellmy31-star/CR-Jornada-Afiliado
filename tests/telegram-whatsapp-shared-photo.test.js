@@ -9,11 +9,14 @@ import {telegramSentPhoto,rememberTelegramSentPhoto,cachedProductImage} from '..
 const SHORT='https://meli.la/2ESKGQw';
 const PHOTO_PREVIEW='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-P.webp';
 const PHOTO_LARGE='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-F.jpg';
+const SOURCE='https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678';
 const ORIGIN='https://afiliados.example.test',EVOLUTION='https://evo.example.com';
 const INSTANCE='afiliados',GROUP='120363888999777@g.us';
 function setup(){
  const db=new DatabaseSync(':memory:');
  db.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
+ db.exec("CREATE TABLE ml_link_batch_items(id INTEGER PRIMARY KEY,source_url TEXT,affiliate_url TEXT,status TEXT)");
+ db.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')").run(SOURCE,SHORT);
  const DB={prepare(sql){let params=[];return{
   bind(...v){params=v;return this;},
   first(){return db.prepare(sql).get(...params)||null;},
@@ -40,6 +43,7 @@ for(const delivery of ['manual','automatic']){
   try{
    globalThis.fetch=async(url,opts={})=>{
     const u=String(url);
+    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
     if(u===EVOLUTION+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
      return Response.json([{id:GROUP,subject:'Achadinhos'}]);
     if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
@@ -134,6 +138,7 @@ test('falha de foto no automático NÃO publica preview; quando imagem volta, Te
    .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',now).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
+    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
    if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
     return Response.json({ok:true,result:{type:'channel'}});
    if(u===SHORT)return new Response(ready?
@@ -194,6 +199,7 @@ test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()
     .bind('Produto com foto real',SHORT,'Geral',t-10).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
+    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
    if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
     return Response.json({ok:true,result:{type:'channel'}});
    if(u==='https://meli.la/SERPROBLEMA')
@@ -245,6 +251,7 @@ test('automático recupera foto na segunda leitura (manual já encontraria) e pu
    .bind('Kit cuide-se bem body splash 200 ml e hidratante 400 ml',SHORT,'Geral',stamp).run();
   globalThis.fetch=async(url,options={})=>{
    const u=String(url);
+    if(u===SOURCE)return new Response('<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+'</script>',{headers:{'content-type':'text/html'}});
    if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
    if(u===SHORT){
     imageReads++;
