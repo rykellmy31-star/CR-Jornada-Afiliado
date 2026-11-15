@@ -58,6 +58,16 @@ const CREATE_DIRECT = `CREATE TABLE IF NOT EXISTS whatsapp_direct_offers (
   last_error TEXT
 )`;
 const CREATE_DIRECT_INDEX = "CREATE INDEX IF NOT EXISTS idx_wa_direct_queue ON whatsapp_direct_offers(status,created_at)";
+const CREATE_MEDIA_RETRIES = `CREATE TABLE IF NOT EXISTS whatsapp_media_retries (
+ affiliate_url TEXT PRIMARY KEY,
+ attempts INTEGER NOT NULL DEFAULT 0,
+ next_attempt_at INTEGER NOT NULL DEFAULT 0,
+ last_reason TEXT NOT NULL DEFAULT '',
+ updated_at INTEGER NOT NULL DEFAULT 0
+)`;
+const MEDIA_RETRY_LIMIT=6;
+function photoRetryDelay(attempt){return attempt<=2?120:attempt<=4?300:900;}
+
 
 export function validWhatsAppInterval(value) {
   return typeof value==='number' && Number.isInteger(value) && value>=1 && value<=1440;
@@ -210,6 +220,7 @@ export async function ensureWhatsAppTables(env) {
   await env.DB.prepare(CREATE_ROUTING).run();
   await env.DB.prepare(CREATE_DIRECT).run();
   await env.DB.prepare(CREATE_DIRECT_INDEX).run();
+  await env.DB.prepare(CREATE_MEDIA_RETRIES).run();
   await env.DB.prepare(CREATE_SCHEDULE).run();
   await env.DB.prepare('INSERT OR IGNORE INTO whatsapp_schedule(id) VALUES(1)').run();
   await env.DB.prepare(CREATE_CUSTOM_SCHEDULE).run();
@@ -377,10 +388,15 @@ function textForWhatsApp(offer){
   // Preserva o link completo mesmo ao montar legendas curtas.
   return (message.length+link.length+1>1024?message.slice(0,1023-link.length):message)+'\n'+link;
 }
-async function sendOfferWhatsApp(env,cfg,offer){
+async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,requirePhoto=false}={}){
   const text=textForWhatsApp(offer);
-  let image=null;
-  try{image=await resolveProductImage(env,offer.affiliate_url,findProductImage);}catch(e){console.warn('Foto WhatsApp:',String(e?.message||e).slice(0,100));}
+  let image=imageUrl;
+  if(!image){
+    try{image=await resolveProductImage(env,offer.affiliate_url,findProductImage);}
+    catch(e){console.warn('Foto WhatsApp:',String(e?.message||e).slice(0,100));}
+  }
+  // Automação não pode confirmar envio sem imagem nem trocar por sendText.
+  if(requirePhoto&&!image)throw Object.assign(new Error('Foto do produto indisponível; envio automático sem imagem bloqueado.'),{code:'PHOTO_NOT_FOUND'});
   const body=image?{
     number:cfg.group_jid,mediatype:'image',mimetype:image.endsWith('.png')?'image/png':'image/jpeg',
     media:image,caption:text,fileName:'oferta-mercado-livre.jpg',filename:'oferta-mercado-livre.jpg'
@@ -389,7 +405,48 @@ async function sendOfferWhatsApp(env,cfg,offer){
   if(typeof data.key?.id!=='string'||!data.key.id)throw new Error('Evolution não confirmou o envio; confira o grupo antes de reenviar.');
   return {message_id:data.key.id,format:image?'photo':'text'};
 }
-async function dispatchPrimaryWhatsApp(env,cfg,offer,source){
+// A automação consulta a foto antes de consumir o intervalo e antes de reclamar
+// a oferta. Quando a página/vitrine não oferece foto, só agenda nova tentativa;
+// não publica uma mensagem incompleta em nenhum grupo.
+async function preflightWhatsAppPhoto(env,offer,source,cfg){
+  let image=null;
+  try{image=await resolveProductImage(env,offer.affiliate_url,findProductImage);}
+  catch(e){console.warn('Pré-verificação da foto WhatsApp:',String(e?.message||e).slice(0,110));}
+  if(image)return {image};
+  const now=nowSec();
+  await env.DB.prepare(
+   "INSERT INTO whatsapp_media_retries(affiliate_url,attempts,next_attempt_at,last_reason,updated_at) "+
+   "VALUES(?,1,?,'Foto não confirmada no Mercado Livre',?) "+
+   "ON CONFLICT(affiliate_url) DO UPDATE SET attempts=whatsapp_media_retries.attempts+1,"+
+   "next_attempt_at=excluded.next_attempt_at,last_reason=excluded.last_reason,updated_at=excluded.updated_at"
+  ).bind(offer.affiliate_url,now+photoRetryDelay(1),now).run();
+  const row=await env.DB.prepare("SELECT attempts FROM whatsapp_media_retries WHERE affiliate_url=?")
+    .bind(offer.affiliate_url).first();
+  const attempt=Number(row?.attempts||1);
+  // Compensa a primeira inserção: períodos de espera maiores em tentativas futuras.
+  await env.DB.prepare("UPDATE whatsapp_media_retries SET next_attempt_at=? WHERE affiliate_url=?")
+    .bind(now+photoRetryDelay(attempt),offer.affiliate_url).run();
+  try{await env.DB.prepare('INSERT INTO logs(offer_id,event,detail,created_at) VALUES(?,?,?,?)')
+   .bind(source==='mirrored'?offer.id:null,'whatsapp_photo_retry',
+     'Envio automático aguardando foto verificada; tentativa '+attempt+'/'+MEDIA_RETRY_LIMIT,now).run();}catch{}
+  if(attempt<MEDIA_RETRY_LIMIT)return {skipped:'awaiting_photo',offer_id:offer.id,attempts:attempt};
+  const reason='Foto indisponível após '+MEDIA_RETRY_LIMIT+' tentativas. Nenhuma mensagem sem foto foi enviada.';
+  if(source==='direct'){
+   await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='needs_review',last_error=? WHERE id=? AND status='ready'")
+     .bind(reason,offer.id).run();
+  }else{
+   await env.DB.prepare("INSERT OR IGNORE INTO whatsapp_deliveries(offer_id,group_jid,status,last_error,created_at,updated_at) VALUES(?,?,'needs_review',?,?,?)")
+     .bind(offer.id,cfg.group_jid,reason,now,now).run();
+  }
+  return {status:'needs_review',reason,offer_id:offer.id};
+}
+async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}){
+  let verifiedImage=null;
+  if(automatic){
+    const checked=await preflightWhatsAppPhoto(env,offer,source,cfg);
+    if(!checked.image)return checked;
+    verifiedImage=checked.image;
+  }
   const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
   const timestamp=nowSec();
   const minGap=schedule.interval_minutes*60;
@@ -420,7 +477,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source){
   }
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const result=await sendOfferWhatsApp(env,cfg,offer);
+    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage,requirePhoto:automatic});
     const updatedAt=nowSec();
     if(direct){
       await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='published',published_at=?,message_id=?,last_error=NULL WHERE id=? AND status='sending'")
@@ -430,6 +487,9 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source){
         .bind(result.message_id,updatedAt,offer.id,cfg.group_jid).run();
     }
     await env.DB.prepare('UPDATE whatsapp_settings SET last_error=NULL WHERE id=1').run();
+    if(result.format==='photo'){
+      try{await env.DB.prepare('DELETE FROM whatsapp_media_retries WHERE affiliate_url=?').bind(offer.affiliate_url).run();}catch{}
+    }
     if(result.format==='text'){
       // Não confundir envio de texto bem-sucedido com foto publicada.
       // Registra a falha de busca da mídia para diagnóstico sem reenviar.
@@ -468,19 +528,21 @@ export async function runWhatsAppScheduled(env){
       FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
       LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
       LEFT JOIN offer_delivery_routing r ON r.offer_id=o.id
+      LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=o.affiliate_url
       WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
+        AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?))
         AND (r.delivery_mode IS NULL OR r.delivery_mode='both')
         AND (lower(?)='geral' OR lower(o.category)=lower(?))
       ORDER BY o.published_at ASC,o.id ASC LIMIT 1`)
-      .bind(cfg.group_jid,cfg.started_at,cat,cat).first(),
-    env.DB.prepare("SELECT * FROM whatsapp_direct_offers WHERE status='ready' AND group_jid=? AND instance_name=? AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at ASC,id ASC LIMIT 1")
-      .bind(cfg.group_jid,cfg.instance_name,cat,cat).first()
+      .bind(cfg.group_jid,cfg.started_at,MEDIA_RETRY_LIMIT,nowSec(),cat,cat).first(),
+    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=d.affiliate_url WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?)) AND (lower(?)='geral' OR lower(d.category)=lower(?)) ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
+      .bind(cfg.group_jid,cfg.instance_name,MEDIA_RETRY_LIMIT,nowSec(),cat,cat).first()
   ]);
   if(!mirrored&&!direct)return {skipped:'empty'};
   // Prioridade cronológica impede que a fila direta ou o espelhamento bloqueiem
   // permanentemente a outra fila.
   const chooseDirect=!!direct&&(!mirrored||direct.created_at<=(mirrored.published_at||0));
-  return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored');
+  return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored',{automatic:true});
 }
 export async function retryWhatsAppDelivery(env,offerId){
   await ensureWhatsAppTables(env);
@@ -491,5 +553,7 @@ export async function retryWhatsAppDelivery(env,offerId){
   const updated=await env.DB.prepare("DELETE FROM whatsapp_deliveries WHERE offer_id=? AND group_jid=? AND status='needs_review'")
     .bind(id,cfg.group_jid).run();
   if(updated.meta?.changes!==1)throw new Error('Esta oferta não está pendente de revisão.');
+  const offer=await env.DB.prepare('SELECT affiliate_url FROM offers WHERE id=?').bind(id).first();
+  if(offer?.affiliate_url)await env.DB.prepare('DELETE FROM whatsapp_media_retries WHERE affiliate_url=?').bind(offer.affiliate_url).run();
   return {ok:true};
 }
