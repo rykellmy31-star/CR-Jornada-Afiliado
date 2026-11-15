@@ -36,7 +36,7 @@ test('foto da oferta é recuperada no anúncio normal do lote quando o meli.la r
   const lookup=async url=>{seen.push(url);return url===ORIGINAL?PHOTO_LARGE:null;};
   const photo=await resolveProductImage(env,SHORT,lookup);
   assert.equal(photo,PHOTO_LARGE);
-  assert.deepEqual(seen,[SHORT,ORIGINAL]);
+  assert.deepEqual(seen,[ORIGINAL]);
   assert.equal(await cachedProductImage(env,SHORT),PHOTO_LARGE);
   assert.equal(await cachedProductImage(env,ORIGINAL),PHOTO_LARGE);
   assert.equal(await resolveProductImage(env,SHORT,async()=>{throw Error('cache não usado');}),PHOTO_LARGE);
@@ -100,7 +100,7 @@ test('publicação AUTOMÁTICA realista do WhatsApp usa sendMedia quando meli.la
   assert.equal(result.format,'photo');
   assert.equal(media,1);
   assert.equal(text,0);
-  assert.equal(shortReads,1,'foto consultada uma vez no encurtador');
+  assert.equal(shortReads,0,'foto buscada diretamente no anúncio original verificado');
   assert.equal(sourceReads,1,'WhatsApp reutiliza preço já confirmado e consulta somente a foto original');
   assert.equal(await cachedProductImage(env,SHORT),PHOTO_LARGE);
  }finally{globalThis.fetch=nativeFetch;DB.close();}
@@ -115,7 +115,7 @@ test('não usa imagem de vitrine de outro vendedor como substituta da foto do it
    sources.push(url);return url===ORIGINAL?bad:null;
   });
   assert.equal(actual,null);
-  assert.deepEqual(sources,[SHORT,ORIGINAL]);
+  assert.deepEqual(sources,[ORIGINAL]);
  }finally{DB.close();}
 });
 
