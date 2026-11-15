@@ -57,7 +57,7 @@ export async function telegramSentPhoto(env,affiliateUrl){
  ).bind(affiliateUrl,Math.floor(Date.now()/1000)-CACHE_LIFETIME).first();
  return trustedProductImage(data?.image_url)?data.image_url:null;
 }
-export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup){
+export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup,{retryOnMiss=false}={}){
  // O mesmo produto enviado COM FOTO pelo Telegram deve ir COM A MESMA FOTO
  // no WhatsApp, sem nova consulta ao meli.la. Para ofertas somente WhatsApp,
  // continuam as fontes de foto do Mercado Livre e o cache original.
@@ -67,7 +67,9 @@ export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup){
  }catch(error){
   console.warn('Foto enviada no Telegram indisponível:',String(error?.message||error).slice(0,95));
  }
- return await resolveProductImage(env,affiliateUrl,lookup);
+ return retryOnMiss
+  ?await resolveProductImageWithRetry(env,affiliateUrl,lookup,{retryOnMiss:true})
+  :await resolveProductImage(env,affiliateUrl,lookup);
 }
 
 
