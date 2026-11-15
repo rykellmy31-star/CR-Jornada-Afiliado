@@ -1,6 +1,6 @@
 // Pré-verificação de preço para ofertas automáticas do Mercado Livre.
 // Uma falha temporária de preço nunca bloqueia os demais produtos.
-import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractMercadoLivrePagePrice} from './mercado-livre-price.js';
+import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractMercadoLivrePagePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 import {sourcePageForAffiliateImage} from './offer-images.js';
 import {inspectMonitorShortlink,browserFeaturedProduct,claimSocialBrowserBudget} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
@@ -32,34 +32,63 @@ export async function ensureAutomaticPrices(env){
  await env.DB.prepare(SOURCES).run();
  await env.DB.prepare(DETAILS).run();
 }
-// Se o HTML comum vier incompleto, só o navegador renderizado do anúncio
-// original pode fornecer o preço. Nunca ler valor de páginas recomendadas.
-async function renderedOfficialPrice(env,source,now){
- if(!official(source)||typeof env?.BROWSER?.quickAction!=='function')return null;
+// Um orçamento único de Browser Run para preços oficiais, com limite diário.
+async function claimPriceBrowserBudget(env,now){
+ if(typeof env?.BROWSER?.quickAction!=='function')return false;
  const day=new Date(now*1000).toISOString().slice(0,10);
- try{
-  await env.DB.prepare(
-   "CREATE TABLE IF NOT EXISTS affiliate_price_browser_budget ("+
+ await env.DB.prepare(
+  "CREATE TABLE IF NOT EXISTS affiliate_price_browser_budget ("+
    "id INTEGER PRIMARY KEY CHECK(id=1),day_key TEXT NOT NULL DEFAULT '',"+
    "daily_count INTEGER NOT NULL DEFAULT 0,last_at INTEGER NOT NULL DEFAULT 0)"
-  ).run();
-  await env.DB.prepare("INSERT OR IGNORE INTO affiliate_price_browser_budget(id) VALUES(1)").run();
-  const quota=await env.DB.prepare(
-   "UPDATE affiliate_price_browser_budget SET "+
+ ).run();
+ await env.DB.prepare("INSERT OR IGNORE INTO affiliate_price_browser_budget(id) VALUES(1)").run();
+ const quota=await env.DB.prepare(
+  "UPDATE affiliate_price_browser_budget SET "+
    "daily_count=CASE WHEN day_key=? THEN daily_count+1 ELSE 1 END,day_key=?,last_at=? "+
    "WHERE id=1 AND (day_key<>? OR daily_count<"+PRICE_BROWSER_DAILY_LIMIT+") AND last_at<=?"
-  ).bind(day,day,now,day,now-PRICE_BROWSER_COOLDOWN).run();
-  if(quota.meta?.changes!==1)return null;
+ ).bind(day,day,now,day,now-PRICE_BROWSER_COOLDOWN).run();
+ return quota.meta?.changes===1;
+}
+async function renderedOfficialPrice(env,source,now){
+ if(!official(source)||typeof env?.BROWSER?.quickAction!=='function')return null;
+ try{
+  if(!await claimPriceBrowserBudget(env,now))return null;
   const response=await env.BROWSER.quickAction('content',{
    url:source,gotoOptions:{waitUntil:'networkidle2',timeout:20000},
    rejectResourceTypes:['image','font','media']
   });
   if(!response?.ok||typeof response.text!=='function')return null;
-  const html=(await response.text()).slice(0,750000);
-  const found=extractMercadoLivrePagePrice(html,source);
+  const found=extractMercadoLivrePagePrice((await response.text()).slice(0,750000),source);
   return positive(found?.price_cents)?found:null;
  }catch(error){
   console.warn('Preço renderizado indisponível:',String(error?.message||error).slice(0,110));
+  return null;
+ }
+}
+// Só aceita o preço do cartão destacado se o MLB corresponder à origem
+// confirmada. Recomendações e preços de terceiros são ignorados.
+async function featuredShowcasePrice(env,affiliateUrl,source,fetcher,now){
+ if(!/^https:\/\/(?:meli\.la|meli\.promo)\//i.test(affiliateUrl)||!official(source))return null;
+ const expected=productId(new URL(source).pathname);
+ let inspected;
+ try{inspected=await inspectMonitorShortlink(affiliateUrl,{fetcher});}
+ catch{return null;}
+ if(inspected?.product&&inspected.product.product_id!==expected)return null;
+ if(positive(inspected?.featured_price?.price_cents)&&inspected?.product?.product_id===expected)
+  return inspected.featured_price;
+ const social=inspected?.social_url;
+ if(!social||typeof env?.BROWSER?.quickAction!=='function')return null;
+ try{
+  if(!await claimPriceBrowserBudget(env,now))return null;
+  const response=await env.BROWSER.quickAction('content',{
+   url:social,gotoOptions:{waitUntil:'networkidle2',timeout:20000},
+   rejectResourceTypes:['image','font','media']
+  });
+  if(!response?.ok||typeof response.text!=='function')return null;
+  const found=extractFeaturedShowcasePrice((await response.text()).slice(0,5500000),expected);
+  return positive(found?.price_cents)?found:null;
+ }catch(error){
+  console.warn('Preço da vitrine principal:',String(error?.message||error).slice(0,110));
   return null;
  }
 }
@@ -82,7 +111,8 @@ export function officialPriceOverlay(offer,price,now=Math.floor(Date.now()/1000)
  const terms={price_cents:d.price_cents,old_price_cents:old,price_source:'mercadolivre',
   coupon_required:false,coupon_code:null,payment_mode:mode,
   installments:count,installment_cents:count&&positive(d.installment_cents)?d.installment_cents:null,
-  installments_no_interest:!!(count&&d.installments_no_interest),card_price_cents:null};
+  installments_no_interest:!!(count&&d.installments_no_interest),
+  card_price_cents:positive(d.card_price_cents)&&d.card_price_cents>d.price_cents?d.card_price_cents:null};
  return {...offer,price_cents:d.price_cents,old_price_cents:old,
   promo_terms_json:JSON.stringify(terms),promo_captured_at:now};
 }
@@ -135,6 +165,10 @@ export async function prepareAutomaticOfferPrice(env,offer,
      const publicPrice=await fetchMercadoLivrePublicPrice(source,fetcher);
      if(positive(publicPrice?.price_cents))details=publicPrice;
     }catch(error){console.warn('Preço público do Mercado Livre:',String(error?.message||error).slice(0,100));}
+   }
+   if(!positive(details?.price_cents)){
+    const featured=await featuredShowcasePrice(env,offer.affiliate_url,source,fetcher,now);
+    if(positive(featured?.price_cents))details=featured;
    }
    if(!positive(details?.price_cents)){
     const rendered=await renderedOfficialPrice(env,source,now);
