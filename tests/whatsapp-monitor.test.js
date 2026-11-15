@@ -728,10 +728,11 @@ test('meli.la de vitrine /social não é produto, diagnóstico identifica vitrin
     return new Response(null,{status:302,headers:{location:social}});
    return new Response('<html><body>Vitrine sem HTML público do destaque</body></html>',{status:200,headers:{'content-type':'text/html'}});
   };
+  const start=1700000000;
   for(let i=0;i<3;i++){
-   const outcome=await resolveMonitorShortlinks(env);
+   const outcome=await resolveMonitorShortlinks(env,{now:start+i*31});
    assert.equal(outcome.resolved,0);
-   assert.equal(outcome.reviewed,i===2?1:0);
+   assert.equal(outcome.reviewed,1);
   }
   assert.deepEqual(calls,Array(3).fill(['https://meli.la/1nATbu7',social]).flat());
   const short=DB.prepare('SELECT status,reason FROM ml_monitor_shortlinks').first();
@@ -761,22 +762,27 @@ test('meli.la com redirecionamento por .com e depois .com.br confirma produto ú
   assert.equal(product.last_seen_price_cents,9900);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
-test('meli.la temporariamente bloqueado recebe novas tentativas antes da revisão',async()=>{
+test('meli.la com HTTP403 entra em revisão com novas tentativas automáticas a cada 30s',async()=>{
  const {env,DB}=setup(),originalFetch=globalThis.fetch;
  try{
   await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
   await saveMonitorSettings(env,{enabled:true});
   await ingestMonitorEvent(env,event(GROUP,'https://meli.la/BLOCK4037'));
-  globalThis.fetch=async()=>new Response('denied',{status:403});
-  for(let i=0;i<2;i++){
-   assert.equal((await resolveMonitorShortlinks(env)).resolved,0);
-   const short=DB.prepare('SELECT status,reason,tries FROM ml_monitor_shortlinks').first();
-   assert.equal(short.status,'pending');
-   assert.match(short.reason,/negou a consulta automática \(403\)/);
-   assert.equal(short.tries,i+1);
-  }
-  await resolveMonitorShortlinks(env);
-  assert.equal(DB.prepare('SELECT status FROM ml_monitor_shortlinks').first().status,'review');
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response('denied',{status:403});};
+  const start=1700000000;
+  assert.equal((await resolveMonitorShortlinks(env,{now:start})).reviewed,1);
+  let short=DB.prepare('SELECT status,reason,tries FROM ml_monitor_shortlinks').first();
+  assert.equal(short.status,'review');
+  assert.match(short.reason,/negou a consulta automática \(403\)/);
+  assert.equal(short.tries,1);
+  assert.equal((await resolveMonitorShortlinks(env,{now:start+29})).reviewed,0);
+  assert.equal(calls,1,'não repetir antes de 30 segundos');
+  assert.equal((await resolveMonitorShortlinks(env,{now:start+30})).reviewed,1);
+  short=DB.prepare('SELECT status,tries FROM ml_monitor_shortlinks').first();
+  assert.equal(short.status,'review');
+  assert.equal(short.tries,2);
+  assert.equal(calls,2);
   assert.equal((await monitorState(env)).counts.captured,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
@@ -1016,4 +1022,78 @@ test('revisões permanecem fechadas inicialmente e preservam abertura ao atualiz
  run(state);
  assert.match(box.innerHTML,/<details data-monitor-panel="reviews" class="ml-monitor-fold" open>/);
  assert.match(box.innerHTML,/Aprovar produto para conversão/);
+});
+
+
+test('revisão de vitrine é resolvida automaticamente na segunda tentativa sem abrir o painel',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ const source='https://meli.la/1fxaUbj',start=1700000000;
+ const destination='https://www.mercadolivre.com.br/resina-acqua-multiuso-36l/p/MLB12345678';
+ const social='https://www.mercadolivre.com.br/social/so-promos-originais';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Construção',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Resina de R$ 98 por R$ 74 '+source));
+  let first=true,calls=0;
+  globalThis.fetch=async url=>{
+   calls++;
+   if(String(url)===source)return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)===social){
+    if(first){first=false;return new Response('<html><body>Aguarde</body></html>',{
+      status:200,headers:{'content-type':'text/html'}});}
+    return new Response('<html><body><div class="rl-card-featured-wrapper">'+
+      '<a class="poly-action-links__action--link" href="'+destination+'">Ir para produto</a>'+
+      '</div><section class="rl-card-recommendations">'+
+      '<a href="https://www.mercadolivre.com.br/outro/p/MLB99999999">Ir para produto</a></section>'+
+      '</body></html>',{status:200,headers:{'content-type':'text/html'}});
+   }
+   throw Error('unexpected '+url);
+  };
+  const a=await resolveMonitorShortlinks(env,{now:start});
+  assert.equal(a.reviewed,1);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
+  assert.equal((await resolveMonitorShortlinks(env,{now:start+20})).resolved,0);
+  assert.equal(calls,2);
+  const b=await resolveMonitorShortlinks(env,{now:start+31});
+  assert.equal(b.resolved,1);
+  assert.equal(calls,4);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'resolved');
+  const state=await monitorState(env);
+  assert.equal(state.counts.captured,1);
+  assert.equal(state.links[0].source_url,destination);
+  assert.equal(state.links[0].last_seen_price_cents,7400);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('dois acionamentos concorrentes nao verificam o mesmo link novamente',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta https://meli.la/LOCKLOCK7'));
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response('rate limit',{status:429});};
+  const [first,second]=await Promise.all([
+   resolveMonitorShortlinks(env,{now:1700000000}),
+   resolveMonitorShortlinks(env,{now:1700000000})
+  ]);
+  assert.equal(first.reviewed+second.reviewed,1);
+  assert.equal(calls,1);
+  assert.equal(DB.prepare('SELECT tries FROM ml_monitor_shortlinks').first().tries,1);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('revisao externa nunca vira produto e tem intervalo progressivo para links bloqueados',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.la/EXTERNAL7'));
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(null,{status:302,headers:{location:'https://www.netshoes.com.br/produto'}});};
+  await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
+  await resolveMonitorShortlinks(env,{now:1700000031});
+  assert.equal(calls,1);
+  assert.equal((await monitorState(env)).counts.captured,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
 });
