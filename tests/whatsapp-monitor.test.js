@@ -1025,6 +1025,290 @@ test('revisões permanecem fechadas inicialmente e preservam abertura ao atualiz
 });
 
 
+
+test('badges de links em revisão mostram total real, não o limite dos registros carregados',()=>{
+ const start=MONITOR_CLIENT_JS.indexOf('function mlMonitorApplyReviews(');
+ const end=MONITOR_CLIENT_JS.indexOf('function mlMonitorApplyCounts(',start);
+ assert.ok(start>=0&&end>start);
+ const box={innerHTML:'',querySelector(){return null;},querySelectorAll(){return [];}};
+ const run=new Function('
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ const source='https://meli.la/1fxaUbj',start=1700000000;
+ const destination='https://www.mercadolivre.com.br/resina-acqua-multiuso-36l/p/MLB12345678';
+ const social='https://www.mercadolivre.com.br/social/so-promos-originais';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Construção',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Resina de R$ 98 por R$ 74 '+source));
+  let first=true,calls=0;
+  globalThis.fetch=async url=>{
+   calls++;
+   if(String(url)===source)return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)===social){
+    if(first){first=false;return new Response('<html><body>Aguarde</body></html>',{
+      status:200,headers:{'content-type':'text/html'}});}
+    return new Response('<html><body><div class="rl-card-featured-wrapper">'+
+      '<a class="poly-action-links__action--link" href="'+destination+'">Ir para produto</a>'+
+      '</div><section class="rl-card-recommendations">'+
+      '<a href="https://www.mercadolivre.com.br/outro/p/MLB99999999">Ir para produto</a></section>'+
+      '</body></html>',{status:200,headers:{'content-type':'text/html'}});
+   }
+   throw Error('unexpected '+url);
+  };
+  const a=await resolveMonitorShortlinks(env,{now:start});
+  assert.equal(a.reviewed,1);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
+  assert.equal((await resolveMonitorShortlinks(env,{now:start+20})).resolved,0);
+  assert.equal(calls,2);
+  const b=await resolveMonitorShortlinks(env,{now:start+31});
+  assert.equal(b.resolved,1);
+  assert.equal(calls,4);
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'resolved');
+  const state=await monitorState(env);
+  assert.equal(state.counts.captured,1);
+  assert.equal(state.links[0].source_url,destination);
+  assert.equal(state.links[0].last_seen_price_cents,7400);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('dois acionamentos concorrentes nao verificam o mesmo link novamente',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta https://meli.la/LOCKLOCK7'));
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response('rate limit',{status:429});};
+  const [first,second]=await Promise.all([
+   resolveMonitorShortlinks(env,{now:1700000000}),
+   resolveMonitorShortlinks(env,{now:1700000000})
+  ]);
+  assert.equal(first.reviewed+second.reviewed,1);
+  assert.equal(calls,1);
+  assert.equal(DB.prepare('SELECT tries FROM ml_monitor_shortlinks').first().tries,1);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('revisao externa nunca vira produto e tem intervalo progressivo para links bloqueados',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.la/EXTERNAL7'));
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(null,{status:302,headers:{location:'https://www.netshoes.com.br/produto'}});};
+  await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
+  await resolveMonitorShortlinks(env,{now:1700000031});
+  assert.equal(calls,1);
+  assert.equal((await monitorState(env)).counts.captured,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+
+test('meli.promo/s/igrYkt abre vitrine Mercado Livre com login: não é loja externa nem produto aprovado',async()=>{
+ const source='https://meli.promo/s/igrYkt',
+   social='https://www.mercadolivre.com.br/social/igrYkt/lists',
+   login='https://www.mercadolivre.com.br/jms/mlb/lgz/login?go=https%3A%2F%2Fwww.mercadolivre.com.br%2Fsocial%2FigrYkt%2Flists';
+ const calls=[];
+ const outcome=await inspectMonitorShortlink(source,{fetcher:async url=>{
+  calls.push(String(url));
+  if(String(url)===source)return new Response(null,{status:302,headers:{location:social}});
+  if(String(url)===social)return new Response(null,{status:302,headers:{location:login}});
+  throw Error('Não era esperado acessar o formulário de login: '+url);
+ }});
+ assert.equal(outcome.kind,'auth');
+ assert.equal(outcome.product,null);
+ assert.match(outcome.reason,/solicitou login/);
+ assert.deepEqual(calls,[source,social]);
+});
+test('parâmetro de redirecionamento para anúncio oficial pode ser seguido sem acessar intermediário externo',async()=>{
+ const short='https://meli.promo/s/TEST123',
+  target='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
+ const intermediate='https://intermediario.example.com/link?url='+encodeURIComponent(target);
+ assert.equal(trustedEmbeddedRedirect(intermediate),target);
+ assert.equal(trustedEmbeddedRedirect('https://intermediario.example.com/?url=https%3A%2F%2Fshopee.com.br%2Fproduto'),null);
+ assert.equal(trustedEmbeddedRedirect('https://intermediario.example.com/?url='+encodeURIComponent(target)+'&target='+encodeURIComponent('https://www.mercadolivre.com.br/outro/p/MLB99999999')),null);
+ let requests=0;
+ const result=await inspectMonitorShortlink(short,{fetcher:async url=>{
+  requests++;
+  assert.equal(String(url),short,'nunca acessa o domínio intermediário externo');
+  return new Response(null,{status:302,headers:{location:intermediate}});
+ }});
+ assert.equal(requests,1);
+ assert.equal(result.kind,'product');
+ assert.equal(result.product.product_id,'MLB12345678');
+});
+test('redirecionamento para loja externa informa domínio real e não promete validação automática',async()=>{
+ const item='https://meli.promo/s/igrYkt';
+ const result=await inspectMonitorShortlink(item,{fetcher:async()=>new Response(null,{status:302,
+  headers:{location:'https://tracking.example.org/redirect?id=ABC'}})});
+ assert.equal(result.kind,'external');
+ assert.match(result.reason,/tracking\.example\.org/);
+ assert.match(result.reason,/revisão manual necessária/);
+ assert.doesNotMatch(result.reason,/produto confirmado/);
+ assert.match(MONITOR_CLIENT_JS,/Redirecionamento para domínio não verificado/);
+ assert.match(MONITOR_CLIENT_JS,/não libera links externos automaticamente/);
+});
+test('revisão antiga com motivo genérico reavalia uma vez e substitui motivo por domínio específico',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta '+ 'https://meli.promo/s/igrYkt'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',tries=2,reason='Destino fora dos domínios permitidos do Mercado Livre'").run();
+  let requests=0;
+  globalThis.fetch=async()=>{requests++;return new Response(null,{status:302,
+   headers:{location:'https://intermediario.example.com/link'}});};
+  assert.equal((await resolveMonitorShortlinks(env,{now:1700000000})).reviewed,1);
+  const row=DB.prepare("SELECT status,reason FROM ml_monitor_shortlinks").first();
+  assert.equal(row.status,'review');
+  assert.match(row.reason,/intermediario\.example\.com/);
+  await resolveMonitorShortlinks(env,{now:1700000031});
+  assert.equal(requests,1,'não insiste indefinidamente em domínio externo desconhecido');
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+
+test('real tracking do Mercado Livre identifica o destaque mesmo sem classe rl-card-featured',()=>{
+ const featured='https://www.mercadolivre.com.br/parafusadeira-e-furadeira-sem-fio-bateria-38-10mm-com-maleta-e-acessorios-the-black-tools/p/MLB42162174';
+ const tracked=featured+'?matt_tool=40081166#polycard_client=recommendations_home_affiliate-profile&reco_item_pos=0&c_id=/home/card-featured/element';
+ const recommended='https://www.mercadolivre.com.br/parafusadeira-outro/p/MLB30144703?x=1#polycard_client=recommendations_home_affiliate_profile_v2p-recommendations&reco_item_pos=0&c_id=/home/affiliate-profile-recommendations/element';
+ const html='<html><body><a href="'+tracked.replaceAll('&','&amp;')+'">Produto destacado</a>'+
+  '<a href="'+tracked+'">Ir para produto</a>'+
+  '<h2>Você também pode gostar</h2><a href="'+recommended+'">Outra furadeira</a></body></html>';
+ const result=featuredProductFromHtml(html,'https://www.mercadolivre.com.br/social/prorelampago');
+ assert.equal(result?.product_id,'MLB42162174');
+ assert.equal(result?.url,featured);
+ const onlyRecommended='<html><a href="'+recommended+'">Ir para produto</a></html>';
+ assert.equal(featuredProductFromHtml(onlyRecommended,'https://www.mercadolivre.com.br/social/prorelampago'),null);
+});
+test('renderização JS reconhece botão do destaque após primeiro HTML não trazer o botão',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ const short='https://meli.la/1dt9xQD';
+ const social='https://www.mercadolivre.com.br/social/prorelampago?matt_word=test';
+ const featured='https://www.mercadolivre.com.br/parafusadeira-e-furadeira-sem-fio-bateria-38-10mm-com-maleta-e-acessorios-the-black-tools/p/MLB42162174';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Promo Ferramentas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Black Tools POR R$94,90 '+short));
+  let renderCalls=0;
+  env.BROWSER={
+   async quickAction(kind,opts){
+    renderCalls++;
+    assert.equal(kind,'content');
+    assert.equal(opts.url,social);
+    assert.equal(opts.gotoOptions.waitUntil,'networkidle2');
+    return new Response('<html><div class="rl-card-featured-wrapper">'+
+      '<div class="poly-action-links__action poly-action-links__action--link">'+
+      '<a class="poly-component__link poly-component__link--action-link" href="'+featured+'">Ir para produto</a>'+
+      '</div></div><section class="rl-card-recommendations">'+
+      '<a href="https://www.mercadolivre.com.br/alternativo/p/MLB99999999">Ir para produto</a></section></html>',
+      {status:200,headers:{'content-type':'text/html'}});
+   }
+  };
+  let requests=0;
+  globalThis.fetch=async url=>{
+   requests++;
+   if(String(url)===short)return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)===social)return new Response('<html><p>JavaScript carregando...</p></html>',{
+    status:200,headers:{'content-type':'text/html'}});
+   throw Error('URL inesperada '+url);
+  };
+  const result=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(result.resolved,1);
+  assert.equal(renderCalls,1);
+  assert.equal(requests,2);
+  const state=await monitorState(env);
+  assert.equal(state.links[0].product_id,'MLB42162174');
+  assert.equal(state.links[0].source_url,featured);
+  assert.equal(state.links[0].last_seen_price_cents,9490);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('orçamento de Browser Run limita 12 por dia e uma chamada a cada 65 segundos',async()=>{
+ const {env,DB}=setup();
+ try{
+  let used=0;
+  env.BROWSER={quickAction:async()=>new Response('')};
+  const start=1700000000;
+  assert.equal(await claimSocialBrowserBudget(env,start),true);used++;
+  assert.equal(await claimSocialBrowserBudget(env,start+30),false);
+  for(let k=1;k<12;k++){
+   assert.equal(await claimSocialBrowserBudget(env,start+k*66),true);
+   used++;
+  }
+  assert.equal(used,12);
+  assert.equal(await claimSocialBrowserBudget(env,start+12*66),false);
+  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,12);
+  assert.equal(await claimSocialBrowserBudget(env,start+86400),true);
+ }finally{DB.close();}
+});
+test('Browser Run não captura recomendações se a vitrine não entregar produto destacado',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Promo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.promo/s/TESTFALHA'));
+  env.BROWSER={quickAction:async()=>new Response('<html><h2>Você também pode gostar</h2>'+
+   '<a href="https://www.mercadolivre.com.br/furadeira-outra/p/MLB99999999">Ir para produto</a></html>',
+   {status:200,headers:{'content-type':'text/html'}})};
+  globalThis.fetch=async url=>String(url)==='https://meli.promo/s/TESTFALHA'
+   ?new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/social/teste'}})
+   :new Response('<html>Carregando...</html>',{status:200,headers:{'content-type':'text/html'}});
+  const outcome=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(outcome.resolved,0);
+  assert.equal(outcome.reviewed,1);
+  assert.equal((await monitorState(env)).counts.captured,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+
+test('meli.promo vitrine com JS captura principal JBL após renderização e ignora sugestões',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ const short='https://meli.promo/s/WUS7Tq';
+ const social='https://www.mercadolivre.com.br/social/gearofertas';
+ const jbl='https://www.mercadolivre.com.br/jbl-super-tweeter-st200-preto/p/MLB42162174';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Gear Ofertas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'JBL Super Tweeter ST200 por R$ 105,00 '+short));
+  globalThis.fetch=async url=>String(url)===short
+   ?new Response(null,{status:302,headers:{location:social}})
+   :new Response('<html>Aplicativo carregando</html>',{status:200,headers:{'content-type':'text/html'}});
+  let renderCalls=0;
+  env.BROWSER={async quickAction(){
+   renderCalls++;
+   return new Response('<html><div class="rl-card-featured-wrapper">'+
+    '<a class="poly-component__link poly-component__link--action-link" href="'+jbl+'">Ir para produto</a>'+
+    '</div><section class="rl-card-recommendations">'+
+    '<a href="https://www.mercadolivre.com.br/outro/p/MLB99999999">Ir para produto</a></section></html>',
+    {headers:{'content-type':'text/html'}});
+  }};
+  assert.equal((await resolveMonitorShortlinks(env,{now:1700000000})).resolved,1);
+  assert.equal(renderCalls,1);
+  const state=await monitorState(env);
+  assert.equal(state.links[0].source_url,jbl);
+  assert.equal(state.links[0].last_seen_price_cents,10500);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+,'escape',MONITOR_CLIENT_JS.slice(start,end)+
+  '\nreturn mlMonitorApplyReviews;')(
+  id=>id==='ml-monitor-review-list'?box:null,
+  value=>String(value??'')
+ );
+ const state={
+  shortlinks:[{status:'review',total:35}],
+  recent_shortlinks:Array.from({length:25},(_,i)=>({
+   id:i+1,short_url:'https://meli.la/TEST'+String(i+1000),status:'review',
+   group_name:'Grupo autorizado',reason:'Redirecionamento indisponível'
+  }))
+ };
+ run(state);
+ assert.match(box.innerHTML,/<summary>🔎 Links em revisão <span class="ml-monitor-fold-count">35<\/span><\/summary>/);
+ assert.match(box.innerHTML,/Exibindo 25 de 35 links em revisão/);
+});
+
 test('revisão de vitrine é resolvida automaticamente na segunda tentativa sem abrir o painel',async()=>{
  const {env,DB}=setup(),originalFetch=globalThis.fetch;
  const source='https://meli.la/1fxaUbj',start=1700000000;
