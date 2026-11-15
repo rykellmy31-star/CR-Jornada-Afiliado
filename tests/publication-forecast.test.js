@@ -9,7 +9,7 @@ const base={
  category:'Geral',interval_minutes:30,max_daily:48,start_hour:8,end_hour:21,
  automation_enabled:1,telegram_enabled:1,channel_registered:1
 };
-const at=(day,h,m=0,s=0)=>Date.parse(day+'T'+String(h+3).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'Z');
+const at=(day,h,m=0,s=0)=>Date.parse(day+'T00:00:00.000Z')+(h+3)*3600000+m*60000+s*1000;
 const offer=(id,createdAt=id,category='Geral')=>({id,created_at:createdAt,category,status:'ready'});
 const get=(result,id)=>new Date(result.by_id[String(id)]*1000).toISOString();
 
@@ -88,7 +88,7 @@ test('fora da janela ou limite de intervalo um dia: reagenda sem gerar envio na 
 test('consulta ao banco conta ofertas antigas fora dos últimos 100 exibidos, sem modificar fila',async()=>{
  const {DB,db}=memory();
  try{
-  DB.prepare("UPDATE settings SET automation_enabled=1,telegram_enabled=1,channel_registered=1,interval_minutes=30,max_daily=48,start_hour=8,end_hour=21,category='Geral'").run();
+  DB.prepare("UPDATE settings SET automation_enabled=1,telegram_enabled=1,channel_registered=1,interval_minutes=30,max_daily=48,start_hour=8,end_hour=21").run();
   for(let i=0;i<105;i++)DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status) VALUES(?,?,?,?,?)")
    .bind('Produto teste '+i,'https://meli.la/PROD'+String(i).padStart(8,'0'),'Geral',i+1,'ready').run();
   const forecast=await readTelegramForecast({DB},{settings:await DB.prepare('SELECT * FROM settings').first(),now:at('2026-11-15',8)});
