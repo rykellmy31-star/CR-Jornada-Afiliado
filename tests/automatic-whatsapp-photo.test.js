@@ -92,7 +92,7 @@ test('publicação AUTOMÁTICA realista do WhatsApp usa sendMedia quando meli.la
    instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:1
   });
   const now=Math.floor(Date.now()/1000);
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day) VALUES(?,?,?,?,'published',?,?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day,price_cents) VALUES(?,?,?,?,'published',?,?,7990)")
    .bind('Perfume masculino eau de parfum Azzaro the most wanted intense 100 ml',SHORT,'Geral',now-100,now,
    new Date().toISOString().slice(0,10)).run();
   const result=await runWhatsAppScheduled(env);
@@ -142,7 +142,7 @@ test('automático sem imagem não envia texto, não consome intervalo e tenta no
   await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:7});
   await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:7});
   const now=Math.floor(Date.now()/1000);
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day) VALUES(?,?,?,?,'published',?,?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day,price_cents) VALUES(?,?,?,?,'published',?,?,7990)")
    .bind('Azzaro The Most Wanted Intense',SHORT,'Geral',now-1,now,new Date().toISOString().slice(0,10)).run();
   const first=await runWhatsAppScheduled(env);
   assert.equal(first.skipped,'awaiting_photo');
@@ -177,7 +177,7 @@ test('oferta automática sem foto é revista após seis falhas sem enviar mensag
   await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:1});
   await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:1});
   const now=Math.floor(Date.now()/1000);
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,'published',?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,'published',?,7990)")
    .bind('Cebolinha kit três perfumes',SHORT,'Geral',now-1,now).run();
   for(let i=1;i<=6;i++){
    if(i>1)DB.prepare("UPDATE whatsapp_media_retries SET next_attempt_at=0").run();
