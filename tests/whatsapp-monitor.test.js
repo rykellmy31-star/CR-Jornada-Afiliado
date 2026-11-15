@@ -7,6 +7,9 @@ import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
  resolveMonitorShortlinks,reviewMonitorShortlink,bulkValidateMonitorShortlinks,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup,monitorCouponOnly} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
+import {resolveOfferSource} from '../src/automatic-price.js';
+import {resolveProductImageWithRetry,cachedProductImage} from '../src/offer-images.js';
+import {findProductImage} from '../src/images.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
 const TOKEN='monitor-test-webhook-token-strong-123456';
@@ -1681,4 +1684,80 @@ test('Validação em massa usa apenas botão do produto principal da vitrine, nu
   assert.equal(captured.source_url,PRODUCT);
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{globalThis.fetch=old;DB.close();}
+});
+
+
+test('vitrine social segue redirect oficial do botão principal e ignora recomendações',async()=>{
+ const short='https://meli.la/featured001';
+ const social='https://www.mercadolivre.com.br/social/crdivulga';
+ const action='https://www.mercadolivre.com.br/sec/abc123';
+ const item='https://www.mercadolivre.com.br/jogo-ferramentas-vonder-110-pecas/p/MLB12345678';
+ const recommended='https://www.mercadolivre.com.br/chave-soquete-outra/p/MLB99999999';
+ const html='<html><section class="rl-card-featured-wrapper">'+
+  '<div><a class="poly-component__link--action-link" href="'+action+'">Ir para produto</a></div>'+
+  '</section><section class="rl-card-recommendations"><a href="'+recommended+'">Ir para produto</a></section></html>';
+ const seen=[];
+ const fetcher=async url=>{
+  seen.push(String(url));
+  if(String(url)===short)return new Response(null,{status:302,headers:{location:social}});
+  if(String(url)===social)return new Response(html,{headers:{'content-type':'text/html'}});
+  if(String(url)===action)return new Response(null,{status:302,headers:{location:item}});
+  throw Error('URL não esperada: '+url);
+ };
+ const result=await inspectMonitorShortlink(short,{fetcher});
+ assert.equal(result.kind,'featured_product');
+ assert.equal(result.product.product_id,'MLB12345678');
+ assert.equal(result.product.url,item);
+ assert.deepEqual(seen,[short,social,action],'nenhuma recomendação pode ser consultada');
+});
+
+test('foto real de vitrine Vonder recuperada para a publicação mantendo link com comissão',async()=>{
+ const {env,DB}=setup();
+ const native=globalThis.fetch;
+ const short='https://meli.la/featured002';
+ const social='https://www.mercadolivre.com.br/social/crdivulga';
+ const action='https://www.mercadolivre.com.br/sec/xyz456';
+ const product='https://www.mercadolivre.com.br/jogo-ferramentas-vonder-110-pecas/p/MLB12345678';
+ const recommended='https://www.mercadolivre.com.br/outro-produto/p/MLB99999999';
+ const thumbnail='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp';
+ const original='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg';
+ const html='<section class="rl-card-featured-wrapper"><a href="'+action+'">Ir para produto</a>'+
+  '</section><section class="rl-card-recommendations"><a href="'+recommended+'">Ir para produto</a></section>';
+ const seen=[];
+ try{
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);seen.push(u);
+   if(u===short)return new Response(null,{status:302,headers:{location:social}});
+   if(u===social)return new Response(html,{headers:{'content-type':'text/html'}});
+   if(u===action)return new Response(null,{status:302,headers:{location:product}});
+   if(u===product)return new Response('<html><head><meta property="og:image" content="'+thumbnail+'"></head></html>',
+    {headers:{'content-type':'text/html'}});
+   if(u===original&&opts.method==='HEAD')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'170000'}});
+   throw Error('Endpoint inesperado: '+u);
+  };
+  const found=await resolveProductImageWithRetry(env,short,findProductImage,
+   {retryOnMiss:true,sourceLookup:resolveOfferSource});
+  assert.equal(found,original);
+  assert.equal(await cachedProductImage(env,short),original);
+  assert.equal(DB.prepare('SELECT source_url FROM affiliate_verified_sources WHERE affiliate_url=?').bind(short).first().source_url,product);
+  assert.equal(seen.includes(recommended),false);
+ }finally{globalThis.fetch=native;DB.close();}
+});
+
+test('vitrine não usa recomendação quando ação principal é externa',async()=>{
+ const short='https://meli.la/featured003';
+ const social='https://www.mercadolivre.com.br/social/crdivulga';
+ const recommended='https://www.mercadolivre.com.br/ferramenta-recomendada/p/MLB99999999';
+ const html='<section class="rl-card-featured-wrapper"><a href="https://outra-loja.example.com/produto">Ir para produto</a>'+
+  '</section><section class="rl-card-recommendations"><a href="'+recommended+'">Ir para produto</a></section>';
+ const seen=[];
+ const result=await inspectMonitorShortlink(short,{fetcher:async url=>{
+  seen.push(String(url));
+  if(String(url)===short)return new Response(null,{status:302,headers:{location:social}});
+  if(String(url)===social)return new Response(html,{headers:{'content-type':'text/html'}});
+  throw Error('Recomendação jamais consultada: '+url);
+ }});
+ assert.equal(result.product,null);
+ assert.equal(result.kind,'showcase');
+ assert.deepEqual(seen,[short,social]);
 });
