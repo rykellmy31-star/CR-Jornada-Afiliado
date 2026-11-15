@@ -1554,3 +1554,51 @@ test('vitrine real em revisão há 20 tentativas usa navegador e confirma SOMENT
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_browser_attempts').first().n,0);
  }finally{globalThis.fetch=orig;DB.close();}
 });
+
+test('Cloudflare /scrape entrega OBJETO, valida o botão principal sem capturar recomendações',async()=>{
+ const {env,DB}=setup();
+ try{
+  const social='https://www.mercadolivre.com.br/social/dafhbgecd60351?matt_word=gear';
+  const featured='https://www.mercadolivre.com.br/kit-4-pcs-tampinha-bico-pneu-valvula-carro-moto-bike-brinde/up/MLBU3365962146?pdp_filters=item_id:MLB5580660396';
+  let content=0,scrapes=0;
+  env.BROWSER={
+   async quickAction(action,options){
+    assert.equal(options.url,social);
+    if(action==='content'){
+     content++;
+     return new Response('<html><main><div>Vitrine carregando no navegador</div></main></html>',
+       {status:200,headers:{'content-type':'text/html'}});
+    }
+    assert.equal(action,'scrape');
+    scrapes++;
+    assert.ok(options.elements.some(x=>x.selector==='.rl-card-featured-wrapper a[href]'));
+    return Response.json({success:true,result:[
+      {selector:'.rl-card-featured-wrapper a[href]',results:{
+       attributes:[{name:'href',value:featured}],
+       text:'Ir para produto',html:'<a href="'+featured+'">Ir para produto</a>'}},
+      {selector:'.rl-card-recommendations a[href]',results:{
+       attributes:[{name:'href',value:'https://www.mercadolivre.com.br/outro/p/MLB99999999'}],
+       text:'Ir para produto'}}
+    ]});
+   }
+  };
+  const recognized=await browserFeaturedProduct(env,social);
+  assert.equal(recognized?.product_id,'MLBU3365962146');
+  assert.equal(recognized?.url,'https://www.mercadolivre.com.br/kit-4-pcs-tampinha-bico-pneu-valvula-carro-moto-bike-brinde/up/MLBU3365962146');
+  assert.equal(content,1);
+  assert.equal(scrapes,1);
+ }finally{DB.close();}
+});
+test('sem produto destacado Cloudflare /scrape não aprova anúncios recomendados',async()=>{
+ const {env,DB}=setup();try{
+  const social='https://www.mercadolivre.com.br/social/semproduto';
+  env.BROWSER={async quickAction(action){
+   if(action==='content')return new Response('<html>sem botão principal</html>',{headers:{'content-type':'text/html'}});
+   return Response.json({success:true,result:[
+    {selector:'.rl-card-featured-wrapper a[href]',results:{}},
+    {selector:'[class*="card-featured"] a[href]',results:{}}
+   ]});
+  }};
+  assert.equal(await browserFeaturedProduct(env,social),null);
+ }finally{DB.close();}
+});
