@@ -99,7 +99,7 @@ export async function createAffiliateShortlink(env,payload,origin){
     try{
       await env.DB.prepare('INSERT INTO crj_affiliate_shortlinks(code,product_url,target_url,label,created_at) VALUES(?,?,?,?,?)')
         .bind(code,preview.product_url,preview.target_url,preview.label,now()).run();
-      return {ok:true,short_url:new URL('/l/'+code,origin).toString(),...preview};
+      return {ok:true,short_url:'https://promoml.app/'+code,...preview};
     }catch(e){if(!/unique|constraint/i.test(String(e?.message||'')))throw e;}
   }
   throw error('Não foi possível reservar um código curto. Tente novamente.',503);
