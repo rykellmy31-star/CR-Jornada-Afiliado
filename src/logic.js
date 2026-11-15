@@ -1,5 +1,5 @@
 import { couponDescription } from './coupons.js';
-import {publishedPromotionLines} from './promotion-terms.js';
+import {publishedPromotionLines, safePromotionTerms, promotionDescription, MAX_AGE_MS} from './promotion-terms.js';
 export const BRAZIL_TIMEZONE = 'America/Bahia';
 
 export function validateAffiliateUrl(input) {
@@ -90,10 +90,101 @@ export function composeOfferMessage(offer, now = Date.now()) {
   return headline.join('\n');
 }
 
-export function telegramPayload(offer, chatId, now = Date.now()) {
+
+// Modelos compartilhados entre WhatsApp e Telegram: não alteram o preço,
+// a URL de comissão nem o estado das filas. As chamadas são comerciais,
+// mas não inventam datas-limite ou disponibilidade.
+const OFFER_HEADLINES=[
+  '🔥 OFERTA EM DESTAQUE!',
+  '🛍️ ACHADINHO SELECIONADO!',
+  '✨ CONFIRA ESTA OFERTA!'
+];
+const safeHtml=value=>String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const safeWa=value=>String(value??'').replace(/[*_~\x60]/g,'').replace(/[\u0000-\u001f]/g,' ').trim();
+const chooseHeadline=offer=>{
+  const seed=String(offer?.title||'')+'#'+String(offer?.affiliate_url||'');
+  let hash=0;
+  for(const char of seed)hash=(hash*31+char.codePointAt(0))>>>0;
+  return OFFER_HEADLINES[hash%OFFER_HEADLINES.length];
+};
+export function escapeTelegramHtml(value){return safeHtml(value);}
+export function formatOfferMessage(offer,{platform='mercadolivre',network='whatsapp',now=Date.now(),includeLink=false,maxLength}={}){
+  if(!['mercadolivre','shopee'].includes(platform))throw new Error('Plataforma inválida.');
+  if(!['whatsapp','telegram'].includes(network))throw new Error('Canal inválido.');
+  const tg=network==='telegram';
+  const clean=value=>tg?safeHtml(value):safeWa(value);
+  const bold=value=>tg?'<b>'+clean(value)+'</b>':'*'+clean(value)+'*';
+  const strike=value=>tg?'<s>'+clean(value)+'</s>':'~'+clean(value)+'~';
+  const emphasis=value=>tg?'<i>'+clean(value)+'</i>':clean(value);
+  const main=[
+    bold(chooseHeadline(offer)),
+    '',
+    '🛒 '+bold(offer.title)
+  ];
+  const info=[];
+  let old=null,price=null,provenance=null;
+  const validMoney=value=>Number.isSafeInteger(value)&&value>0;
+  // Não ressuscitar informações de preço expiradas ou não verificadas.
+  if(offer.promo_terms_json){
+    const published=publishedPromotionLines(offer,now);
+    const terms=published?safePromotionTerms(offer.promo_terms_json):null;
+    if(terms){
+      if(validMoney(terms.price_cents)){
+        price=terms.price_cents;
+        if(validMoney(terms.old_price_cents)&&terms.old_price_cents>price&&terms.price_source!=='mercadolivre')
+          old=terms.old_price_cents;
+        provenance=terms.price_source==='mercadolivre'
+          ?'Preço público consultado no Mercado Livre'
+          :'Preço anunciado em grupo de ofertas';
+      }
+      const conditions=promotionDescription(terms).slice(validMoney(terms.price_cents)?1:0);
+      for(const condition of conditions)info.push(clean(condition));
+      if(published.length)info.push(emphasis(published[published.length-1]));
+    }
+  }else if(validMoney(offer.price_cents)&&Number.isFinite(Number(offer.created_at))&&
+    Number(offer.created_at)>0&&now-Number(offer.created_at)*1000>=0&&
+    now-Number(offer.created_at)*1000<=MAX_AGE_MS){
+    price=offer.price_cents;
+    if(validMoney(offer.old_price_cents)&&offer.old_price_cents>price)old=offer.old_price_cents;
+    provenance='Preço informado no cadastro da oferta';
+  }
+  if(price!==null){
+    main.push('');
+    if(old!==null)main.push('❌ De: '+strike(formatBRL(old)));
+    main.push('🔥 '+bold('Por '+formatBRL(price)));
+    if(provenance)info.unshift(emphasis('ℹ️ '+provenance+'. Confira na loja.'));
+  }else{
+    main.push('',emphasis('💡 Consulte o preço atualizado na loja.'));
+  }
+  const coupons=couponDescription(offer,localTimeParts(new Date(now)).day);
+  if(coupons.length)info.push('',...coupons.map((line,i)=>i===0?'🎟️ '+bold(line.replace(/^🎟️\s*/,'') ):clean(line)));
+  const link=String(offer.affiliate_url||'');
+  const footer=[
+    '',
+    '✅ Confira preço, disponibilidade e condições antes de comprar.',
+    '📣 '+emphasis('Publicidade • link de afiliado')
+  ];
+  if(includeLink)footer.push('', '🔗 '+bold('Comprar pelo meu link:'),tg?safeHtml(link):link);
+  // Caption do Telegram: nunca cortar um HTML <b>/<s> ou uma entidade no meio.
+  // WhatsApp: nunca cortar o link completo para caber numa legenda.
+  const limit=maxLength??(tg?(includeLink?4096:1000):1024);
+  const build=()=>[...main,...(info.length?['',...info]:[]),...footer].join('\n');
+  let output=build();
+  while(output.length>limit&&info.length) {
+    info.pop();
+    while(info.at(-1)==='')info.pop();
+    output=build();
+  }
+  // A legenda ainda pode exceder o limite se o link original for muito grande.
+  // Nesse caso preserve a URL (não altere o destino de comissão).
+  return output;
+}
+
+export function telegramPayload(offer, chatId, now = Date.now(),{includeLink=false}={}) {
   return {
     chat_id: chatId,
-    text: composeOfferMessage(offer, now),
+    text: formatOfferMessage(offer,{platform:'mercadolivre',network:'telegram',now,includeLink}),
+    parse_mode:'HTML',
     disable_web_page_preview: false,
     reply_markup: { inline_keyboard: [[{ text: '🛒 Ver oferta no Mercado Livre', url: offer.affiliate_url }]] }
   };
