@@ -3,6 +3,7 @@ import {readTelegramForecast} from './publication-forecast.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage,rememberTelegramSentPhoto } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 
 // Tabelas ADITIVAS: o canal 1 continua usando settings/offers/offer_coupons/logs.
 // Canais adicionais nunca recebem automaticamente ofertas do canal principal.
@@ -366,10 +367,24 @@ export async function publishChannelOffer(env,id,offerId,{automatic=false}={}){
   await verifyChannel(token,c.telegram_chat_id);
   const offer=await env.DB.prepare(OFFERS_SQL+' WHERE o.channel_id=? AND o.id=?').bind(c.id,Number(offerId)).first();
   if(!offer)throw bad('Oferta não encontrada neste canal.',404);
+  let prepared=offer;
+  if(automatic){
+    const price=await prepareAutomaticOfferPrice(env,offer);
+    if(!price.ok){
+      const retry=await recordAutomaticPriceRetry(env,'channel',offer.id,price.reason);
+      await log(env,c.id,'awaiting_price','Aguardando preço verificável no anúncio: '+price.reason,offer.id);
+      return retry;
+    }
+    prepared=price.offer;
+    if(price.price_source==='mercadolivre')
+      await env.DB.prepare("UPDATE channel_offers SET price_cents=?,old_price_cents=NULL WHERE id=? AND status='ready'")
+        .bind(prepared.price_cents,offer.id).run();
+    await clearAutomaticPriceRetry(env,'channel',offer.id);
+  }
   const claim=await env.DB.prepare("UPDATE channel_offers SET status='sending',last_error=NULL WHERE id=? AND channel_id=? AND status='ready'").bind(offer.id,c.id).run();
   if(claim.meta?.changes!==1)throw bad('Oferta já publicada ou em revisão.',409);
   try{
-    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,offer,{requirePhoto:automatic});
+    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,prepared,{requirePhoto:automatic});
     const now=epoch(),day=localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE channel_offers SET status='published',published_at=?,published_day=?,telegram_message_id=? WHERE id=? AND channel_id=? AND status='sending'")
       .bind(now,day,result.message.message_id,offer.id,c.id).run();
@@ -422,12 +437,15 @@ export async function runMultiChannelScheduled(env){
       env.DB.prepare("SELECT MAX(published_at) AS time FROM channel_offers WHERE channel_id=? AND status='published'").bind(c.id).first()
     ]);
     if(!shouldSend(c,now,counts?.total||0,latest?.time?latest.time*1000:null))continue;
+    await ensureAutomaticPrices(env);
     const offer=await env.DB.prepare(
       "SELECT o.id FROM channel_offers o LEFT JOIN telegram_channel_photo_retries pr ON pr.offer_id=o.id "+
+      "LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='channel' AND apr.offer_id=o.id "+
       "WHERE o.channel_id=? AND o.status='ready' AND "+
       "(pr.offer_id IS NULL OR (pr.attempts<6 AND pr.next_retry_at<=?)) "+
+      "AND (apr.offer_id IS NULL OR apr.next_retry_at<=?) "+
       "AND (lower(?)='geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at,o.id LIMIT 1"
-    ).bind(c.id,epoch(),c.category,c.category).first();
+    ).bind(c.id,epoch(),epoch(),c.category,c.category).first();
     if(!offer)continue;
     const stamp=epoch();
     const slot=await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND automation_enabled=1 AND telegram_enabled=1 AND channel_registered=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
@@ -435,7 +453,7 @@ export async function runMultiChannelScheduled(env){
     if(slot.meta?.changes!==1)continue;
     try{
       const outcome=await publishChannelOffer(env,c.id,offer.id,{automatic:true});
-      if(outcome.status==='awaiting_photo'){
+      if(outcome.status==='awaiting_photo'||outcome.status==='awaiting_price'){
         await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND last_attempt_at=?')
          .bind(c.last_attempt_at,c.id,stamp).run();
       }
