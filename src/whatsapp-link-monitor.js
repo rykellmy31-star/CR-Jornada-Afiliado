@@ -212,7 +212,7 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
 export async function monitorState(env){
  await ensureMonitor(env);
  await recoverMissingMonitorPrices(env);
- const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
@@ -224,7 +224,31 @@ export async function monitorState(env){
   env.DB.prepare("SELECT s.id,s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name,rs.next_retry_at,rs.auto_attempts FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id WHERE s.status IN ('pending','review') ORDER BY CASE WHEN s.status='review' THEN 0 ELSE 1 END, s.id DESC LIMIT 200").all(),
   env.DB.prepare("SELECT o.domain,o.reason,o.message_format,o.created_at,g.group_name FROM ml_monitor_url_observations o JOIN ml_monitor_groups g ON g.id=o.group_id ORDER BY o.id DESC LIMIT 12").all(),
   env.DB.prepare("SELECT group_id,received_messages,with_urls,last_received_at,last_format FROM ml_monitor_group_delivery").all(),
-  env.DB.prepare("SELECT reason,occurrences,last_at FROM ml_monitor_discard_reasons ORDER BY occurrences DESC LIMIT 8").all()
+  env.DB.prepare("SELECT reason,occurrences,last_at FROM ml_monitor_discard_reasons ORDER BY occurrences DESC LIMIT 8").all(),
+  // O status 'review' reúne causas diferentes. Separa pendências automáticas
+  // de destinos externos e mostra a última tentativa, inclusive com grupo pausado.
+  env.DB.prepare(
+   "SELECT COUNT(*) AS total, "+
+   "SUM(CASE WHEN "+ 
+   "(s.reason IS NULL OR s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR "+
+   "(s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' AND "+
+   "s.reason NOT LIKE 'Redirecionamento circular%' AND "+
+   "s.reason NOT LIKE 'Produto associado por confirmação manual%')) "+
+   "AND g.authorized=1 THEN 1 ELSE 0 END) AS automatic, "+
+   "SUM(CASE WHEN (s.reason LIKE 'Redirecionamento para domínio não verificado%' OR "+
+   "s.reason LIKE 'Redirecionamento circular%') THEN 1 ELSE 0 END) AS manual, "+
+   "MAX(COALESCE(rs.last_attempt_at,0)) AS last_attempt_at, "+
+   "MIN(CASE WHEN g.authorized=1 AND rs.next_retry_at>unixepoch() AND "+
+   "(s.reason IS NULL OR s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR "+
+   "(s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' AND "+
+   "s.reason NOT LIKE 'Redirecionamento circular%' AND "+
+   "s.reason NOT LIKE 'Produto associado por confirmação manual%')) "+
+   "THEN rs.next_retry_at ELSE NULL END) AS next_retry_at, "+
+   "SUM(CASE WHEN g.enabled=0 AND g.authorized=1 THEN 1 ELSE 0 END) AS from_paused_groups "+
+   "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
+   "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
+   "WHERE s.status='review'"
+  ).first()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -237,6 +261,13 @@ export async function monitorState(env){
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
+   retry_progress:{
+     total:Number(retryProgress?.total||0),automatic:Number(retryProgress?.automatic||0),
+     manual:Number(retryProgress?.manual||0),
+     last_attempt_at:Number(retryProgress?.last_attempt_at||0),
+     next_retry_at:Number(retryProgress?.next_retry_at||0),
+     from_paused_groups:Number(retryProgress?.from_paused_groups||0)
+   },
    recent_shortlinks:latestShortlinks.results,
    recent_domains:observations.results,
    rejected_events:rejected.results,
