@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
@@ -1096,4 +1096,68 @@ test('revisao externa nunca vira produto e tem intervalo progressivo para links 
   assert.equal(calls,1);
   assert.equal((await monitorState(env)).counts.captured,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+
+test('meli.promo/s/igrYkt abre vitrine Mercado Livre com login: não é loja externa nem produto aprovado',async()=>{
+ const source='https://meli.promo/s/igrYkt',
+   social='https://www.mercadolivre.com.br/social/igrYkt/lists',
+   login='https://www.mercadolivre.com.br/jms/mlb/lgz/login?go=https%3A%2F%2Fwww.mercadolivre.com.br%2Fsocial%2FigrYkt%2Flists';
+ const calls=[];
+ const outcome=await inspectMonitorShortlink(source,{fetcher:async url=>{
+  calls.push(String(url));
+  if(String(url)===source)return new Response(null,{status:302,headers:{location:social}});
+  if(String(url)===social)return new Response(null,{status:302,headers:{location:login}});
+  throw Error('Não era esperado acessar o formulário de login: '+url);
+ }});
+ assert.equal(outcome.kind,'auth');
+ assert.equal(outcome.product,null);
+ assert.match(outcome.reason,/solicitou login/);
+ assert.deepEqual(calls,[source,social]);
+});
+test('parâmetro de redirecionamento para anúncio oficial pode ser seguido sem acessar intermediário externo',async()=>{
+ const short='https://meli.promo/s/TEST123',
+  target='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
+ const intermediate='https://intermediario.example.com/link?url='+encodeURIComponent(target);
+ assert.equal(trustedEmbeddedRedirect(intermediate),target);
+ assert.equal(trustedEmbeddedRedirect('https://intermediario.example.com/?url=https%3A%2F%2Fshopee.com.br%2Fproduto'),null);
+ assert.equal(trustedEmbeddedRedirect('https://intermediario.example.com/?url='+encodeURIComponent(target)+'&target='+encodeURIComponent('https://www.mercadolivre.com.br/outro/p/MLB99999999')),null);
+ let requests=0;
+ const result=await inspectMonitorShortlink(short,{fetcher:async url=>{
+  requests++;
+  assert.equal(String(url),short,'nunca acessa o domínio intermediário externo');
+  return new Response(null,{status:302,headers:{location:intermediate}});
+ }});
+ assert.equal(requests,1);
+ assert.equal(result.kind,'product');
+ assert.equal(result.product.product_id,'MLB12345678');
+});
+test('redirecionamento para loja externa informa domínio real e não promete validação automática',async()=>{
+ const item='https://meli.promo/s/igrYkt';
+ const result=await inspectMonitorShortlink(item,{fetcher:async()=>new Response(null,{status:302,
+  headers:{location:'https://tracking.example.org/redirect?id=ABC'}})});
+ assert.equal(result.kind,'external');
+ assert.match(result.reason,/tracking\.example\.org/);
+ assert.match(result.reason,/revisão manual necessária/);
+ assert.doesNotMatch(result.reason,/produto confirmado/);
+ assert.match(MONITOR_CLIENT_JS,/Redirecionamento para domínio não verificado/);
+ assert.match(MONITOR_CLIENT_JS,/não libera links externos automaticamente/);
+});
+test('revisão antiga com motivo genérico reavalia uma vez e substitui motivo por domínio específico',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta '+ 'https://meli.promo/s/igrYkt'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',tries=2,reason='Destino fora dos domínios permitidos do Mercado Livre'").run();
+  let requests=0;
+  globalThis.fetch=async()=>{requests++;return new Response(null,{status:302,
+   headers:{location:'https://intermediario.example.com/link'}});};
+  assert.equal((await resolveMonitorShortlinks(env,{now:1700000000})).reviewed,1);
+  const row=DB.prepare("SELECT status,reason FROM ml_monitor_shortlinks").first();
+  assert.equal(row.status,'review');
+  assert.match(row.reason,/intermediario\.example\.com/);
+  await resolveMonitorShortlinks(env,{now:1700000031});
+  assert.equal(requests,1,'não insiste indefinidamente em domínio externo desconhecido');
+ }finally{globalThis.fetch=oldFetch;DB.close();}
 });
