@@ -642,7 +642,8 @@ test('painel mostra opção para aprovar e revalidar links em revisão',()=>{
  assert.match(html,/id="ml-monitor-review-list"/);
  assert.match(CLIENT_JS,/mlMonitorApplyReviews/);
  assert.match(CLIENT_JS,/Aprovar produto para conversão/);
- assert.match(CLIENT_JS,/Tentar validar novamente/);
+ assert.match(CLIENT_JS,/Validar todas as ofertas/);
+  assert.doesNotMatch(MONITOR_CLIENT_JS,/Tentar validar novamente/);
  assert.doesNotThrow(()=>new Function(CLIENT_JS));
 });
 test('aprovação manual exige endereço do Mercado Livre e confirmação',async()=>{
@@ -1221,21 +1222,21 @@ test('renderização JS reconhece botão do destaque após primeiro HTML não tr
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
-test('orçamento de Browser Run distribui até 36 consultas por dia com cooldown de 30 segundos',async()=>{
+test('orçamento de Browser Run distribui até 120 consultas por dia com cooldown de 5 segundos',async()=>{
  const {env,DB}=setup();
  try{
   let used=0;
   env.BROWSER={quickAction:async()=>new Response('')};
   const start=1700000000;
   assert.equal(await claimSocialBrowserBudget(env,start),true);used++;
-  assert.equal(await claimSocialBrowserBudget(env,start+29),false);
-  for(let k=1;k<36;k++){
-   assert.equal(await claimSocialBrowserBudget(env,start+k*31),true);
+  assert.equal(await claimSocialBrowserBudget(env,start+4),false);
+  for(let k=1;k<120;k++){
+   assert.equal(await claimSocialBrowserBudget(env,start+k*6),true);
    used++;
   }
-  assert.equal(used,36);
-  assert.equal(await claimSocialBrowserBudget(env,start+36*31),false);
-  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,36);
+  assert.equal(used,120);
+  assert.equal(await claimSocialBrowserBudget(env,start+120*6),false);
+  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,120);
   assert.equal(await claimSocialBrowserBudget(env,start+86400),true);
  }finally{DB.close();}
 });
