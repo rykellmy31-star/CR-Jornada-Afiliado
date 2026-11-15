@@ -673,7 +673,11 @@ async function router(request, env, ctx=null) {
   if (requeue && method === 'POST') {
     const result = await env.DB.prepare("UPDATE offers SET status='ready', last_error=NULL WHERE id=? AND status='needs_review'").bind(Number(requeue[1])).run();
     if (result.meta?.changes !== 1) return fail('Somente ofertas com erro podem ser reenfileiradas. Verifique antes se já foram publicadas.', 409);
-    await log(env, 'requeued_after_manual_check', '', Number(requeue[1]));
+    // O Cron exclui offers com attempts >= 6. Reenfileirar precisa reiniciar
+    // esse contador, senão o item aparece 'Na fila' e nunca é selecionado.
+    await ensureTelegramPhotoRetries(env);
+    await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(Number(requeue[1])).run();
+    await log(env, 'requeued_after_manual_check', 'Tentativas de foto reiniciadas para a nova rodada.', Number(requeue[1]));
     return json({ ok: true });
   }
   const publish = u.pathname.match(/^\/api\/offers\/(\d+)\/publish$/);

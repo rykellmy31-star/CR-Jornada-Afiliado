@@ -6,7 +6,7 @@ import worker from '../src/index.js';
 import {
   ensureMultiChannelTables,listTelegramChannels,createTelegramChannel,channelState,
   updateTelegramChannel,addChannelOffer,saveChannelCoupon,runMultiChannelScheduled,
-  publishChannelOffer,normalizeTelegramHandle
+  publishChannelOffer,requeueChannelOffer,normalizeTelegramHandle
 } from '../src/multichannel.js';
 
 const ORIGIN='https://afiliados.example.test';
@@ -229,4 +229,21 @@ test('canais Telegram adicionais: automático só envia mídia, tenta novamente 
   assert.ok(sent[0].body.photo.startsWith('https://http2.mlstatic.com/'));
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_channel_photo_retries').first().n,0);
  }finally{globalThis.fetch=native;DB.close();}
+});
+
+
+test('reenfileirar canal adicional reinicia seis tentativas para a agenda poder selecionar',async()=>{
+ const DB=dbMock(),env=envFor(DB);
+ try{
+  const ids=await channels(env),id=ids[0];
+  await addChannelOffer(env,id,newOffer('https://meli.la/RETRYTEST1'));
+  await ensureMultiChannelTables(env);
+  const offer=DB.prepare('SELECT id FROM channel_offers WHERE channel_id=?').bind(id).first();
+  DB.prepare("UPDATE channel_offers SET status='needs_review',last_error='foto não encontrada' WHERE id=?").bind(offer.id).run();
+  DB.prepare("INSERT INTO telegram_channel_photo_retries(offer_id,attempts,next_retry_at,reason,updated_at) VALUES(?,8,?,'imagem não encontrada',?)")
+   .bind(offer.id,Math.floor(Date.now()/1000)+600,Math.floor(Date.now()/1000)).run();
+  assert.equal((await requeueChannelOffer(env,id,offer.id)).ok,true);
+  assert.equal(DB.prepare('SELECT status FROM channel_offers WHERE id=?').bind(offer.id).first().status,'ready');
+  assert.equal(DB.prepare('SELECT attempts FROM telegram_channel_photo_retries WHERE offer_id=?').bind(offer.id).first(),null);
+ }finally{DB.close();}
 });
