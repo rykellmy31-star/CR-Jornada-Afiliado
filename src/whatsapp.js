@@ -388,22 +388,19 @@ export async function testWhatsApp(env) {
 function textForWhatsApp(offer){
   return formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
 }
-async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,requirePhoto=false}={}){
-  const text=textForWhatsApp(offer);
-  let image=imageUrl;
-  if(!image){
-    try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage);}
-    catch(e){console.warn('Foto WhatsApp:',String(e?.message||e).slice(0,100));}
-  }
-  // Automação não pode confirmar envio sem imagem nem trocar por sendText.
-  if(requirePhoto&&!image)throw Object.assign(new Error('Foto do produto indisponível; envio automático sem imagem bloqueado.'),{code:'PHOTO_NOT_FOUND'});
-  const body=image?{
-    number:cfg.group_jid,mediatype:'image',mimetype:image.endsWith('.png')?'image/png':'image/jpeg',
-    media:image,caption:text,fileName:'oferta-mercado-livre.jpg',filename:'oferta-mercado-livre.jpg'
-  }:{number:cfg.group_jid,text,linkPreview:true};
-  const data=await evoFetch(env,cfg.instance_name,image?'/message/sendMedia':'/message/sendText',{method:'POST',body:JSON.stringify(body)});
-  if(typeof data.key?.id!=='string'||!data.key.id)throw new Error('Evolution não confirmou o envio; confira o grupo antes de reenviar.');
-  return {message_id:data.key.id,format:image?'photo':'text'};
+async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null}={}){
+ const text=textForWhatsApp(offer);
+ let image=imageUrl;
+ if(!image)try{
+  image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,
+   {retryOnMiss:true,sourceLookup:resolveOfferSource});
+ }catch(error){console.warn('Foto WhatsApp:',String(error?.message||error).slice(0,100));}
+ if(!image)throw Object.assign(new Error('Foto do produto indisponível; publicação sem imagem bloqueada.'),{code:'PHOTO_NOT_FOUND'});
+ const body={number:cfg.group_jid,mediatype:'image',mimetype:image.endsWith('.png')?'image/png':'image/jpeg',
+  media:image,caption:text,fileName:'oferta-mercado-livre.jpg',filename:'oferta-mercado-livre.jpg'};
+ const data=await evoFetch(env,cfg.instance_name,'/message/sendMedia',{method:'POST',body:JSON.stringify(body)});
+ if(typeof data.key?.id!=='string'||!data.key.id)throw new Error('Evolution não confirmou o envio; confira o grupo antes de reenviar.');
+ return {message_id:data.key.id,format:'photo'};
 }
 // A automação consulta a foto antes de consumir o intervalo e antes de reclamar
 // a oferta. Quando a página/vitrine não oferece foto, só agenda nova tentativa;
@@ -446,7 +443,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
     return {skipped:'interval'};
   let verifiedImage=null;
-  if(automatic){
+  {
     // Exatamente a mesma busca de foto usada pelo botão Publicar, com cache
     // de foto já enviada ao Telegram. Não exigir preço novo para descobrir foto.
     // Se a mídia não existe, NÃO usar sendText nem consumir intervalo.
@@ -479,7 +476,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   }
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage,requirePhoto:automatic});
+    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage});
     const updatedAt=nowSec();
     if(direct){
       await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='published',published_at=?,message_id=?,last_error=NULL WHERE id=? AND status='sending'")

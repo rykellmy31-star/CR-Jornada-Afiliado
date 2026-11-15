@@ -4,6 +4,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,resolveOfferSource} from './automatic-price.js';
+import {sendTelegramProductPhoto} from './telegram-photo.js';
 
 // Tabelas ADITIVAS: o canal 1 continua usando settings/offers/offer_coupons/logs.
 // Canais adicionais nunca recebem automaticamente ofertas do canal principal.
@@ -338,27 +339,17 @@ export async function requeueChannelOffer(env,id,offerId){
   await log(env,c.id,'manual_requeue','Reenfileiramento após conferência.',Number(offerId));
   return {ok:true};
 }
-async function sendOfferWithImage(env,token,chat,offer,{requirePhoto=false}={}){
-  const payload=telegramPayload(offer,chat);
-  let photo=null;
-  try{photo=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,{retryOnMiss:requirePhoto,sourceLookup:requirePhoto?resolveOfferSource:null});}
-  catch(err){console.warn('Imagem indisponível para novo canal:',offer.id,String(err?.message||'').slice(0,80));}
-  if(requirePhoto&&!photo)
-    throw Object.assign(new Error('Foto real do produto indisponível'),{code:'PHOTO_NOT_READY'});
-  if(photo){
-    try{
-      const msg=await api(token,'sendPhoto',{chat_id:chat,photo,caption:payload.text,parse_mode:payload.parse_mode,reply_markup:payload.reply_markup});
-      try{await rememberTelegramSentPhoto(env,offer.affiliate_url,photo,msg.message_id);}
-      catch(error){console.warn('Foto do canal Telegram não pôde ser registrada:',String(error?.message||error).slice(0,95));}
-      return {message:msg,format:'photo'};
-    }catch(error){
-      if(error.telegramStatus!==400)throw error;
-      if(requirePhoto)throw Object.assign(new Error('Telegram recusou a foto real do anúncio'),{code:'PHOTO_NOT_READY'});
-      // A publicação manual mantém o comportamento anterior.
-    }
-  }
-  const msg=await api(token,'sendMessage',{...telegramPayload(offer,chat,Date.now(),{includeLink:true})});
-  return {message:msg,format:photo?'text_photo_rejected':'text_no_image'};
+async function sendOfferWithImage(env,token,chat,offer){
+ // Foto real obrigatória no botão manual e no agendamento: nunca prévia textual.
+ const photo=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
+  {retryOnMiss:true,sourceLookup:resolveOfferSource});
+ if(!photo)throw Object.assign(new Error('Foto real do produto indisponível. Oferta não enviada.'),{code:'PHOTO_NOT_READY'});
+ const payload=telegramPayload(offer,chat,Date.now(),{includeLink:true});
+ const caption=payload.text.length<=1024?payload.text:telegramPayload(offer,chat).text;
+ const msg=await sendTelegramProductPhoto(token,chat,photo,{...payload,text:caption});
+ try{await rememberTelegramSentPhoto(env,offer.affiliate_url,photo,msg.message_id);}
+ catch(error){console.warn('Foto do canal Telegram não pôde ser registrada:',String(error?.message||error).slice(0,95));}
+ return {message:msg,format:'photo'};
 }
 export async function publishChannelOffer(env,id,offerId,{automatic=false}={}){
   const c=await row(env,id);
@@ -389,7 +380,7 @@ export async function publishChannelOffer(env,id,offerId,{automatic=false}={}){
   const claim=await env.DB.prepare("UPDATE channel_offers SET status='sending',last_error=NULL WHERE id=? AND channel_id=? AND status='ready'").bind(offer.id,c.id).run();
   if(claim.meta?.changes!==1)throw bad('Oferta já publicada ou em revisão.',409);
   try{
-    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,prepared,{requirePhoto:automatic});
+    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,prepared);
     const now=epoch(),day=localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE channel_offers SET status='published',published_at=?,published_day=?,telegram_message_id=? WHERE id=? AND channel_id=? AND status='sending'")
       .bind(now,day,result.message.message_id,offer.id,c.id).run();
@@ -398,7 +389,7 @@ export async function publishChannelOffer(env,id,offerId,{automatic=false}={}){
     await log(env,c.id,'published','Telegram enviado • '+result.format,offer.id);
     return {status:'published',message_id:result.message.message_id,format:result.format};
   }catch(e){
-    if(automatic&&e?.code==='PHOTO_NOT_READY'){
+    if(e?.code==='PHOTO_NOT_READY'){
       const now=epoch();
       await env.DB.prepare(
        "INSERT INTO telegram_channel_photo_retries(offer_id,attempts,next_retry_at,reason,updated_at) VALUES(?,1,?,?,?) "+

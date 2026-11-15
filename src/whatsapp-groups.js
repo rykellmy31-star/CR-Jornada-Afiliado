@@ -265,21 +265,21 @@ export async function listManagedWhatsAppGroupOptions(env,id){
  const options=await listWhatsAppGroups(env,g.instance_name);
  return {groups:options};
 }
-async function sendWhatsApp(env,g,offer,{photoUrl=null,requirePhoto=false}={}){
+async function sendWhatsApp(env,g,offer,{photoUrl=null}={}){
  const link=offer.affiliate_url;
  const text=formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
  let photo=photoUrl;
- if(!photo)try{photo=await sharedWhatsAppProductPhoto(env,link,findProductImage);}catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
- if(requirePhoto&&!photo)throw fail('Imagem não confirmada. Nenhuma mensagem sem foto foi enviada.');
- const body=photo
-   ?{number:g.group_jid,mediatype:'image',mimetype:photo.endsWith('.png')?'image/png':'image/jpeg',
-     media:photo,caption:text,fileName:'oferta-mercado-livre.jpg'}
-   :{number:g.group_jid,text,linkPreview:true};
- const reply=await evo(env,(photo?'/message/sendMedia/':'/message/sendText/')+encodeURIComponent(g.instance_name),
-   {method:'POST',body});
+ if(!photo)try{
+  photo=await sharedWhatsAppProductPhoto(env,link,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});
+ }catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
+ if(!photo)throw fail('Imagem real não confirmada. Nenhuma publicação sem foto foi enviada.');
+ const body={number:g.group_jid,mediatype:'image',mimetype:photo.endsWith('.png')?'image/png':'image/jpeg',
+  media:photo,caption:text,fileName:'oferta-mercado-livre.jpg'};
+ const reply=await evo(env,'/message/sendMedia/'+encodeURIComponent(g.instance_name),
+  {method:'POST',body});
  if(typeof reply.key?.id!=='string'||!reply.key.id)
-   throw fail('Evolution não confirmou o envio; verifique no grupo antes de reenviar.');
- return {message_id:reply.key.id,format:photo?'image':'text'};
+  throw fail('Evolution não confirmou o envio; verifique no grupo antes de reenviar.');
+ return {message_id:reply.key.id,format:'image'};
 }
 export async function testManagedWhatsAppGroup(env,id){
  const g=await groupRow(env,id);
