@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import worker from '../src/index.js';
+import worker,{runScheduled} from '../src/index.js';
 
 function dbMock(){
   const db=new DatabaseSync(':memory:');
@@ -327,4 +327,48 @@ test('rejeita grupo do Telegram ao tentar configurar novo canal', async()=>{
     assert.match((await response.json()).error,/não um canal/);
     assert.equal(DB.prepare('SELECT telegram_chat_id AS destination FROM settings WHERE id=1').first().destination,'@achadinhosmlcr');
   }finally{globalThis.fetch=native;DB.close();}
+});
+
+
+test('reenfileirar após 8 tentativas libera Cron e publica FOTO automática novamente',async()=>{
+ const DB=dbMock(),env={DB,ADMIN_PASSWORD:'senha_teste',SESSION_SECRET:'chave_segura_para_os_testes_123',TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
+ const originalFetch=globalThis.fetch;
+ const url='https://meli.la/276cd5n';
+ const image='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-F.jpg';
+ let sentPhotos=0;
+ try{
+  DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,start_hour=0,end_hour=24,max_daily=48 WHERE id=1").run();
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status) VALUES(?,?,?,?,'needs_review')")
+   .bind('jogo de ferramentas com 110 pecas embalagem fechada vonder',url,'Geral',Math.floor(Date.now()/1000)).run();
+  DB.prepare("CREATE TABLE telegram_photo_retries(offer_id INTEGER PRIMARY KEY,attempts INTEGER NOT NULL,next_retry_at INTEGER NOT NULL,reason TEXT NOT NULL,updated_at INTEGER NOT NULL)").run();
+  DB.prepare("INSERT INTO telegram_photo_retries VALUES(1,8,?,'Foto indisponível',?)")
+   .bind(Math.floor(Date.now()/1000)+3600,Math.floor(Date.now()/1000)).run();
+  const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
+  const cookie=login.headers.get('set-cookie').split(';')[0];
+  const requeued=await worker.fetch(req('/api/offers/1/requeue',{method:'POST',body:{},cookie}),env);
+  assert.equal(requeued.status,200);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready');
+  assert.equal(DB.prepare('SELECT * FROM telegram_photo_retries WHERE offer_id=1').first(),null,
+   'reenfileirar deve liberar oferta que ficou excluída da seleção do Cron');
+  globalThis.fetch=async(request,opts={})=>{
+   const u=String(request);
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u===url)return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">',{headers:{'content-type':'text/html'}});
+   if(u===image&&opts.method==='HEAD')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'85000'}});
+   if(u.includes('/sendPhoto')){
+    const payload=JSON.parse(opts.body);
+    assert.equal(payload.photo,image);
+    assert.match(payload.caption,/276cd5n/);
+    sentPhotos++;
+    return Response.json({ok:true,result:{message_id:927}});
+   }
+   if(u.includes('/sendMessage'))throw new Error('Proibido fallback de texto');
+   throw new Error('URL inesperada: '+u);
+  };
+  const dispatched=await runScheduled(env);
+  assert.equal(dispatched.status,'published');
+  assert.equal(dispatched.format,'photo');
+  assert.equal(sentPhotos,1);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
+ }finally{globalThis.fetch=originalFetch;DB.close();}
 });
