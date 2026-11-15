@@ -242,14 +242,14 @@ export async function testShopeeOwnDestination(env,network,id){
   if(!sent?.key?.id)throw fail('A Evolution não confirmou o teste.');
   return {ok:true,message_id:sent.key.id};
 }
-export async function sendShopeeOwnText(env,network,id,text){
+export async function sendShopeeOwnText(env,network,id,text,{telegramHtml=false}={}){
   checkNetwork(network);
   const g=await getRaw(env,network,id);
   if(network==='telegram'){
     if(!g.enabled||!g.channel_registered||!g.token_encrypted)throw fail('O canal Shopee está inativo ou não autorizado.');
     const token=await decrypt(env,g.token_encrypted);
     await verifyTelegram(token,g.telegram_chat_id);
-    const sent=await telegram(token,'sendMessage',{chat_id:g.telegram_chat_id,text,disable_web_page_preview:false});
+    const sent=await telegram(token,'sendMessage',{chat_id:g.telegram_chat_id,text,disable_web_page_preview:false,...(telegramHtml?{parse_mode:'HTML'}:{})});
     if(!Number.isSafeInteger(sent?.message_id))throw fail('Mensagem Telegram não confirmada; confira o canal.');
     return {message_id:String(sent.message_id)};
   }
