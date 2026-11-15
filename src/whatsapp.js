@@ -1,6 +1,7 @@
 import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
 
@@ -440,8 +441,12 @@ async function preflightWhatsAppPhoto(env,offer,source,cfg){
   return {status:'needs_review',reason,offer_id:offer.id};
 }
 async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}){
-  let verifiedImage=null;
+  let verifiedImage=null,prepared=offer;
   if(automatic){
+    const price=await prepareAutomaticOfferPrice(env,offer);
+    if(!price.ok)return recordAutomaticPriceRetry(env,'whatsapp',offer.id,price.reason);
+    prepared=price.offer;
+    await clearAutomaticPriceRetry(env,'whatsapp',offer.id);
     const checked=await preflightWhatsAppPhoto(env,offer,source,cfg);
     if(!checked.image)return checked;
     verifiedImage=checked.image;
@@ -476,7 +481,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   }
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage,requirePhoto:automatic});
+    const result=await sendOfferWhatsApp(env,cfg,prepared,{imageUrl:verifiedImage,requirePhoto:automatic});
     const updatedAt=nowSec();
     if(direct){
       await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='published',published_at=?,message_id=?,last_error=NULL WHERE id=? AND status='sending'")
@@ -519,6 +524,7 @@ export async function runWhatsAppScheduled(env){
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
   await ensureCouponTable(env);
+  await ensureAutomaticPrices(env);
   const cat=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
   const [mirrored,direct]=await Promise.all([
     env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
@@ -528,14 +534,16 @@ export async function runWhatsAppScheduled(env){
       LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
       LEFT JOIN offer_delivery_routing r ON r.offer_id=o.id
       LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=o.affiliate_url
+      LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='whatsapp' AND apr.offer_id=o.id
       WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
         AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?))
+        AND (apr.offer_id IS NULL OR apr.next_retry_at<=?)
         AND (r.delivery_mode IS NULL OR r.delivery_mode='both')
         AND (lower(?)='geral' OR lower(o.category)=lower(?))
       ORDER BY o.published_at ASC,o.id ASC LIMIT 1`)
-      .bind(cfg.group_jid,cfg.started_at,MEDIA_RETRY_LIMIT,nowSec(),cat,cat).first(),
-    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=d.affiliate_url WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?)) AND (lower(?)='geral' OR lower(d.category)=lower(?)) ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
-      .bind(cfg.group_jid,cfg.instance_name,MEDIA_RETRY_LIMIT,nowSec(),cat,cat).first()
+      .bind(cfg.group_jid,cfg.started_at,MEDIA_RETRY_LIMIT,nowSec(),nowSec(),cat,cat).first(),
+    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d LEFT JOIN whatsapp_media_retries pr ON pr.affiliate_url=d.affiliate_url LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='whatsapp' AND apr.offer_id=d.id WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? AND (pr.affiliate_url IS NULL OR (pr.attempts<? AND pr.next_attempt_at<=?)) AND (apr.offer_id IS NULL OR apr.next_retry_at<=?) AND (lower(?)='geral' OR lower(d.category)=lower(?)) ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
+      .bind(cfg.group_jid,cfg.instance_name,MEDIA_RETRY_LIMIT,nowSec(),nowSec(),cat,cat).first()
   ]);
   if(!mirrored&&!direct)return {skipped:'empty'};
   // Prioridade cronológica impede que a fila direta ou o espelhamento bloqueiem
