@@ -834,6 +834,17 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  // Uma pulsação por cron. Se a data parar de avançar, o painel denuncia
  // claramente que o Worker não está rodando em vez de dizer "em revisão".
  await env.DB.prepare('UPDATE ml_monitor_worker_heartbeat SET last_run_at=? WHERE id=1').bind(at).run();
+ // Versões anteriores aplicavam até 30 minutos de espera a vitrines /social.
+ // Elas já podem ser tratadas pelo Browser Run atualizado. Antecipar a fila
+ // antiga sem mudar status, sem apagar registros e sem habilitar grupos pausados.
+ await env.DB.prepare(
+  "UPDATE ml_monitor_retry_schedule SET next_retry_at=? WHERE "+
+  "next_retry_at>? AND shortlink_id IN ("+
+  "SELECT s.id FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
+  "WHERE g.authorized=1 AND s.status='review' "+
+  "AND s.reason LIKE 'Vitrine encontrada, mas o botão do produto principal%'"+
+  ")"
+ ).bind(at,at+120).run();
  let ignoredFromBacklog=0;
  // Recupera os cupons antigos parados em "revisão manual". Não exclui URL
  // externa genérica nem ofertas que apenas anunciam desconto com cupom.
