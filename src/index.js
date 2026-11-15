@@ -356,6 +356,7 @@ async function runScheduled(env){
   // deixa a oferta 'Na fila' mas jamais tenta enviá-la automaticamente.
   await env.DB.prepare(
    "DELETE FROM telegram_photo_retries WHERE attempts>=6 "+
+   "AND reason<>'Aguardando foto real na preparação automática' "+
    "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).run();
   for(let checked=0;checked<5;checked++){
@@ -786,20 +787,21 @@ export default {
   async scheduled(_controller, env, ctx) {
     const master=env.DB?masterState(env):Promise.resolve({enabled:null});
     function start(fn,label,route=false){
-      ctx.waitUntil((async()=>{
+      const task=(async()=>{
         const state=await master;
         if(state.enabled===false)return;
         const configured={...env,MASTER_SCHEDULE_ENABLED:state.enabled};
         await fn(configured);
         if(route&&state.enabled===true)await runCategoryRoutingScheduled(configured);
-      })().catch(error=>console.error(label+':',error?.message)));
+      })().catch(error=>console.error(label+':',error?.message));
+      ctx.waitUntil(task);
+      return task;
     }
-    // Antes estas duas tarefas corriam em paralelo. A foto podia chegar
-    // DEPOIS da tentativa de publicação. Esperar apenas no Cron, sem mudar
-    // nem chamar outro publicador ou afetar a publicação manual.
+    // Mantém os dois jobs do Cron, mas o publicador só começa depois da
+    // preparação de foto. Botão Publicar e envios manuais ficam intocados.
+    const photoPrepared=start(prewarmTelegramQueue,'Preparar fotos antecipadamente');
     start(async configured=>{
-      try{await prewarmTelegramQueue(configured);}
-      catch(error){console.warn('Pré-carregamento de foto:',String(error?.message||error).slice(0,110));}
+      await photoPrepared;
       return runScheduled(configured);
     },'Telegram');
     start(runWhatsAppScheduled,'WhatsApp');
