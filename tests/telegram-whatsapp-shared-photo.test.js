@@ -80,9 +80,16 @@ for(const delivery of ['manual','automatic']){
     const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
     assert.equal(login.status,200);
     const cookie=login.headers.get('set-cookie').split(';')[0];
-    const published=await worker.fetch(req('/api/offers/1/publish',{method:'POST',cookie,body:{}}),env);
+    const background=[];
+    const published=await worker.fetch(
+      req('/api/offers/1/publish',{method:'POST',cookie,body:{}}),env,
+      {waitUntil:p=>background.push(p)}
+    );
     assert.equal(published.status,200);
     assert.equal((await published.json()).format,'photo');
+    assert.equal(background.length,1,'Cloudflare recebe o espelhamento pelo waitUntil');
+    await Promise.all(background);
+    assert.equal(waMedia,1,'WhatsApp recebe mídia após publicação manual, sem aguardar próximo Cron');
    }else{
     const published=await runScheduled(env);
     assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
