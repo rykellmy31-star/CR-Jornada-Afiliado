@@ -8,6 +8,7 @@ import { resolveProductImage,rememberTelegramSentPhoto } from './offer-images.js
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 import { masterState,setMasterState,listCategories,createGroupCategory,updateGroupCategory,listCategoryDestinations,saveCategoryRoutes,upsertProductCategory,runCategoryRoutingScheduled } from './automation-center.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, updateWhatsAppAutomation, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
@@ -226,10 +227,26 @@ async function sendOffer(env, offer, settings, {automatic=false}={}) {
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
+  let prepared=offer;
+  if(automatic){
+    const price=await prepareAutomaticOfferPrice(env,offer);
+    if(!price.ok){
+      const retry=await recordAutomaticPriceRetry(env,'telegram',offer.id,price.reason);
+      await log(env,'awaiting_price','Aguardando preço verificável no anúncio: '+price.reason,offer.id);
+      return retry;
+    }
+    prepared=price.offer;
+    if(price.price_source==='mercadolivre'){
+      await env.DB.prepare(
+        "UPDATE offers SET price_cents=?,old_price_cents=NULL,promo_terms_json=?,promo_captured_at=? WHERE id=? AND status='ready'"
+      ).bind(prepared.price_cents,prepared.promo_terms_json,prepared.promo_captured_at,offer.id).run();
+    }
+    await clearAutomaticPriceRetry(env,'telegram',offer.id);
+  }
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
   try {
-    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer,{requirePhoto:automatic});
+    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, prepared,{requirePhoto:automatic});
     const timestamp = Math.floor(Date.now() / 1000);
     const localDay = localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE offers SET status='published', published_at=?, published_day=?, telegram_message_id=? WHERE id=? AND status='sending'")
@@ -268,11 +285,14 @@ async function runScheduled(env) {
   if (!env.TELEGRAM_BOT_TOKEN) return;
   await ensureCouponTable(env);
   await ensureTelegramPhotoRetries(env);
+  await ensureAutomaticPrices(env);
   const offer = await env.DB.prepare(OFFER_WITH_COUPON +
    " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id"+
+   " LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='telegram' AND apr.offer_id=o.id"+
    " WHERE o.status='ready' AND (tpr.offer_id IS NULL OR (tpr.attempts<? AND tpr.next_retry_at<=?))"+
+   " AND (apr.offer_id IS NULL OR apr.next_retry_at<=?)"+
    " AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC, o.id ASC LIMIT 1"
-  ).bind(PHOTO_RETRY_LIMIT,Math.floor(Date.now()/1000),settings.category,settings.category).first();
+  ).bind(PHOTO_RETRY_LIMIT,Math.floor(Date.now()/1000),Math.floor(Date.now()/1000),settings.category,settings.category).first();
   if (!offer) return;
   return await sendOffer(env, offer, effective,{automatic:true});
 }
