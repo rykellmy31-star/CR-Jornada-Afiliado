@@ -218,7 +218,7 @@ test('API mestre exige login; agendador desligado mantém cinco filas intactas',
     try{
       const tasks=[];
       await worker.scheduled({},env,{waitUntil:p=>tasks.push(p)});
-      assert.equal(tasks.length,5);
+      assert.equal(tasks.length,6);
       await Promise.all(tasks);
       assert.equal(calls.length,0);
     }finally{globalThis.fetch=original;}

@@ -172,8 +172,7 @@ test('falha de foto no automático NÃO publica preview; quando imagem volta, Te
   assert.equal(second.status,'published');
   assert.equal(second.format,'photo');
   const wa=await runWhatsAppScheduled(env);
-  assert.equal(wa.status,'sent');
-  assert.equal(wa.format,'photo');
+  assert.deepEqual(wa,{skipped:'empty'},'WhatsApp já recebeu a foto na publicação automática');
   assert.equal(waMedia,1);
   assert.equal(waText,0);
   assert.equal(tgMedia,1);

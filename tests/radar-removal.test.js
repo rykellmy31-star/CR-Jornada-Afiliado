@@ -18,6 +18,6 @@ test('Radar retirado do painel e do JavaScript sem afetar ofertas e cupons', () 
 test('Agendador mantém publicações Telegram, WhatsApp, multigrupos e Shopee sem Radar externo', async () => {
   const jobs=[];
   await worker.scheduled({}, {DB:null}, {waitUntil:job=>jobs.push(job)});
-  assert.equal(jobs.length,5);
+  assert.equal(jobs.length,6);
   await Promise.all(jobs);
 });
