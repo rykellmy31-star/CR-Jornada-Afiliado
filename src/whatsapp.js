@@ -1,7 +1,7 @@
 import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
-import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,hasFreshOfferPrice} from './automatic-price.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,hasFreshOfferPrice,resolveOfferSource} from './automatic-price.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
 
@@ -410,7 +410,7 @@ async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,requirePhoto=false
 // não publica uma mensagem incompleta em nenhum grupo.
 async function preflightWhatsAppPhoto(env,offer,source,cfg){
   let image=null;
-  try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true});}
+  try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});}
   catch(e){console.warn('Pré-verificação da foto WhatsApp:',String(e?.message||e).slice(0,110));}
   if(image)return {image};
   const now=nowSec();
