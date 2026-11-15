@@ -435,7 +435,7 @@ export async function reviewMonitorShortlink(env,id,body){
  ).bind(n).first();
  if(!short)throw fail('Link não encontrado.',404);
  if(short.status!=='review')throw fail('Este link não está mais em revisão. Atualize a lista.',409);
- if(!short.enabled||!short.authorized)throw fail('Ative e autorize o grupo antes de revisar o link.',403);
+ if(!short.authorized)throw fail('Grupo sem autorização para revisar o link.',403);
  let candidate;
  if(action==='retry'){
   const inspected=await inspectMonitorShortlink(short.short_url);
@@ -743,7 +743,8 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   "SELECT s.*,g.instance_name,g.group_jid,rs.next_retry_at,rs.lease_until,rs.auto_attempts "+
   "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
   "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
-  "WHERE g.enabled=1 AND g.authorized=1 "+
+  // Pausar grupo impede novas capturas, mas não interrompe a verificação de links já recebidos.
+  "WHERE g.authorized=1 "+
   "AND (s.status='pending' OR (s.status='review' AND ("+
   "s.reason IS NULL OR s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR ("+
   "s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' AND "+
