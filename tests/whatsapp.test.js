@@ -129,7 +129,7 @@ test('envia foto da oferta ao grupo após publicação no Telegram e evita repet
     await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false});
     await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true});
     const now=Math.floor(Date.now()/1000);
-    DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+    DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
       .bind('Produto de teste com fotografia','https://meli.la/2bsHW5y','Geral',now,'published',now+2).run();
     assert.equal((await runWhatsAppScheduled(env)).status,'sent');
     assert.equal(sent.length,1);
@@ -155,7 +155,7 @@ test('falha ambígua fica em revisão sem reenviar automaticamente',async()=>{
     await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false});
     await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true});
     const now=Math.floor(Date.now()/1000);
-    DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+    DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
       .bind('Produto de teste sem fotografia','https://meli.la/2bsHW5y','Geral',now,'published',now+2).run();
     const result=await runWhatsAppScheduled(env);
     assert.equal(result.status,'needs_review');
@@ -331,7 +331,7 @@ test('intervalo exclusivo do WhatsApp controla os envios sem mudar o Telegram',a
     assert.equal((await getWhatsAppState(env)).schedule.interval_minutes,120);
     const now=Math.floor(Date.now()/1000);
     for (let i=0;i<2;i++)
-      DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+      DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
         .bind('Produto de teste '+i+' para WhatsApp', 'https://meli.la/2bsHW5'+(i?'z':'y'),'Geral',now,'published',now+2+i).run();
     assert.equal((await runWhatsAppScheduled(env)).status,'sent');
     assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'interval'});
@@ -409,7 +409,7 @@ test('intervalo arbitrário do WhatsApp de 7 minutos é respeitado entre duas of
     await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:7});
     await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:7});
     const now=Math.floor(Date.now()/1000);
-    for(let i=0;i<2;i++)DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+    for(let i=0;i<2;i++)DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
        .bind('Oferta customizada '+i,'https://meli.la/2bsHW'+(i?'5z':'5y'),'Geral',now,'published',now+2+i).run();
     assert.equal((await runWhatsAppScheduled(env)).status,'sent');
     DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1').bind(now-6*60).run();
