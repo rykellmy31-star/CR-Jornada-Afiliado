@@ -679,6 +679,7 @@ ${LINK_BATCH_CSS}
 .queue-forecast-time{color:#0f6a70;font-weight:800;white-space:nowrap}.queue-forecast-muted{color:#637489}.queue-forecast-published{color:#526879}.list-panel table td:nth-child(3){min-width:190px}.list-panel table td:nth-child(3) small{margin-top:4px}
 `;
 export const CLIENT_JS = `
+// Build: cr-jornada-affiliates-auto-photo-required-20261115-v2
 'use strict';
 const $ = id => document.getElementById(id);
 // iOS Safari pode ignorar user-scalable=no: bloqueie somente gestos de zoom.
