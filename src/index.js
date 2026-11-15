@@ -316,7 +316,14 @@ async function runScheduled(env){
      "AND (tpr.offer_id IS NULL OR (tpr.attempts<6 AND tpr.next_retry_at<=?))"+
      " ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
    ).bind(settings.category,settings.category,Math.floor(Date.now()/1000)).first();
-   if(!offer)return {skipped:checked?'awaiting_photo':'empty'};
+   if(!offer){
+     const waiting=await env.DB.prepare(
+       "SELECT COUNT(*) AS total FROM telegram_photo_retries r "+
+       "JOIN offers o ON o.id=r.offer_id "+
+       "WHERE o.status='ready' AND r.next_retry_at>?"
+     ).bind(Math.floor(Date.now()/1000)).first();
+     return {skipped:waiting?.total?'awaiting_photo':'empty'};
+   }
    const result=await publishWithManualTools(env,offer,settings,
      {origin:'automático',requirePhoto:true});
    if(result?.status==='awaiting_photo')continue;
