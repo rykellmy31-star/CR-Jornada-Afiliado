@@ -687,11 +687,11 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
   "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
   "WHERE g.enabled=1 AND g.authorized=1 "+
-  "AND (s.status='pending' OR (s.status='review' AND (s.reason IS NULL OR "+
-  "(s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR "+
-  "(s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' "+
-  "AND s.reason NOT LIKE 'Redirecionamento circular%')) "+
-  "AND s.reason NOT LIKE 'Produto associado por confirmação manual%')))) "+
+  "AND (s.status='pending' OR (s.status='review' AND ("+
+  "s.reason IS NULL OR s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR ("+
+  "s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' AND "+
+  "s.reason NOT LIKE 'Redirecionamento circular%' AND "+
+  "s.reason NOT LIKE 'Produto associado por confirmação manual%')))) "+
   "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? "+
   "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END, "+
   "COALESCE(rs.next_retry_at,0),s.created_at DESC LIMIT 5";
