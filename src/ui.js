@@ -179,6 +179,12 @@ export function renderPage() {
             <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Publicações automáticas neste canal (ativar ou pausar)</b><small>O botão Ligar/Desligar Robô não cancela uma pausa feita aqui.</small></span></label>
             <div class="field-grid"><label>Intervalo entre publicações no Telegram (minutos)<input id="interval_minutes" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
             <p class="hint">Digite qualquer intervalo inteiro entre 1 e 1440 minutos. Janela de publicação no horário da Bahia (UTC−3).</p>
+            <div id="telegram-capacity" class="telegram-capacity" aria-live="polite" aria-atomic="true">
+              <strong class="telegram-capacity-title">🧮 Calculadora de publicações em tempo real</strong>
+              <div class="telegram-capacity-result"><span id="telegram-capacity-count">—</span><span>links necessários por dia</span></div>
+              <p id="telegram-capacity-detail" class="telegram-capacity-detail">Preencha os horários, o intervalo e o limite diário para calcular.</p>
+              <p class="telegram-capacity-note">Estimativa máxima com ofertas disponíveis e automação ativa. O horário de parada é exclusivo; atrasos ou erros podem reduzir os envios. Esta calculadora não altera as configurações.</p>
+            </div>
             </div>
             <div class="actions"><button class="primary" type="submit">Salvar configurações</button><button class="outline" type="button" id="test-telegram">Testar Telegram</button></div>
             <p id="token-state" class="hint"></p>
@@ -661,7 +667,7 @@ export const CSS = `
   input:not([type=checkbox]),select,textarea{font-size:16px}
 }
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill:not(#master-toggle){display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
-${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}
+${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}.telegram-capacity{margin-top:16px;padding:15px 16px;border:1px solid #ccdedf;border-radius:14px;background:#fff;display:flex;flex-direction:column;gap:9px;min-width:0}.telegram-capacity-title{font-size:15px;color:#173447}.telegram-capacity-result{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;color:#245d61;font-weight:650}.telegram-capacity-result span:first-child{font-size:clamp(30px,6vw,42px);font-weight:850;line-height:1}.telegram-capacity-result span:last-child{font-size:14px}.telegram-capacity-detail{font-size:14px;color:#273b53;line-height:1.5}.telegram-capacity-note{font-size:12px;color:#5f6e80;line-height:1.5}
 ${LINK_BATCH_CSS}
 `;
 export const CLIENT_JS = `
@@ -676,6 +682,45 @@ document.addEventListener('touchmove',event=>{
 },{passive:false});
 const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const toDate = s => s ? new Date(s*1000).toLocaleString('pt-BR') : '—';
+function calculateTelegramDailyCapacity(startHour,endHour,intervalMinutes,maxDaily){
+  const integer=Number.isSafeInteger;
+  if(![startHour,endHour,intervalMinutes,maxDaily].every(integer)||
+     startHour<0||startHour>23||endHour<1||endHour>24||
+     endHour<=startHour||intervalMinutes<1||intervalMinutes>1440||
+     maxDaily<1||maxDaily>48)return null;
+  const windowMinutes=(endHour-startHour)*60;
+  // O agendador considera o início e exclui o horário de encerramento.
+  const possibleSlots=Math.ceil(windowMinutes/intervalMinutes);
+  return {windowMinutes,possibleSlots,linksNeeded:Math.min(possibleSlots,maxDaily),
+    limitedByDaily:maxDaily<possibleSlots};
+}
+function updateTelegramCapacity(){
+  const ids=['start_hour','end_hour','interval_minutes','max_daily'];
+  const raw=ids.map(id=>$(id).value.trim());
+  const count=$('telegram-capacity-count'),detail=$('telegram-capacity-detail');
+  if(!count||!detail)return;
+  if(raw.some(x=>x==='')){
+    count.textContent='—';
+    detail.textContent='Preencha os quatro campos para calcular.';
+    return;
+  }
+  const [startHour,endHour,intervalMinutes,maxDaily]=raw.map(Number);
+  const result=calculateTelegramDailyCapacity(startHour,endHour,intervalMinutes,maxDaily);
+  if(!result){
+    count.textContent='—';
+    detail.textContent='Confira o intervalo (1–1440), o máximo (1–48) e os horários: parar deve ser depois de começar.';
+    return;
+  }
+  const fmt=n=>n.toLocaleString('pt-BR');
+  count.textContent=fmt(result.linksNeeded);
+  const hrs=result.windowMinutes/60;
+  const hrsLabel=Number.isInteger(hrs)?hrs+'h':fmt(result.windowMinutes)+' minutos';
+  detail.textContent='Janela de '+hrsLabel+' • '+fmt(result.possibleSlots)+
+    ' horários possíveis • limite diário de '+fmt(maxDaily)+'. '+
+    (result.limitedByDaily?'O máximo diário reduz a necessidade para '+fmt(result.linksNeeded)+' links.':
+      'Separe '+fmt(result.linksNeeded)+' ofertas diferentes para preencher o dia.');
+}
+
 let currentChannelId=1;
 let currentWaGroupId=1;
 let selectedPlatform='mercadolivre';
@@ -1367,6 +1412,7 @@ async function refresh(){
     $('channel-label').textContent='Destino Telegram: '+(s.telegram_chat_id||'não configurado');
     for(const k of ['channel_registered','telegram_enabled','automation_enabled']) $(k).checked=!!s[k];
     for(const k of ['interval_minutes','max_daily','start_hour','end_hour']) $(k).value=s[k];
+    updateTelegramCapacity();
     mlTopStatus=s.automation_enabled?'Robô ligado':'Robô desligado';
     if(selectedPlatform==='mercadolivre')$('top-status').textContent=mlTopStatus;
     $('token-state').textContent=currentChannelId===1
@@ -1425,6 +1471,11 @@ for(let h=0;h<=24;h++){
   if(h<24) $('start_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
   if(h>0) $('end_hour').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
 }
+for(const id of ['interval_minutes','max_daily','start_hour','end_hour']){
+  $(id).addEventListener('input',updateTelegramCapacity);
+  $(id).addEventListener('change',updateTelegramCapacity);
+}
+updateTelegramCapacity();
 for(let h=0;h<=24;h++){
  const label=String(h).padStart(2,'0')+':00';
  if(h<24)$('wa-multi-start').insertAdjacentHTML('beforeend','<option value="'+h+'">'+label+'</option>');
