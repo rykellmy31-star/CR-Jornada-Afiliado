@@ -205,9 +205,9 @@ export function renderPage() {
               <option value="whatsapp">Somente WhatsApp</option>
             </select>
           </label>
-          <p class="hint" id="offer-delivery-help">Nos dois: primeiro o Telegram e depois o WhatsApp, cada um no seu intervalo. O envio exclusivo ao WhatsApp não depende do Telegram.</p>
+          <p class="hint" id="offer-delivery-help">Nos dois: ao usar Publicar no Telegram, o robô também tenta enviar a mesma foto ao WhatsApp, respeitando a ativação e o intervalo do grupo. O envio exclusivo ao WhatsApp não depende do Telegram.</p>
           <label class="check-row owner"><input name="owner_confirmation" type="checkbox" required><span><b>Confirmo que o link foi criado pelo Gerador/Barra de Afiliados</b><small>O sistema não consegue comprovar automaticamente que a comissão pertence à sua conta.</small></span></label>
-          <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">Ao publicar, o robô tenta localizar a foto oficial do produto; se indisponível, envia o link com prévia. Preços informados manualmente não são verificados em tempo real.</p></section>
+          <button class="primary full" type="submit">Cadastrar na fila</button></form><p class="hint">No automático, o robô consulta novamente a foto real se a primeira leitura falhar e não publica somente a prévia do link. No manual, o link com prévia continua disponível como alternativa. Preços informados manualmente não são verificados em tempo real.</p></section>
       </div>
       ${LINK_BATCH_HTML}
       <section class="card whatsapp-automation hidden" id="ml-wa-automation-panel">
