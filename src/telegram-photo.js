@@ -48,7 +48,11 @@ export async function sendTelegramProductPhoto(token,chat,imageUrl,payload,{fetc
  // Falhas ambíguas permanecem em revisão para não duplicar mensagens.
  if(response.status!==400||!/photo|image|file|http url|url content|wrong type|format/i.test(description))
   return checkTelegram(response,json);
- const {blob,filename}=await readImage(imageUrl,fetcher);
+ let blob,filename;
+ try{({blob,filename}=await readImage(imageUrl,fetcher));}
+ catch(error){
+  throw Object.assign(new Error('Telegram rejeitou a URL e o arquivo da foto não pôde ser recuperado: '+String(error?.message||error).slice(0,95)),{code:'PHOTO_NOT_READY'});
+ }
  const form=new FormData();
  form.set('chat_id',chat);
  form.set('photo',blob,filename);
@@ -56,5 +60,8 @@ export async function sendTelegramProductPhoto(token,chat,imageUrl,payload,{fetc
  if(payload.parse_mode)form.set('parse_mode',payload.parse_mode);
  if(payload.reply_markup)form.set('reply_markup',JSON.stringify(payload.reply_markup));
  const uploaded=await fetcher(endpoint,{method:'POST',body:form,signal:AbortSignal.timeout(20000)});
- return checkTelegram(uploaded,await uploaded.json().catch(()=>null));
+ const uploadData=await uploaded.json().catch(()=>null);
+ if(uploaded.status===400&&/photo|image|file|type|format/i.test(String(uploadData?.description||'')))
+  throw Object.assign(new Error('Telegram recusou também o arquivo da foto; nenhuma mensagem foi publicada.'),{code:'PHOTO_NOT_READY'});
+ return checkTelegram(uploaded,uploadData);
 }
