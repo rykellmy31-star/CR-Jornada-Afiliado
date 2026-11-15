@@ -532,39 +532,63 @@ async function productFromShortPage(response){
 // Em páginas sociais do Mercado Livre, o anúncio principal fica dentro de
 // rl-card-featured-wrapper. Só seguimos o botão "Ir para produto" desse bloco:
 // as sugestões ("Você também pode gostar") nunca podem ser escolhidas.
+// A vitrine pode ter o destaque em HTML ou em links hidratados. A identificação
+// "c_id=/home/card-featured/element" do ML diferencia o produto principal
+// de "home/affiliate-profile-recommendations". Não usar o primeiro resultado.
 function featuredProductFromHtml(html,baseUrl){
- if(typeof html!=='string'||html.length>2100000)return null;
+ if(typeof html!=='string'||html.length>5500000)return null;
+ const unique=new Map(),add=(raw,explicitFeatured=false)=>{
+  if(typeof raw!=='string'||raw.length>4600)return;
+  const cleaned=raw.replace(/&amp;|&#38;|&#x26;/gi,'&')
+   .replace(/&quot;/gi,'"').replace(/\\u0026/gi,'&')
+   .replace(/\\u003d/gi,'=').replace(/\\\//g,'/');
+  if(!explicitFeatured&&!/(?:c_id=|%2Fc_id%3D|\/home\/card-featured\/element|home_affiliate-profile(?:&|$))/i.test(cleaned))
+   return;
+  // URL só pode ser confirmada se estiver identificada como cartão destacado.
+  if(!explicitFeatured&&!/(?:card-featured|home_affiliate-profile(?:&|$|#))/i.test(cleaned))return;
+  let url;try{url=new URL(cleaned,baseUrl).href;}catch{return;}
+  const candidate=urlCandidate(url);
+  if(candidate?.kind==='product')unique.set(candidate.product_id,candidate);
+ };
  const featured=/<(?:section|div)\b[^>]{0,1200}\bclass\s*=\s*(["'])[^"']*\brl-card-featured-wrapper\b[^"']*\1[^>]*>/i.exec(html);
- if(!featured)return null;
- const start=featured.index+featured[0].length;
- // Limite de leitura impede que um card recomendado em outra seção seja usado.
- const excerpt=html.slice(start,start+280000);
- const boundary=excerpt.search(/(?:Voc(?:ê|&ecirc;|&#234;)\s+tamb(?:é|&eacute;|&#233;)m\s+pode\s+gostar|rl-card-recommendations|recommendations-wrapper)/i);
- const scope=boundary>=0?excerpt.slice(0,boundary):excerpt;
- const anchors=scope.match(/<a\b[^>]{0,5000}>[\s\S]{0,12000}?<\/a\s*>/gi)||[];
- const candidates=new Map();
- for(const a of anchors.slice(0,180)){
-  const opening=/^<a\b[^>]*>/i.exec(a)?.[0]||'';
-  const label=a.slice(opening.length).replace(/<[^>]{0,2000}>/g,' ').replace(/&nbsp;|&#160;/gi,' ').replace(/\s+/g,' ').trim();
-  const linkButton=/poly-action-links__action--link/i.test(opening);
-  const mainLabel=/\bir\s+para\s+(?:o\s+)?produto\b/i.test(label);
-  if(!linkButton&&!mainLabel)continue;
-  const href=/\bhref\s*=\s*(?:"([^"]{1,3000})"|'([^']{1,3000})')/i.exec(opening);
-  if(!href)continue;
-  const raw=(href[1]||href[2]).replace(/&amp;/gi,'&').replace(/&#38;/gi,'&');
-  let resolved;
-  try{resolved=new URL(raw,baseUrl).href;}catch{continue;}
-  const candidate=urlCandidate(resolved);
-  if(candidate?.kind==='product')candidates.set(candidate.product_id,candidate);
-  if(candidates.size>1)return null;
+ if(featured){
+  const excerpt=html.slice(featured.index+featured[0].length,featured.index+featured[0].length+350000);
+  const boundary=excerpt.search(/(?:Voc(?:ê|&ecirc;|&#234;)\s+tamb(?:é|&eacute;|&#233;)m\s+pode\s+gostar|rl-card-recommendations|recommendations-wrapper)/i);
+  const scope=boundary>=0?excerpt.slice(0,boundary):excerpt;
+  for(const a of (scope.match(/<a\b[^>]{0,5000}>[\s\S]{0,12000}?<\/a\s*>/gi)||[]).slice(0,180)){
+   const opening=/^<a\b[^>]*>/i.exec(a)?.[0]||'';
+   const label=a.slice(opening.length).replace(/<[^>]{0,2000}>/g,' ').replace(/&nbsp;|&#160;/gi,' ').replace(/\s+/g,' ').trim();
+   const action=/poly-action-links__action--link|poly-component__link--action-link/i.test(opening);
+   if(!action&&!/\bir\s+para\s+(?:o\s+)?produto\b/i.test(label))continue;
+   const href=/\bhref\s*=\s*(?:"([^"]{1,4500})"|'([^']{1,4500})')/i.exec(opening);
+   if(href)add(href[1]||href[2],true);
+  }
  }
- return candidates.size===1?[...candidates.values()][0]:null;
+ // Segundo caminho: links públicos do ML marcados como card-featured;
+ // funciona mesmo que o nome da classe/contêiner mude.
+ for(const tag of (html.match(/<a\b[^>]{0,5500}>/gi)||[]).slice(0,400)){
+  const href=/\bhref\s*=\s*(?:"([^"]{1,4500})"|'([^']{1,4500})')/i.exec(tag);
+  if(href)add(href[1]||href[2]);
+ }
+ // Hidratação Next/React às vezes guarda a URL em scripts, sem uma tag <a>.
+ // Só aceita URLs explicitamente identificadas como card-featured.
+ const encoded=html.replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=')
+  .replace(/\\\//g,'/').replace(/&amp;/gi,'&');
+ const urlPattern=/https:\/\/(?:www\.|produto\.)?mercadolivre\.com\.br\/[^\s"'<>\\]{6,4200}/gi;
+ let inspected=0;
+ for(const hit of encoded.matchAll(urlPattern)){
+  if(++inspected>1200)break;
+  const raw=hit[0].replace(/[),;]+$/g,'');
+  if(!/card-featured/.test(raw))continue;
+  add(raw);
+ }
+ return unique.size===1?[...unique.values()][0]:null;
 }
 async function featuredProductFromShowcasePage(response,baseUrl){
  const type=(response.headers.get('content-type')||'').toLowerCase();
  if(!/^text\/html(?:;|$)/.test(type))return null;
  const declared=Number(response.headers.get('content-length')||0);
- const maxBytes=2100000;
+ const maxBytes=5500000;
  if(declared>maxBytes)return null;
  const reader=response.body?.getReader();
  if(!reader)return null;
