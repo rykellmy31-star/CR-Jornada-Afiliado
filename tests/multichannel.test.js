@@ -210,9 +210,9 @@ test('canais Telegram adicionais: automático só envia mídia, tenta novamente 
  const DB=dbMock(),env=envFor(DB),sent=[],native=globalThis.fetch;
  try{
   const [tech]=await channels(env);
+  fakeTelegram(sent,{photoReady:false});
   await updateTelegramChannel(env,tech,config);
   await addChannelOffer(env,tech,newOffer('https://meli.la/TESTEFOTO1'));
-  fakeTelegram(sent,{photoReady:false});
   const first=await runMultiChannelScheduled(env);
   assert.equal(first.results[0].status,'awaiting_photo');
   assert.equal(sent.length,0);
