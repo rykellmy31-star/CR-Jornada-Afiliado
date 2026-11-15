@@ -2,7 +2,7 @@
 // Uma falha temporária de preço nunca bloqueia os demais produtos.
 import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractMercadoLivrePagePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 import {sourcePageForAffiliateImage,rememberProductImage} from './offer-images.js';
-import {validatedProductPhoto} from './images.js';
+import {validatedProductPhoto,trustedProductImage} from './images.js';
 import {inspectMonitorShortlink,browserFeaturedProduct,claimSocialBrowserBudget} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
 import {safePromotionTerms,MAX_AGE_MS} from './promotion-terms.js';
@@ -132,8 +132,28 @@ export async function resolveOfferSource(env,affiliateUrl,{fetcher=fetch}={}){
    const result=await inspectMonitorShortlink(affiliateUrl,{fetcher});
    const identified=result?.product||(result?.social_url&&['showcase','auth'].includes(result.kind)&&
       await claimSocialBrowserBudget(env)
-     ?await browserFeaturedProduct(env,result.social_url):null);
-   if(official(identified?.url))source=identified.url;
+     ?await browserFeaturedProduct(env,result.social_url,{includeDetails:true}):null);
+   if(official(identified?.url)){
+    source=identified.url;
+    // A foto pertence somente ao cartão principal MLB, não às recomendações.
+    const details=result?.featured_price||identified?.featured_price;
+    if(trustedProductImage(details?.image_url)){
+     try{
+      const photo=await validatedProductPhoto(details.image_url,fetcher);
+      if(photo){
+       await rememberProductImage(env,affiliateUrl,photo);
+       await rememberProductImage(env,source,photo);
+      }
+     }catch(error){console.warn('Foto oficial do destaque:',String(error?.message||error).slice(0,90));}
+    }
+    if(positive(details?.price_cents)){
+     const now=Math.floor(Date.now()/1000);
+     await env.DB.prepare(
+      'INSERT INTO affiliate_verified_offer_details(affiliate_url,source_url,details_json,checked_at) VALUES(?,?,?,?) '+
+      'ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,details_json=excluded.details_json,checked_at=excluded.checked_at'
+     ).bind(affiliateUrl,source,JSON.stringify(details),now).run();
+    }
+   }
   }catch(error){
    console.warn('Origem do anúncio do afiliado:',String(error?.message||error).slice(0,100));
   }
