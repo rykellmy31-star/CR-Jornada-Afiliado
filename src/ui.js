@@ -1,5 +1,6 @@
 import {CATEGORY_PAGE_HTML,CATEGORY_CSS,CATEGORY_CLIENT_JS} from './ui-categories.js';
 import {LINK_BATCH_HTML,LINK_BATCH_CSS,LINK_BATCH_CLIENT_JS} from './ui-link-batches.js';
+import {OVERVIEW_PAGE_HTML,OVERVIEW_CSS,OVERVIEW_CLIENT_JS} from './ui-overview.js';
 export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
   <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><button id="master-toggle" type="button" class="pill master-toggle hidden" aria-pressed="false" hidden disabled>Ligar robô</button><span id="top-status" class="hidden">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
@@ -8,6 +9,8 @@ export function renderPage() {
     <section id="login" class="login card hidden" hidden><span class="eyebrow">ACESSO RESTRITO</span><h1>Painel de ofertas</h1><p>Entre com a senha administrativa configurada como segredo na Cloudflare.</p><form id="login-form"><label>Senha de administrador<input id="password" type="password" minlength="8" required autocomplete="current-password" placeholder="••••••••••"></label><button class="primary" type="submit">Entrar no painel</button></form><div id="login-error" class="feedback" role="status"></div></section>
     <section id="dashboard" class="hidden" hidden>
       <aside class="platform-sidebar" id="platform-sidebar" aria-label="Menu de plataformas">
+        <button class="platform-nav-item" type="button" data-panel="overview"><span>📊</span> Visão Geral</button>
+        <div class="platform-side-divider"></div>
         <div class="platform-nav-heading">PLATAFORMAS</div>
         <button class="platform-nav-item active" type="button" data-platform="mercadolivre"><span>🛍️</span> Mercado Livre</button>
         <button class="platform-nav-item" type="button" data-platform="shopee"><span>🧡</span> Shopee</button>
@@ -19,6 +22,7 @@ export function renderPage() {
         <div class="platform-side-divider"></div>
         <p class="platform-side-note">Cada plataforma possui suas próprias filas e configurações de divulgação.</p>
       </aside>
+      ${OVERVIEW_PAGE_HTML}
       ${CATEGORY_PAGE_HTML}
       <section id="affiliate-page" class="card history hidden">
         <div class="section-header"><div><h2>🔐 Conexão de Afiliado • Mercado Livre</h2>
@@ -668,6 +672,7 @@ export const CSS = `
 }
 @media(max-width:850px){.main-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{flex-direction:column;align-items:stretch}.profile{width:100%}}@media(max-width:520px){main{padding:16px 12px 34px}header{padding:14px 12px}.header-end .pill:not(#master-toggle){display:none}.main-grid>.card,.list-panel,.history,.coupon-panel,.whatsapp-panel,.channels-panel,.wa-multichannel{padding:17px}.field-grid{grid-template-columns:1fr}.metric-grid{gap:9px}.metric{padding:15px}.metric strong{font-size:26px}.login{margin:35px 0;padding:22px}.actions button{flex:1}.section-header{margin-bottom:14px}}
 ${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}.telegram-capacity{margin-top:16px;padding:15px 16px;border:1px solid #ccdedf;border-radius:14px;background:#fff;display:flex;flex-direction:column;gap:9px;min-width:0}.telegram-capacity-title{font-size:15px;color:#173447}.telegram-capacity-result{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;color:#245d61;font-weight:650}.telegram-capacity-result span:first-child{font-size:clamp(30px,6vw,42px);font-weight:850;line-height:1}.telegram-capacity-result span:last-child{font-size:14px}.telegram-capacity-detail{font-size:14px;color:#273b53;line-height:1.5}.telegram-capacity-note{font-size:12px;color:#5f6e80;line-height:1.5}
+${OVERVIEW_CSS}
 ${LINK_BATCH_CSS}
 `;
 export const CLIENT_JS = `
@@ -726,7 +731,7 @@ let currentWaGroupId=1;
 let selectedPlatform='mercadolivre';
 let selectedNetwork='telegram';
 let selectedTab='telegram';
-let selectedPage='platform';
+let selectedPage='overview';
 const lastNetwork={mercadolivre:'telegram',shopee:'telegram'};
 const shopeeTarget={telegram:null,whatsapp:null};
 const NAV_KEY='cr-jornada-afiliados:navegacao:v1';
@@ -740,7 +745,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
-    if(['platform','categories','activity','affiliate','linkbatches'].includes(state.page))selectedPage=state.page;
+    if(['overview','platform','categories','activity','affiliate','linkbatches'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -933,6 +938,7 @@ function applyPlatformView(){
   // A aba Atividade e a aba Categorias são páginas próprias do menu lateral.
   for(const item of $('dashboard').children){
     if(item.id==='platform-sidebar')continue;
+    if(item.id==='overview-page'){item.classList.toggle('hidden',selectedPage!=='overview');continue;}
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
     if(item.id==='ml-link-batches'){item.classList.toggle('hidden',selectedPage!=='linkbatches');continue;}
@@ -1769,6 +1775,7 @@ for(const button of document.querySelectorAll('[data-panel]')){
     selectedPage=button.dataset.panel;
     rememberNavigation();
     applyPlatformView();
+    if(selectedPage==='overview')await refreshOverview();
     if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
     if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
     if(selectedPage==='linkbatches')await refreshMLLinkBatches().catch(error=>notice(error.message,true,'ml-batch-feedback'));
@@ -2115,6 +2122,7 @@ $('offers-rows').addEventListener('click',async e=>{
 $('refresh').addEventListener('click',refresh);
 ${LINK_BATCH_CLIENT_JS}
 ${CATEGORY_CLIENT_JS}
+${OVERVIEW_CLIENT_JS}
 // Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
 async function bootstrap(){
   const ticket=authGeneration;
@@ -2129,7 +2137,8 @@ async function bootstrap(){
       return;
     }
     const tasks=[loadMasterState(),fetchCategoryOptions()];
-    if(selectedPage==='categories')tasks.push(refreshCategories());
+    if(selectedPage==='overview')tasks.push(refreshOverview());
+    else if(selectedPage==='categories')tasks.push(refreshCategories());
     else if(selectedPage==='activity')tasks.push(refreshActivity());
     else if(selectedPage==='linkbatches')tasks.push(refreshMLLinkBatches());
     else if(selectedPage==='affiliate'&&selectedPlatform==='shopee')tasks.push(refreshShopeeAccount());
