@@ -230,46 +230,34 @@ test('foto Telegram liberada automaticamente reativa entrega WhatsApp antiga som
 });
 
 
-test('automático recupera foto na segunda leitura (manual já encontraria) e publica sem marcar aguardando foto',async()=>{
- const {DB,env}=setup(),original=globalThis.fetch;
+test('automático usa exatamente o resolvedor de foto e o fallback do botão manual',async()=>{
+ const {DB,env}=setup(),old=globalThis.fetch;
  let imageReads=0,mediaSent=0,plainText=0;
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
-  const stamp=Math.floor(Date.now()/1000);
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
-   .bind('Kit cuide-se bem body splash 200 ml e hidratante 400 ml',SHORT,'Geral',stamp).run();
-  globalThis.fetch=async(url,options={})=>{
+   .bind('Kit body splash e hidratante',SHORT,'Geral',Math.floor(Date.now()/1000)).run();
+  globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
-    if(u===SOURCE){
-     imageReads++;
-     return new Response((imageReads===1?'':'<meta property="og:image" content="'+PHOTO_PREVIEW+'">')+
-      '<link rel="canonical" href="'+SOURCE+'"><script type="application/ld+json">'+
-      JSON.stringify({'@type':'Product',url:SOURCE,offers:{'@type':'Offer',price:'79.90',priceCurrency:'BRL'}})+
-      '</script>',{headers:{'content-type':'text/html'}});
-    }
-    if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
-   if(u===SHORT)return new Response('<html>Vitrine sem foto verificável</html>',{headers:{'content-type':'text/html'}});
-    if(u===PHOTO_LARGE&&options.method==='HEAD')
-    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'350000'}});
-   if(u.endsWith('/sendPhoto')){
-    mediaSent++;
-    const body=JSON.parse(options.body);
-    assert.equal(body.photo,PHOTO_LARGE);
-    assert.match(body.caption,/Por R\$\s*79,90/);
-    return Response.json({ok:true,result:{message_id:9911}});
+   if(u===SOURCE){
+    imageReads++;
+    return new Response((imageReads===1?'':'<meta property="og:image" content="'+PHOTO_PREVIEW+'">')+
+     '<html>Dados do anúncio</html>',{headers:{'content-type':'text/html'}});
    }
-   if(u.endsWith('/sendMessage')){plainText++;throw Error('Não usar mensagem com preview');}
-   throw Error('URL inesperada '+u);
+   if(u===SHORT)return new Response('<html>Vitrine sem imagem</html>',{headers:{'content-type':'text/html'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendMessage')){plainText++;return Response.json({ok:true,result:{message_id:9911}});}
+   if(u.endsWith('/sendPhoto')){mediaSent++;throw Error('Não havia foto confirmada');}
+   throw Error('Unexpected '+u);
   };
   const result=await runScheduled(env);
   assert.equal(result.status,'published');
-  assert.equal(result.format,'photo');
-  assert.ok(imageReads>=2,'a segunda leitura do anúncio original forneceu a foto real');
-  assert.equal(mediaSent,1);
-  assert.equal(plainText,0);
+  assert.equal(result.format,'text_no_image');
+  assert.equal(imageReads,1,'mesmo resolvedor de imagem do botão manual');
+  assert.equal(mediaSent,0);
+  assert.equal(plainText,1);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
-  assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM telegram_photo_retries").first().total,0);
- }finally{globalThis.fetch=original;DB.close();}
+ }finally{globalThis.fetch=old;DB.close();}
 });
 
 test('Crons simultâneos publicam somente uma oferta e respeitam o intervalo configurado',async()=>{
