@@ -608,8 +608,12 @@ export default {
     start(runShopeeScheduled,'Shopee e categorias',true);
     if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24){
       ctx.waitUntil((async()=>{
+        // O Cron dispara a cada minuto. Uma segunda passagem após 30 segundos
+        // permite revalidar vitrines mesmo quando o painel estiver fechado.
         await resolveMonitorShortlinks(env);
         await refreshMonitorSitePrices(env);
+        await new Promise(resolve=>setTimeout(resolve,30000));
+        await resolveMonitorShortlinks(env);
       })().catch(error=>console.error('Monitor links/precos:',String(error?.message||error).slice(0,120))));
       ctx.waitUntil(recoverMissingMonitorPrices(env,{allowEvolution:true}).catch(error=>console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
     }
