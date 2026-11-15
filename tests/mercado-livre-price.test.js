@@ -1,0 +1,145 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync} from 'node:fs';
+import {extractMercadoLivrePagePrice,fetchMercadoLivrePrice,parseSiteMoney} from '../src/mercado-livre-price.js';
+import {addMonitorGroup,saveMonitorSettings,ingestMonitorEvent,monitorState,refreshMonitorSitePrices,prepareMonitorBatch} from '../src/whatsapp-link-monitor.js';
+import {importLinkBatch} from '../src/link-batches.js';
+import {composeOfferMessage} from '../src/logic.js';
+
+const PRODUCT='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
+const OTHER='https://www.mercadolivre.com.br/outra-coisa/p/MLB87654321';
+const GROUP='120363000111222333@g.us';
+const INSTANCE='cr-jornada-afiliados';
+
+function html(productUrl=PRODUCT,price='110.00',currency='BRL'){
+ return '<!doctype html><html><head>'+
+  '<link rel="canonical" href="'+productUrl+'">'+
+  '<script type="application/ld+json">'+JSON.stringify({
+   '@context':'https://schema.org','@type':'Product',name:'Furadeira de impacto',
+   url:productUrl,offers:{'@type':'Offer',price,priceCurrency:currency}
+  })+'</script></head></html>';
+}
+function fixture(){
+ const db=new DatabaseSync(':memory:');
+ db.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
+ const DB={prepare(sql){let values=[];
+  return {bind(...args){values=args;return this;},
+   first(){return db.prepare(sql).get(...values)||null;},
+   all(){return {results:db.prepare(sql).all(...values)};},
+   run(){const r=db.prepare(sql).run(...values);return {meta:{changes:Number(r.changes),last_row_id:Number(r.lastInsertRowid)}};}
+  };
+ },async batch(commands){
+   db.exec('BEGIN');
+   try{const out=commands.map(x=>x.run());db.exec('COMMIT');return out;}
+   catch(err){db.exec('ROLLBACK');throw err;}
+ },close(){db.close();}};
+ return {DB,env:{DB,MONITOR_WEBHOOK_TOKEN:'test-webhook-secret-1234567890'}};
+}
+function event(content){
+ return {event:'messages.upsert',instance:INSTANCE,data:{
+  key:{remoteJid:GROUP,fromMe:false,id:'SITE-PRICE-001'},
+  message:{extendedTextMessage:{text:content+' '+PRODUCT}}
+ }};
+}
+async function ready(env){
+ await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,
+  group_name:'ACHADINHOS DA INTERNET',permission_confirmed:true});
+ await saveMonitorSettings(env,{enabled:true});
+}
+const fetchHTML=async()=>new Response(html(),{
+ status:200,headers:{'content-type':'text/html;charset=utf-8'}
+});
+
+test('extrai preço público BRL do Product JSON-LD do anúncio correto',()=>{
+ assert.equal(extractMercadoLivrePagePrice(html(),PRODUCT).price_cents,11000);
+ assert.equal(parseSiteMoney('R$ 1.499,90'),149990);
+ assert.equal(parseSiteMoney('110.50'),11050);
+ assert.equal(parseSiteMoney(''),null);
+ assert.equal(parseSiteMoney('NaN'),null);
+ assert.equal(parseSiteMoney(-1),null);
+});
+test('recusa metadados de outro produto, outra moeda e múltiplos preços conflitantes',()=>{
+ assert.equal(extractMercadoLivrePagePrice(html(OTHER),PRODUCT),null);
+ assert.equal(extractMercadoLivrePagePrice(html(PRODUCT,'110.00','USD'),PRODUCT),null);
+ const conflict='<link rel="canonical" href="'+PRODUCT+'">'+
+  '<script type="application/ld+json">'+JSON.stringify({
+   '@type':'Product',url:PRODUCT,offers:[{price:110,priceCurrency:'BRL'},
+    {price:120,priceCurrency:'BRL'}]})+'</script>';
+ assert.equal(extractMercadoLivrePagePrice(conflict,PRODUCT),null);
+ assert.equal(extractMercadoLivrePagePrice('<div>De R$ 150 por R$ 100</div>',PRODUCT),null);
+});
+test('aceita somente metadados globais ligados ao canonical do anúncio',()=>{
+ const valid='<link rel="canonical" href="'+PRODUCT+'"><meta property="product:price:amount" content="91.10">'+
+ '<meta property="product:price:currency" content="BRL">';
+ assert.equal(extractMercadoLivrePagePrice(valid,PRODUCT)?.price_cents,9110);
+ assert.equal(extractMercadoLivrePagePrice(valid.replace(PRODUCT,OTHER),PRODUCT),null);
+});
+test('limita redirects a hosts oficiais e evita ler sites terceiros',async()=>{
+ let calls=0;
+ const redirected=await fetchMercadoLivrePrice(PRODUCT,async(url)=>{
+  calls++;
+  if(calls===1)return new Response(null,{status:302,headers:{location:PRODUCT+'?ref=homepage'}});
+  return new Response(html(),{headers:{'content-type':'text/html'}});
+ });
+ assert.equal(calls,2);
+ assert.equal(redirected?.price_cents,11000);
+ calls=0;
+ assert.equal(await fetchMercadoLivrePrice(PRODUCT,async()=>{
+  calls++;return new Response(null,{status:302,headers:{location:'https://evil.example/offer'}});
+ }),null);
+ assert.equal(calls,1);
+});
+test('duas fontes: registra site separado e usa site como fallback apenas se grupo nao deu preço',async()=>{
+ const {env,DB}=fixture();
+ try{
+  await ready(env);
+  await ingestMonitorEvent(env,event('Furadeira em oferta hoje!'));
+  assert.equal((await refreshMonitorSitePrices(env,{fetcher:fetchHTML})).found,1);
+  const state=await monitorState(env);
+  assert.equal(state.links[0].last_seen_price_cents,null);
+  assert.equal(state.links[0].site_price_cents,11000);
+  assert.equal(state.links[0].site_status,'ok');
+  assert.ok(state.links[0].site_checked_at>0);
+  const batch=await prepareMonitorBatch(env,{automatic:true});
+  await importLinkBatch(env,batch.batch.id,{owner_confirmation:true,pairing_confirmation:true,
+   links:[{affiliate_url:'https://meli.la/PRICE12345',category:batch.items[0].category}]});
+  const offer=DB.prepare('SELECT * FROM offers').first();
+  assert.equal(offer.price_cents,11000);
+  assert.equal(offer.old_price_cents,null);
+  assert.match(composeOfferMessage(offer),/Preço público consultado no Mercado Livre: R\$ 110,00/);
+  assert.doesNotMatch(composeOfferMessage(offer),/Preço anunciado no grupo/);
+ }finally{DB.close();}
+});
+test('promoção anunciada no grupo prevalece; site é exibido como fonte distinta',async()=>{
+ const {env,DB}=fixture();
+ try{
+  await ready(env);
+  await ingestMonitorEvent(env,event('De: R$149,99 🔥 Por: R$91,10'));
+  await refreshMonitorSitePrices(env,{fetcher:fetchHTML});
+  const state=await monitorState(env);
+  assert.equal(state.links[0].last_seen_price_cents,9110);
+  assert.equal(state.links[0].site_price_cents,11000);
+  const batch=await prepareMonitorBatch(env,{automatic:true});
+  await importLinkBatch(env,batch.batch.id,{owner_confirmation:true,pairing_confirmation:true,
+   links:[{affiliate_url:'https://meli.la/GROUP12345',category:batch.items[0].category}]});
+  const offer=DB.prepare('SELECT * FROM offers').first();
+  assert.equal(offer.price_cents,9110);
+  assert.equal(offer.old_price_cents,14999);
+  assert.match(composeOfferMessage(offer),/de R\$ 149,99 por R\$ 91,10/);
+ }finally{DB.close();}
+});
+test('consulta negada nao apaga valor do grupo nem inventa preço do site',async()=>{
+ const {env,DB}=fixture();
+ try{
+  await ready(env);
+  await ingestMonitorEvent(env,event('De R$149,99 por R$91,10'));
+  const result=await refreshMonitorSitePrices(env,{fetcher:async()=>new Response('proibido',{status:403})});
+  assert.deepEqual(result,{checked:1,found:0});
+  const state=await monitorState(env);
+  assert.equal(state.links[0].site_price_cents,null);
+  assert.equal(state.links[0].site_status,'unavailable');
+  assert.equal(state.links[0].last_seen_price_cents,9110);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{DB.close();}
+});
