@@ -857,6 +857,7 @@ function forecastOfferCell(offer,forecast,configured){
  if(offer.status==='sending')return 'Envio em andamento';
  if(offer.status==='needs_review')return 'Aguardando revisão';
  if(offer.status!=='ready')return '—';
+ if(String(offer.last_error||'').startsWith('Aguardando foto'))return '<span class="queue-forecast-muted">Foto em preparação • horário ainda não confirmado</span>';
  if(!configured)return '<span class="queue-forecast-muted">Bot não configurado</span>';
  if(forecast?.status==='paused')return '<span class="queue-forecast-muted">Automação pausada</span>';
  const timestamp=Number(forecast?.by_id?.[String(offer.id)]);

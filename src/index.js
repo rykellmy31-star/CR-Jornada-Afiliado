@@ -5,6 +5,7 @@ import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
+import {prewarmTelegramQueue} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
@@ -294,7 +295,18 @@ async function runScheduled(env) {
    " AND (?='Geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at ASC, o.id ASC LIMIT 1"
   ).bind(PHOTO_RETRY_LIMIT,Math.floor(Date.now()/1000),Math.floor(Date.now()/1000),settings.category,settings.category).first();
   if (!offer) return;
-  return await sendOffer(env, offer, effective,{automatic:true});
+  const result=await sendOffer(env,offer,effective,{automatic:true});
+  if(result?.status==='published'){
+    try{
+      const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
+      result.whatsapp=wa;
+      await log(env,'whatsapp_mirror','Espelhamento automático: '+String(wa.status||wa.skipped||wa.error||'desconhecido').slice(0,140),offer.id);
+    }catch(error){
+      console.error('Espelhamento automático WhatsApp:',String(error?.message||error).slice(0,140));
+      result.whatsapp={skipped:'error',reason:String(error?.message||error).slice(0,140)};
+    }
+  }
+  return result;
 }
 
 async function router(request, env, ctx=null) {
@@ -346,7 +358,11 @@ async function router(request, env, ctx=null) {
   const singleBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)$/);
   if(singleBatch&&method==='GET')return json(await readLinkBatch(env,singleBatch[1]));
   const importBatch=u.pathname.match(/^\/api\/link-batches\/(\d+)\/import$/);
-  if(importBatch&&method==='POST')return json(await importLinkBatch(env,importBatch[1],await getBody(request)));
+  if(importBatch&&method==='POST'){
+    const result=await importLinkBatch(env,importBatch[1],await getBody(request));
+    if(ctx?.waitUntil&&result?.ok)ctx.waitUntil(prewarmTelegramQueue(env).catch(error=>console.warn('Foto do lote:',String(error?.message||error).slice(0,100))));
+    return json(result);
+  }
   if(u.pathname==='/api/master'&&method==='GET')return json(await masterState(env));
   if(u.pathname==='/api/master'&&method==='POST')return json(await setMasterState(env,(await getBody(request)).enabled));
   if(u.pathname==='/api/categories'&&method==='GET')return json(await listCategories(env));
@@ -574,6 +590,7 @@ async function router(request, env, ctx=null) {
       throw error;
     }
     await upsertProductCategory(env,'mercadolivre',data);
+    if(ctx?.waitUntil)ctx.waitUntil(prewarmTelegramQueue(env).catch(error=>console.warn('Foto da oferta:',String(error?.message||error).slice(0,100))));
     return json({ok:true,delivery_mode:mode,offer_id:id},201);
   }
   const directAction=u.pathname.match(/^\/api\/whatsapp\/offers\/(\d+)\/(publish|requeue)$/);
@@ -690,6 +707,7 @@ export default {
       })().catch(error=>console.error(label+':',error?.message)));
     }
     start(runScheduled,'Telegram');
+    start(prewarmTelegramQueue,'Preparar fotos antecipadamente');
     start(runWhatsAppScheduled,'WhatsApp');
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
