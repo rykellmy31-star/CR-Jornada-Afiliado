@@ -1,6 +1,6 @@
-import {parseOptionalBRL,localTimeParts,formatBRL} from './logic.js';
+import {parseOptionalBRL,localTimeParts,formatOfferMessage} from './logic.js';
 import {categoryMatches} from './multichannel.js';
-import {CREATE_COUPON_TABLE,normalizeCoupon,couponDescription} from './coupons.js';
+import {CREATE_COUPON_TABLE,normalizeCoupon} from './coupons.js';
 import {listShopeeOwnDestinations,shoOwnDestination,sendShopeeOwnText,shopeeWhatsAppInstance,ensureShopeeDestinationTables} from './shopee-destinations.js';
 
 const SCHEMA=[
@@ -154,17 +154,8 @@ export async function saveShopeeCoupon(env,body){
   await log(env,config.id,'coupon_saved','Cupom Shopee informado; aplicação no checkout não verificada.',coupon.offer_id);
   return {ok:true};
 }
-function shopeeText(offer){
-  const lines=['📣 Publicidade • Oferta Shopee','','🛍️ '+offer.title];
-  if(offer.price_cents!=null&&Date.now()-offer.created_at*1000<6*60*60*1000){
-    if(offer.old_price_cents>offer.price_cents)
-      lines.push('🏷️ De '+formatBRL(offer.old_price_cents)+' por '+formatBRL(offer.price_cents));
-    else lines.push('💰 Preço informado: '+formatBRL(offer.price_cents));
-  }
-  lines.push(...couponDescription(offer,localTimeParts(new Date()).day));
-  lines.push('','📂 Categoria: '+offer.category,'✅ Verifique preço, disponibilidade e condições antes de comprar.',
-    '🔗 Link de afiliado Shopee:',offer.affiliate_url);
-  return lines.join('\n');
+function shopeeText(offer,network){
+  return formatOfferMessage(offer,{platform:'shopee',network,includeLink:true});
 }
 async function claimInstance(env,targetId,stamp){
   const name=await shopeeWhatsAppInstance(env,targetId);
@@ -181,8 +172,8 @@ async function attempt(env,config,offer){
     .bind(offer.id,config.id).run();
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const text=shopeeText(offer);
-    const sent=await sendShopeeOwnText(env,config.network,config.target_id,text);
+    const text=shopeeText(offer,config.network);
+    const sent=await sendShopeeOwnText(env,config.network,config.target_id,text,{telegramHtml:config.network==='telegram'});
     await env.DB.prepare("UPDATE shopee_offers SET status='published',published_at=?,published_day=?,message_id=? WHERE id=? AND status='sending'")
       .bind(nowSec(),localTimeParts(new Date()).day,sent.message_id,offer.id).run();
     await log(env,config.id,'published','Publicação Shopee confirmada.',offer.id);
