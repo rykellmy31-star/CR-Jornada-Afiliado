@@ -28,12 +28,51 @@ export async function rememberProductImage(env, affiliateUrl, imageUrl) {
   return true;
 }
 
+// Quando o afiliado converte um lote, mantemos a associação confirmada
+// entre o link com comissão e a URL normal daquele mesmo produto. A vitrine
+// /social dos links meli.la pode bloquear metadados em chamadas do Worker.
+// Buscar a imagem no anúncio original evita enviar somente texto por isso.
+export async function sourcePageForAffiliateImage(env, affiliateUrl) {
+ if (!env?.DB || !trustedProductPage(affiliateUrl)) return null;
+ try {
+  const row=await env.DB.prepare(
+   "SELECT source_url FROM ml_link_batch_items "+
+   "WHERE affiliate_url=? AND status='queued' ORDER BY id DESC LIMIT 1"
+  ).bind(affiliateUrl).first();
+  const source=row?.source_url;
+  if(!trustedProductPage(source)||source===affiliateUrl)return null;
+  const url=new URL(source);
+  // A fonte precisa ser anúncio oficial, nunca outra vitrine ou encurtador.
+  if(!/^(?:www\.|produto\.|m\.)?mercadolivre\.com\.br$/i.test(url.hostname))return null;
+  if(!/\/(?:p|up)\/MLBU?\d{6,}|(?:^|\/)MLB-?\d{6,}/i.test(url.pathname))
+   return null;
+  return url.href;
+ }catch{return null;} // Batches opcionais e bancos legados.
+}
 export async function resolveProductImage(env, affiliateUrl, lookup) {
   let cached = null;
   try { cached = await cachedProductImage(env, affiliateUrl); }
   catch (error) { console.warn('Cache da foto indisponível:', String(error?.message || error).slice(0, 100)); }
   if (cached) return cached;
-  const image = await lookup(affiliateUrl);
+  let image=null;
+  try{image=await lookup(affiliateUrl);}
+  catch(error){console.warn('Foto do encurtador indisponível:',String(error?.message||error).slice(0,100));}
+  if(!trustedProductImage(image)){
+    const source=await sourcePageForAffiliateImage(env,affiliateUrl);
+    if(source){
+      // Reaproveita também o cache da página original, quando existir.
+      try{image=await cachedProductImage(env,source);}
+      catch{}
+      if(!trustedProductImage(image)){
+        try{image=await lookup(source);}
+        catch(error){console.warn('Foto da página do produto indisponível:',String(error?.message||error).slice(0,100));}
+      }
+      if(trustedProductImage(image)){
+        try{await rememberProductImage(env,source,image);}
+        catch{}
+      }
+    }
+  }
   if (image && trustedProductImage(image)) {
     try { await rememberProductImage(env, affiliateUrl, image); }
     catch (error) { console.warn('Não foi possível memorizar a foto:', String(error?.message || error).slice(0, 100)); }
