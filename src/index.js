@@ -1,4 +1,5 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
+import { overviewState } from './overview.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import { listActivity } from './activity.js';
@@ -257,6 +258,7 @@ async function router(request, env) {
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
+  if(u.pathname==='/api/overview'&&method==='GET')return json(await overviewState(env));
   if(u.pathname==='/api/monitor/state'&&method==='GET')return json(await monitorState(env));
   if(u.pathname==='/api/monitor/settings'&&method==='POST')return json(await saveMonitorSettings(env,await getBody(request)));
   if(u.pathname==='/api/monitor/evolution-groups'&&method==='GET')return json(await monitorEvolutionGroups(env,u.searchParams.get('instance')));
