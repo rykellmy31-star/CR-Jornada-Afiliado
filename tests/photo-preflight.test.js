@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {prewarmTelegramQueue} from '../src/photo-preflight.js';
 import {cachedProductImage} from '../src/offer-images.js';
-import {runScheduled} from '../src/index.js';
+import worker,{runScheduled} from '../src/index.js';
 const SHORT='https://meli.la/2ESKGQw';
 const PREVIEW='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-P.webp';
 const LARGE='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-F.jpg';
@@ -62,5 +62,64 @@ test('foto recuperada reabilita apenas falha explícita segura e limpa retries',
   assert.equal((await prewarmTelegramQueue(env)).status,'photo_ready');
   assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready');
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_photo_retries').first().n,0);
+ }finally{globalThis.fetch=original;close();}
+});
+
+
+test('Cron prepara foto ANTES de chamar publicador automático, sem alterar o botão manual',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ const counter={reads:0,photos:0,sourceReads:0};
+ const mock=mockImageFetch(counter);
+ try{
+  globalThis.fetch=async(url,options)=>{
+   if(String(url)===SOURCE){
+    counter.sourceReads++;
+    await new Promise(resolve=>setTimeout(resolve,25));
+   }
+   return mock(url,options);
+  };
+  const tasks=[];
+  await worker.scheduled({},env,{waitUntil:p=>tasks.push(p)});
+  await Promise.all(tasks);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
+  assert.equal(counter.photos,1,'Cron precisa enviar FOTO real do mesmo publicador manual');
+  assert.equal(counter.sourceReads,1,
+   'não deve disparar duas consultas simultâneas ao anúncio: preflight vem ANTES do envio');
+  assert.equal(counter.reads,0,'não consulta vitrine encurtada se a origem já foi confirmada');
+ }finally{globalThis.fetch=original;close();}
+});
+
+test('sete falhas automáticas de foto NÃO colocam oferta em Revisar; após foto recuperar o Cron publica',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ const counter={reads:0,photos:0};
+ let ready=false;
+ const success=mockImageFetch(counter);
+ try{
+  globalThis.fetch=async(url,options={})=>{
+   if(ready)return success(url,options);
+   const u=String(url);
+   if(u===SOURCE||u===SHORT)return new Response('<html><head></head></html>',{
+    headers:{'content-type':'text/html'}});
+   if(u.includes('/sendPhoto')||u.includes('/sendMessage'))
+    throw Error('Tentou enviar sem foto confirmada');
+   throw Error('Link inesperado durante preparação: '+u);
+  };
+  for(let i=1;i<=7;i++){
+   const outcome=await runScheduled(env);
+   assert.equal(outcome.skipped,'awaiting_photo','sem foto não deve publicar');
+   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready',
+    'a oferta precisa permanecer na fila apesar de falhas de mídia');
+   assert.equal(DB.prepare("SELECT attempts FROM telegram_photo_retries WHERE offer_id=1").first().attempts,i);
+   DB.prepare('UPDATE telegram_photo_retries SET next_retry_at=0 WHERE offer_id=1').run();
+  }
+  ready=true;
+  const dispatched=await runScheduled(env);
+  assert.equal(dispatched.status,'published');
+  assert.equal(dispatched.format,'photo');
+  assert.equal(counter.photos,1);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_photo_retries').first().n,0);
+  assert.equal((await runScheduled(env)).skipped,'interval_or_schedule',
+   'não deve postar oferta publicada novamente no próximo Cron');
  }finally{globalThis.fetch=original;close();}
 });

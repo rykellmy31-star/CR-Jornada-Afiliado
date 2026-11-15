@@ -6,7 +6,7 @@ import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
-import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
+import { resolveProductImageWithRetry,rememberTelegramSentPhoto,cachedProductImage,rememberProductImage } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
 import {prewarmTelegramQueue} from './photo-preflight.js';
@@ -293,6 +293,33 @@ async function recoverReviewedPhoto(env,now){
  await log(env,'photo_recovered','Foto do produto confirmada; devolvido à fila automática.',item.id);
  return true;
 }
+// Só o envio AGENDADO aguarda foto sem cair em revisão após seis falhas.
+// Não toca no botão manual, no envio de mídia ou nos intervalos.
+async function deferScheduledPhoto(env,offer){
+ const now=Math.floor(Date.now()/1000);
+ await ensureTelegramPhotoRetries(env);
+ const old=await env.DB.prepare('SELECT attempts FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).first();
+ const attempts=Math.min(999,Number(old?.attempts||0)+1);
+ const next=now+(attempts<=2?120:attempts<=4?300:900);
+ await env.DB.prepare(
+  'INSERT INTO telegram_photo_retries(offer_id,attempts,next_retry_at,reason,updated_at) VALUES(?,?,?,?,?) '+
+  'ON CONFLICT(offer_id) DO UPDATE SET attempts=excluded.attempts,'+
+  'next_retry_at=excluded.next_retry_at,reason=excluded.reason,updated_at=excluded.updated_at'
+ ).bind(offer.id,attempts,next,'Aguardando foto real na preparação automática',now).run();
+ await env.DB.prepare("UPDATE offers SET last_error=? WHERE id=? AND status='ready'")
+  .bind('Aguardando foto real do produto. Nova tentativa automática agendada.',offer.id).run();
+ await log(env,'awaiting_photo','Preparação de foto automática • tentativa '+attempts,offer.id);
+ return {status:'awaiting_photo',attempts,next_retry_at:next};
+}
+async function prepareScheduledPhoto(env,offer){
+ let image=await cachedProductImage(env,offer.affiliate_url);
+ if(image)return image;
+ image=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
+  {retryOnMiss:true,sourceLookup:resolveOfferSource});
+ if(!image)return null;
+ await rememberProductImage(env,offer.affiliate_url,image);
+ return image;
+}
 async function runScheduled(env){
  if(!env.DB||env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
  const settings=await readSettings(env);
@@ -329,13 +356,14 @@ async function runScheduled(env){
   // deixa a oferta 'Na fila' mas jamais tenta enviá-la automaticamente.
   await env.DB.prepare(
    "DELETE FROM telegram_photo_retries WHERE attempts>=6 "+
+   "AND reason<>'Aguardando foto real na preparação automática' "+
    "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).run();
   for(let checked=0;checked<5;checked++){
    const offer=await env.DB.prepare(OFFER_WITH_COUPON+
      " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id "+
      " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+
-     "AND (tpr.offer_id IS NULL OR (tpr.attempts<6 AND tpr.next_retry_at<=?))"+
+     "AND (tpr.offer_id IS NULL OR tpr.next_retry_at<=?)"+
      " ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
    ).bind(settings.category,settings.category,Math.floor(Date.now()/1000)).first();
    if(!offer){
@@ -346,6 +374,16 @@ async function runScheduled(env){
      ).bind(Math.floor(Date.now()/1000)).first();
      return {skipped:waiting?.total?'awaiting_photo':'empty'};
    }
+   // A foto precisa estar preparada antes de usar o MESMO publicador manual.
+   // Caso contrário, apenas reagenda a busca sem alterar o status "Na fila".
+   let preparedPhoto=null;
+   try{preparedPhoto=await prepareScheduledPhoto(env,offer);}
+   catch(error){console.warn('Foto automática:',String(error?.message||error).slice(0,100));}
+   if(!preparedPhoto){
+    await deferScheduledPhoto(env,offer);
+    continue;
+   }
+   await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).run();
    const result=await publishWithManualTools(env,offer,settings,
      {origin:'automático',requirePhoto:true});
    if(result?.status==='awaiting_photo')continue;
@@ -749,16 +787,23 @@ export default {
   async scheduled(_controller, env, ctx) {
     const master=env.DB?masterState(env):Promise.resolve({enabled:null});
     function start(fn,label,route=false){
-      ctx.waitUntil((async()=>{
+      const task=(async()=>{
         const state=await master;
         if(state.enabled===false)return;
         const configured={...env,MASTER_SCHEDULE_ENABLED:state.enabled};
         await fn(configured);
         if(route&&state.enabled===true)await runCategoryRoutingScheduled(configured);
-      })().catch(error=>console.error(label+':',error?.message)));
+      })().catch(error=>console.error(label+':',error?.message));
+      ctx.waitUntil(task);
+      return task;
     }
-    start(runScheduled,'Telegram');
-    start(prewarmTelegramQueue,'Preparar fotos antecipadamente');
+    // Mantém os dois jobs do Cron, mas o publicador só começa depois da
+    // preparação de foto. Botão Publicar e envios manuais ficam intocados.
+    const photoPrepared=start(prewarmTelegramQueue,'Preparar fotos antecipadamente');
+    start(async configured=>{
+      await photoPrepared;
+      return runScheduled(configured);
+    },'Telegram');
     start(runWhatsAppScheduled,'WhatsApp');
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
