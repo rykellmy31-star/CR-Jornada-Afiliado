@@ -33,7 +33,7 @@ function dbMock(){
 }
 const envFor=DB=>({DB,SESSION_SECRET:'SESSION_SECRET_STRONG_FOR_MULTIGROUP_TEST',ADMIN_PASSWORD:'ADMIN_PASSWORD_FOR_TEST',
   EVOLUTION_API_URL:WA_URL,EVOLUTION_API_KEY:SECRET,TELEGRAM_BOT_TOKEN:'FAKE_TELEGRAM_BOT_TOKEN'});
-const ad=(link,category)=>({title:'Oferta de teste para categoria '+category,affiliate_url:link,category,owner_confirmation:true});
+const ad=(link,category)=>({title:'Oferta de teste para categoria '+category,affiliate_url:link,category,owner_confirmation:true,price:'79.90'});
 const options={interval_minutes:7,max_daily:10,start_hour:0,end_hour:24};
 async function newGroup(env,name,category,mode='shared'){
  const item=await createManagedWhatsAppGroup(env,{name,category,instance_mode:mode});
