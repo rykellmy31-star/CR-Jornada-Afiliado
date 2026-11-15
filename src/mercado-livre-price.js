@@ -1,6 +1,7 @@
 // Consulta somente metadados públicos do anúncio oficial do Mercado Livre.
 // Não utiliza sessão, navegador automatizado ou endpoints privados.
 import {productId} from './link-batches.js';
+import {trustedProductImage} from './images.js';
 
 const ALLOWED_HOSTS=new Set([
  'mercadolivre.com.br','www.mercadolivre.com.br',
@@ -269,7 +270,14 @@ export function extractFeaturedShowcasePrice(html,expectedProductId){
    }
   }
  }
+ let image_url=null;
+ for(const tag of scope.match(/<img\b[^>]{0,3500}>/gi)||[]){
+  if(!/\bpoly-component__picture\b/i.test(attr(tag,'class')||''))continue;
+  const src=(attr(tag,'src')||'').replace(/&amp;/gi,'&');
+  if(trustedProductImage(src)){image_url=src;break;}
+ }
  return {price_cents:price,old_price_cents:old&&old>price?old:null,
   payment_mode:pixOnly?'pix_only':'unspecified',installments,installment_cents,
-  installments_no_interest,card_price_cents,source:'vitrine oficial do produto principal'};
+  installments_no_interest,card_price_cents,image_url,
+  source:'vitrine oficial do produto principal'};
 }
