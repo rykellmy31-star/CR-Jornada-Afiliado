@@ -430,6 +430,15 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source){
         .bind(result.message_id,updatedAt,offer.id,cfg.group_jid).run();
     }
     await env.DB.prepare('UPDATE whatsapp_settings SET last_error=NULL WHERE id=1').run();
+    if(result.format==='text'){
+      // Não confundir envio de texto bem-sucedido com foto publicada.
+      // Registra a falha de busca da mídia para diagnóstico sem reenviar.
+      try{
+        await env.DB.prepare('INSERT INTO logs(offer_id,event,detail,created_at) VALUES(?,?,?,?)')
+          .bind(direct?null:offer.id,'whatsapp_photo_unavailable',
+            'WhatsApp enviado sem foto: imagem do produto não confirmada na CDN.',updatedAt).run();
+      }catch(e){console.warn('Diagnóstico da imagem:',String(e?.message||e).slice(0,90));}
+    }
     return {status:direct?'published':'sent',source,offer_id:offer.id,format:result.format};
   }catch(error){
     const reason=String(error?.message||error).slice(0,220);
