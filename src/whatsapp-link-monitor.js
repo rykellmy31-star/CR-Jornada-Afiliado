@@ -660,9 +660,9 @@ export async function resolveMonitorShortlinks(env){
    }
    continue;
   }
-  // Falha de rede recebe novas tentativas automáticas. Vitrine e URL externa
-  // ficam em revisão; nunca se deduz produto arbitrário a partir da página.
-  const temporary=result.kind==='temporary'&&item.status==='pending'&&item.tries<2;
+  // Falha de rede e vitrine sem HTML do destaque recebem até três tentativas.
+  // URL externa ou vitrine ainda ambígua ficam em revisão, nunca por dedução.
+  const temporary=['temporary','showcase'].includes(result.kind)&&item.status==='pending'&&item.tries<2;
   await env.DB.prepare(
    "UPDATE ml_monitor_shortlinks SET status=?,tries=tries+1,reason=? WHERE id=?"
   ).bind(temporary?'pending':'review',result.reason,item.id).run();
