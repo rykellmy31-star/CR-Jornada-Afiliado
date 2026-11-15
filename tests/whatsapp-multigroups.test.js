@@ -51,8 +51,9 @@ function mockEvolution(sent=[]){
    const s=String(url);
    if(s===WA_URL+'/group/fetchAllGroups/cr-jornada-afiliados?getParticipants=false')
      return Response.json([{id:GROUP_MOTO,subject:'Motos & Peças'},{id:GROUP_FEM,subject:'Moda Feminina'}]);
-   if(s.startsWith('https://meli.la/'))return new Response('<html></html>',{headers:{'content-type':'text/html'}});
-   if(s===WA_URL+'/message/sendText/cr-jornada-afiliados'){
+   if(s.startsWith('https://meli.la/'))return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">',{headers:{'content-type':'text/html'}});
+   if(s==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'140000'}});
+   if(s===WA_URL+'/message/sendText/cr-jornada-afiliados'||s===WA_URL+'/message/sendMedia/cr-jornada-afiliados'){
      const body=JSON.parse(init.body);
      sent.push(body);
      return Response.json({key:{id:'WA_'+sent.length}});
