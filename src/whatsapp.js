@@ -441,23 +441,19 @@ async function preflightWhatsAppPhoto(env,offer,source,cfg){
   return {status:'needs_review',reason,offer_id:offer.id};
 }
 async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}){
-  let verifiedImage=null,prepared=offer;
+  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
+  const timestamp=nowSec(),minGap=schedule.interval_minutes*60;
+  if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
+    return {skipped:'interval'};
+  let verifiedImage=null;
   if(automatic){
-    const price=source==='mirrored'&&hasFreshOfferPrice(offer)
-      ?{ok:true,offer}:await prepareAutomaticOfferPrice(env,offer);
-    const priceQueue=source==='direct'?'wa-direct':'whatsapp';
-    if(!price.ok)return recordAutomaticPriceRetry(env,priceQueue,offer.id,price.reason);
-    prepared=price.offer;
-    await clearAutomaticPriceRetry(env,priceQueue,offer.id);
+    // Exatamente a mesma busca de foto usada pelo botão Publicar, com cache
+    // de foto já enviada ao Telegram. Não exigir preço novo para descobrir foto.
+    // Se a mídia não existe, NÃO usar sendText nem consumir intervalo.
     const checked=await preflightWhatsAppPhoto(env,offer,source,cfg);
     if(!checked.image)return checked;
     verifiedImage=checked.image;
   }
-  const schedule=await env.DB.prepare('SELECT interval_minutes,last_attempt_at FROM whatsapp_schedule_custom WHERE id=1').first();
-  const timestamp=nowSec();
-  const minGap=schedule.interval_minutes*60;
-  if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
-    return {skipped:'interval'};
   // Uma mesma instância respeita o ritmo configurado, inclusive entre ofertas
   // manuais, espelhadas e outros grupos Evolution deste número.
   const slot=await env.DB.prepare('UPDATE whatsapp_schedule_custom SET last_attempt_at=? WHERE id=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
@@ -483,7 +479,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   }
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const result=await sendOfferWhatsApp(env,cfg,prepared,{imageUrl:verifiedImage,requirePhoto:automatic});
+    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage,requirePhoto:automatic});
     const updatedAt=nowSec();
     if(direct){
       await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='published',published_at=?,message_id=?,last_error=NULL WHERE id=? AND status='sending'")
@@ -526,40 +522,46 @@ export async function runWhatsAppScheduled(env){
   const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
   if(!cfg.enabled||!cfg.public_registered||!configured(env))return {skipped:'disabled'};
   await ensureCouponTable(env);
-  // A rotina manual não usa retries extras de preço/foto. Restaura somente
-  // ofertas de mídia com não envio explicitamente confirmado.
-  await env.DB.prepare(
-    "UPDATE whatsapp_direct_offers SET status='ready',last_error=NULL "+
-    "WHERE status='needs_review' AND last_error LIKE 'Foto indisponível após%Nenhuma mensagem sem foto foi enviada.%'"
-  ).run();
-  await env.DB.prepare(
-    "DELETE FROM whatsapp_deliveries WHERE status='needs_review' "+
-    "AND last_error LIKE 'Foto indisponível após%Nenhuma mensagem sem foto foi enviada.%'"
-  ).run();
   const cat=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first()).category;
-  const [mirrored,direct]=await Promise.all([
-    env.DB.prepare(`SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,
-      c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,
-      c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,c.owner_confirmed AS coupon_owner_confirmed
-      FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
-      LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
-      LEFT JOIN offer_delivery_routing r ON r.offer_id=o.id
-      WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL
-        AND (r.delivery_mode IS NULL OR r.delivery_mode='both')
-        AND (lower(?)='geral' OR lower(o.category)=lower(?))
-      ORDER BY o.published_at ASC,o.id ASC LIMIT 1`)
-      .bind(cfg.group_jid,cfg.started_at,cat,cat).first(),
-    env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d "+
-      "WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? "+
-      "AND (lower(?)='geral' OR lower(d.category)=lower(?)) "+
-      "ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
-      .bind(cfg.group_jid,cfg.instance_name,cat,cat).first()
-  ]);
-  if(!mirrored&&!direct)return {skipped:'empty'};
-  const chooseDirect=!!direct&&(!mirrored||direct.created_at<=(mirrored.published_at||0));
-  // Usa o MESMO publicador do botão manual, respeitando os horários e intervalos
-  // da instância. Não exige confirmação adicional de preço ou foto.
-  return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored');
+  // O agendador procura ofertas prontas; links sem foto recebem backoff e não
+  // bloqueiam os itens seguintes. Só uma mensagem pode ser publicada por ciclo.
+  for(let checked=0;checked<5;checked++){
+    const [mirrored,direct]=await Promise.all([
+      env.DB.prepare(
+        "SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value, "+
+        "c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day, "+
+        "c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,c.owner_confirmed AS coupon_owner_confirmed "+
+        "FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id "+
+        "LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=? "+
+        "LEFT JOIN offer_delivery_routing r ON r.offer_id=o.id "+
+        "LEFT JOIN whatsapp_media_retries media ON media.affiliate_url=o.affiliate_url "+
+        "WHERE o.status='published' AND o.published_at>=? AND d.offer_id IS NULL "+
+        "AND (r.delivery_mode IS NULL OR r.delivery_mode='both') "+
+        "AND (media.affiliate_url IS NULL OR media.next_attempt_at<=?) "+
+        "AND (lower(?)='geral' OR lower(o.category)=lower(?)) "+
+        "ORDER BY o.published_at ASC,o.id ASC LIMIT 1"
+      ).bind(cfg.group_jid,cfg.started_at,nowSec(),cat,cat).first(),
+      env.DB.prepare("SELECT d.* FROM whatsapp_direct_offers d "+
+        "LEFT JOIN whatsapp_media_retries media ON media.affiliate_url=d.affiliate_url "+
+        "WHERE d.status='ready' AND d.group_jid=? AND d.instance_name=? "+
+        "AND (media.affiliate_url IS NULL OR media.next_attempt_at<=?) "+
+        "AND (lower(?)='geral' OR lower(d.category)=lower(?)) "+
+        "ORDER BY d.created_at ASC,d.id ASC LIMIT 1")
+        .bind(cfg.group_jid,cfg.instance_name,nowSec(),cat,cat).first()
+    ]);
+    if(!mirrored&&!direct){
+      const delayed=await env.DB.prepare(
+        'SELECT COUNT(*) AS total FROM whatsapp_media_retries WHERE next_attempt_at>?'
+      ).bind(nowSec()).first();
+      return {skipped:delayed?.total?'awaiting_photo':'empty'};
+    }
+    const chooseDirect=!!direct&&(!mirrored||direct.created_at<=(mirrored.published_at||0));
+    const result=await dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,
+      chooseDirect?'direct':'mirrored',{automatic:true});
+    if(result?.skipped==='awaiting_photo')continue;
+    return result;
+  }
+  return {skipped:'awaiting_photo',checked:5};
 }
 // A publicação manual do Telegram deve iniciar o espelhamento deste item,
 // sem aguardar o próximo Cron nem enviar outra oferta mais antiga por engano.
