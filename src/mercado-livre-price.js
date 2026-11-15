@@ -239,7 +239,7 @@ export function extractFeaturedShowcasePrice(html,expectedProductId){
   if(!fragment.includes('andes-money-amount__currency-symbol')||!fragment.includes('R$'))return null;
   const fraction=fragment.match(/andes-money-amount__fraction[^>]*>\s*([\d.]+)\s*</i)?.[1];
   if(!fraction)return null;
-  const cents=fragment.match(/andes-money-amount__cents(?:\s|["'][^>]*|--[^>]*)>\s*(\d{1,2})\s*</i)?.[1]||'00';
+  const cents=fragment.match(/andes-money-amount__cents[^>]{0,300}>\s*(\d{1,2})\s*</i)?.[1]||'00';
   const whole=fraction.replace(/\./g,'');
   return /^\d{1,6}$/.test(whole)?parseSiteMoney(Number(whole+'.'+cents.padStart(2,'0'))):null;
  };
