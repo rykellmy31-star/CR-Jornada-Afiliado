@@ -585,3 +585,53 @@ test('não importa legendas de mensagens diferentes em resultado de busca da Evo
   assert.equal(state.groups[0].delivery.received_messages,1);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
+
+test('interpreta textos e legendas alternativos e mantém somente links Mercado Livre',async()=>{
+ const {env,DB}=setup();
+ const valid='https://melila.me/AAJLUPqiqmsu';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,
+   group_name:'BRUXO DOS DESCONTOS',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const items=[
+   {message:{conversation:'Oferta '+valid}},
+   {message:{extendedTextMessage:{text:'Oportunidade '+valid}}},
+   {message:{imageMessage:{caption:'Imagem '+valid}}},
+   {message:{videoMessage:{caption:'Vídeo '+valid}}},
+   {message:{documentMessage:{caption:'Documento '+valid}}},
+   {message:{ephemeralMessage:{message:{imageMessage:{caption:'Efêmero '+valid}}}}},
+   {message:{interactiveMessage:{body:{text:'Interativo '+valid}}}},
+   {message:{templateMessage:{hydratedTemplate:{hydratedContentText:'Modelo '+valid}}}},
+   {message:{buttonsMessage:{contentText:'Botões '+valid}}},
+   {message:{listMessage:{description:'Lista '+valid}}},
+   {message:{imageMessage:{caption:''}},caption:'Legenda no nível data '+valid},
+   {message:{textMessage:{text:'Texto estruturado '+valid}}}
+  ];
+  for(const [i,item] of items.entries()){
+   const parsed=parseMonitorEvent({event:'messages.upsert',instance:INSTANCE,data:{
+    key:{remoteJid:GROUP,fromMe:false,id:'VARIANT-'+i},...item}});
+   assert.equal(parsed.length,1,'variante '+i);
+   assert.deepEqual(parsed[0].urls,[valid],'variante '+i);
+  }
+  const mixed=event(GROUP,'Oferta Netshoes https://click.linksynergy.com/deeplink?id=test&url=https%3A%2F%2Fwww.netshoes.com.br - Mercado Livre '+valid);
+  const ingested=await ingestMonitorEvent(env,mixed);
+  assert.equal(ingested.pending,1);
+  assert.equal((await monitorState(env)).diagnostics.links_recognized,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks').first().n,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_links').first().n,0);
+ }finally{DB.close();}
+});
+test('reconhece formatos comuns de link sem protocolo e ignora loja externa',()=>{
+ const product='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
+ assert.deepEqual(extractUrls('Veja www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678'),[product]);
+ assert.deepEqual(extractUrls('https://melila.me/\nAAJLUPqiqmsu'),['https://melila.me/AAJLUPqiqmsu']);
+ assert.deepEqual(extractUrls('melila.me/AAJLUPqiqmsu'),['https://melila.me/AAJLUPqiqmsu']);
+ assert.deepEqual(extractUrls('https://click.linksynergy.com/?id=abc&url=https%3A%2F%2Fwww.netshoes.com.br'),[
+  'https://click.linksynergy.com/?id=abc&url=https%3A%2F%2Fwww.netshoes.com.br'
+ ]);
+ const quoted={event:'messages.upsert',instance:INSTANCE,data:{
+  key:{remoteJid:GROUP,fromMe:false,id:'NO-QUOTE'},
+  message:{extendedTextMessage:{text:'Mensagem sem link',contextInfo:{quotedMessage:{conversation:'Outro usuário: https://melila.me/AAJLUPqiqmsu'}}}}
+ }};
+ assert.deepEqual(parseMonitorEvent(quoted),[],'não extrai URL de mensagem citada');
+});
