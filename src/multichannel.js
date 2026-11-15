@@ -435,6 +435,10 @@ export async function runMultiChannelScheduled(env){
     ]);
     if(!shouldSend(c,now,counts?.total||0,latest?.time?latest.time*1000:null))continue;
     await ensureAutomaticPrices(env);
+    await env.DB.prepare(
+     "DELETE FROM telegram_channel_photo_retries WHERE attempts>=6 "+
+     "AND offer_id IN (SELECT id FROM channel_offers WHERE channel_id=? AND status='ready')"
+    ).bind(c.id).run();
     const offer=await env.DB.prepare(
       "SELECT o.id FROM channel_offers o LEFT JOIN telegram_channel_photo_retries pr ON pr.offer_id=o.id "+
       "WHERE o.channel_id=? AND o.status='ready' AND "+
