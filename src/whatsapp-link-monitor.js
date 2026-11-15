@@ -25,7 +25,9 @@ const SCHEMA=[
  "INSERT OR IGNORE INTO ml_monitor_browser_budget(id) VALUES(1)",
  // Cupons comprovados ficam fora da fila de produtos, mas preservamos o motivo
  // e a origem para auditoria, sem reprocessar o mesmo encurtador indefinidamente.
- "CREATE TABLE IF NOT EXISTS ml_monitor_ignored_links(short_url TEXT PRIMARY KEY,group_id INTEGER NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL)"
+ "CREATE TABLE IF NOT EXISTS ml_monitor_ignored_links(short_url TEXT PRIMARY KEY,group_id INTEGER NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_worker_heartbeat(id INTEGER PRIMARY KEY CHECK(id=1),last_run_at INTEGER NOT NULL DEFAULT 0,last_reviewed INTEGER NOT NULL DEFAULT 0,last_resolved INTEGER NOT NULL DEFAULT 0,last_ignored INTEGER NOT NULL DEFAULT 0)",
+ "INSERT OR IGNORE INTO ml_monitor_worker_heartbeat(id) VALUES(1)"
 
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -245,7 +247,7 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
 export async function monitorState(env){
  await ensureMonitor(env);
  await recoverMissingMonitorPrices(env);
- const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress,ignoredCoupons]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress,ignoredCoupons,workerHeartbeat]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
@@ -282,7 +284,8 @@ export async function monitorState(env){
    "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
    "WHERE s.status='review'"
   ).first(),
-  env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_ignored_links').first()
+  env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_ignored_links').first(),
+  env.DB.prepare('SELECT last_run_at,last_reviewed,last_resolved,last_ignored FROM ml_monitor_worker_heartbeat WHERE id=1').first()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -296,6 +299,7 @@ export async function monitorState(env){
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
    ignored_coupon_links:Number(ignoredCoupons?.total||0),
+   worker_heartbeat:workerHeartbeat||{},
    retry_progress:{
      total:Number(retryProgress?.total||0),automatic:Number(retryProgress?.automatic||0),
      manual:Number(retryProgress?.manual||0),
@@ -463,6 +467,9 @@ export async function ingestMonitorEvent(env,payload){
      if(!candidate)continue;
      recognized++;
      if(candidate.kind==='short'){
+       const previouslyIgnored=await env.DB.prepare('SELECT 1 AS ignored FROM ml_monitor_ignored_links WHERE short_url=?')
+         .bind(candidate.url).first();
+       if(previouslyIgnored)continue;
        // O mesmo link encurtado pode voltar a ser publicado; reverifique após um intervalo.
        const inserted=await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_shortlinks(group_id,message_id,short_url,message_hint,status,tries,created_at) VALUES(?,?,?,?,'pending',0,?)")
          .bind(group.id,msg.message_id,candidate.url,msg.hint,epoch()).run();
