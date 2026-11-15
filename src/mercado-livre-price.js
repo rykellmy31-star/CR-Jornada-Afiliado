@@ -175,3 +175,35 @@ export async function fetchMercadoLivrePrice(sourceUrl,fetcher=fetch){
  }
  return null;
 }
+
+// Consulta alternativa somente à API PÚBLICA oficial, sem token do afiliado.
+// Confere o ID do anúncio/catálogo e BRL antes de aceitar qualquer preço.
+// Falhas, respostas privadas e produtos divergentes nunca viram ofertas.
+export async function fetchMercadoLivrePublicPrice(sourceUrl,fetcher=fetch){
+ let id;
+ try{id=productId(new URL(sourceUrl).pathname);}catch{return null;}
+ if(!id||!officialUrl(sourceUrl,id))return null;
+ const endpoints=[
+  'https://api.mercadolibre.com/items/'+encodeURIComponent(id),
+  'https://api.mercadolibre.com/products/'+encodeURIComponent(id)
+ ];
+ for(const endpoint of endpoints){
+  try{
+   const res=await fetcher(endpoint,{method:'GET',redirect:'manual',
+    headers:{accept:'application/json'},signal:AbortSignal.timeout(4500)});
+   if(!res?.ok||!/\bapplication\/json\b/i.test(res.headers.get('content-type')||''))continue;
+   const body=await res.json();
+   if(!body||String(body.id||'').toUpperCase()!==id)continue;
+   const entry=body.buy_box_winner&&typeof body.buy_box_winner==='object'
+    ?body.buy_box_winner:body;
+   if(String(entry.currency_id||body.currency_id||'').toUpperCase()!=='BRL')continue;
+   const price=parseSiteMoney(entry.price);
+   if(!price)continue;
+   const original=parseSiteMoney(entry.original_price);
+   return {price_cents:price,old_price_cents:original&&original>price?original:null,
+    payment_mode:'unspecified',installments:null,installment_cents:null,
+    installments_no_interest:false,source:'api.mercadolibre.com'};
+  }catch{/* A API pública pode exigir autorização ou limitar acesso. */}
+ }
+ return null;
+}
