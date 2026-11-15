@@ -83,3 +83,44 @@ test('a legenda nunca inventa preço anterior nem desconto ao consultar preço p
  assert.match(caption,/R\$\s*134,90/);
  assert.doesNotMatch(caption,/De:|OFF|desconto de \d/);
 });
+
+test('quando HTTP do anúncio retorna 403, Browser Run confirma preço na página original',async()=>{
+ const {env,DB}=envDb();try{
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+    .bind(PRODUCT_URL,AFF).run();
+  let called=0;
+  env.BROWSER={async quickAction(action,opts){
+   called++;
+   assert.equal(action,'content');
+   assert.equal(opts.url,PRODUCT_URL);
+   return new Response(product(PRODUCT_URL,'149.90','BRL'),{
+    status:200,headers:{'content-type':'text/html'}});
+  }};
+  const offer={id:11,title:'Kit de limpeza para carro',affiliate_url:AFF,
+   created_at:Math.floor(Date.now()/1000),price_cents:null};
+  const fetcher=async()=>new Response('Acesso temporariamente bloqueado',{status:403});
+  const result=await prepareAutomaticOfferPrice(env,offer,{fetcher});
+  assert.equal(result.ok,true);
+  assert.equal(result.price_source,'mercadolivre');
+  assert.equal(result.offer.price_cents,14990);
+  assert.equal(called,1);
+  assert.match(formatOfferMessage(result.offer,{network:'whatsapp'}),/Por R\$\s*149,90/);
+  const cache=await prepareAutomaticOfferPrice(env,offer,{fetcher:async()=>{throw Error('cache');}});
+  assert.equal(cache.offer.price_cents,14990);
+  assert.equal(called,1);
+ }finally{DB.close();}
+});
+test('navegador não aceita preço de outro produto, nem publicará preço inventado',async()=>{
+ const {env,DB}=envDb();try{
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+    .bind(PRODUCT_URL,AFF).run();
+  env.BROWSER={async quickAction(){
+   return new Response(product('https://www.mercadolivre.com.br/kit-outro/p/MLB99999999','3.00'),{
+    headers:{'content-type':'text/html'}});
+  }};
+  const offer={id:12,title:'Kit limpeza',affiliate_url:AFF,created_at:Math.floor(Date.now()/1000)-90000};
+  const result=await prepareAutomaticOfferPrice(env,offer,{fetcher:async()=>new Response('Access denied',{status:403})});
+  assert.equal(result.ok,false);
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM affiliate_verified_prices').first().n,0);
+ }finally{DB.close();}
+});
