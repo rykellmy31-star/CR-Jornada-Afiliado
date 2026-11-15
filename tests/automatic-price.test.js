@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {prepareAutomaticOfferPrice,recordAutomaticPriceRetry,ensureAutomaticPrices,officialPriceOverlay} from '../src/automatic-price.js';
 import {formatOfferMessage} from '../src/logic.js';
+import {cachedProductImage} from '../src/offer-images.js';
 const AFF='https://meli.la/KITLIMPEZA123';
 const PRODUCT_URL='https://www.mercadolivre.com.br/kit-limpeza-automotiva-carro-moto/p/MLB12345678';
 function envDb(){
@@ -143,6 +144,8 @@ test('link meli.la direto resolve anúncio oficial e recebe texto fixo com preç
   assert.equal(result.ok,true);
   assert.equal(result.offer.price_cents,3482);
   assert.equal(result.offer.old_price_cents,4990);
+  assert.equal(await cachedProductImage(env,AFF),photoLarge,
+   'a foto original confirmada na vitrine deve ficar pronta para Telegram e WhatsApp');
   const msg=formatOfferMessage(result.offer,{network:'whatsapp',includeLink:true});
   assert.match(msg,/✨ CONFIRA ESTA OFERTA!/);
   assert.match(msg,/De: ~R\$\s*49,90~/);
@@ -204,7 +207,10 @@ test('API pública nunca aceita preço de ID diferente, moeda externa ou sem pre
 test('preço da vitrine principal libera fila mesmo com anúncio e API bloqueados',async()=>{
  const {env,DB}=envDb();
  const SOCIAL='https://www.mercadolivre.com.br/social/gearofertas';
+ const photoPreview='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-P.webp';
+ const photoLarge='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-F.jpg';
  const featured='<div class="rl-card-featured-wrapper">'+
+  '<img class="poly-component__picture" src="'+photoPreview+'">'+
   '<a class="poly-component__title" href="'+PRODUCT_URL+'">Kit de limpeza automotiva</a>'+
   '<div class="poly-component__price">'+
   '<s class="poly-price__previous"><span class="andes-money-amount__currency-symbol">R$</span>'+
@@ -220,7 +226,9 @@ test('preço da vitrine principal libera fila mesmo com anúncio e API bloqueado
  try{
   DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
    .bind(PRODUCT_URL,AFF).run();
-  const fetcher=async url=>{
+  const fetcher=async(url,options={})=>{
+   if(url===photoLarge&&options.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'300000'}});
    if(url===PRODUCT_URL||String(url).startsWith('https://api.mercadolibre.com/'))
     return new Response('Acesso negado',{status:403});
    if(url===AFF)return new Response(null,{status:302,headers:{location:SOCIAL}});
