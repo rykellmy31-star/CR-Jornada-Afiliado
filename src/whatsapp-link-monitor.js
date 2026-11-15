@@ -306,7 +306,7 @@ export async function monitorState(env){
    worker_heartbeat:workerHeartbeat||{},
    browser_usage:{used:browserUsage?.day_key===new Date().toISOString().slice(0,10)
      ?Number(browserUsage.daily_count||0):0,
-     daily_limit:MONITOR_RENDER_DAILY_LIMIT,last_attempt_at:Number(browserUsage?.last_at||0)},
+     daily_limit:null,last_attempt_at:Number(browserUsage?.last_at||0)},
    retry_progress:{
      total:Number(retryProgress?.total||0),automatic:Number(retryProgress?.automatic||0),
      manual:Number(retryProgress?.manual||0),
@@ -922,12 +922,11 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
  }
  return {product:null,kind:'redirect',reason:'O link passou por muitos redirecionamentos'};
 }
-// Browser Run é usado APENAS quando HTML estático não contém o CTA.
-// Acesso com quota diária fixa em D1 impede consumo descontrolado mesmo
-// quando o cron revalida links a cada 30 segundos.
-const MONITOR_RENDER_DAILY_LIMIT=120;
-export const MONITOR_BROWSER_DAILY_LIMIT=MONITOR_RENDER_DAILY_LIMIT;
-const MONITOR_RENDER_COOLDOWN=5;
+// Browser Run é usado apenas se o HTML não contém o CTA. Sem teto diário
+// artificial: o D1 mantém estatística por dia e aplica intervalo entre
+// chamadas para reduzir custo, excesso de acessos e respostas HTTP 429.
+// Os limites reais e a cobrança do plano Cloudflare continuam valendo.
+const MONITOR_RENDER_COOLDOWN=30;
 export async function claimSocialBrowserBudget(env,now=epoch()){
  if(typeof env?.BROWSER?.quickAction!=='function')return false;
  await ensureMonitor(env);
@@ -935,8 +934,8 @@ export async function claimSocialBrowserBudget(env,now=epoch()){
  const result=await env.DB.prepare(
   "UPDATE ml_monitor_browser_budget SET "+
   "daily_count=CASE WHEN day_key=? THEN daily_count+1 ELSE 1 END,day_key=?,last_at=? "+
-  "WHERE id=1 AND (day_key<>? OR daily_count<?) AND last_at<=?"
- ).bind(day,day,now,day,MONITOR_RENDER_DAILY_LIMIT,now-MONITOR_RENDER_COOLDOWN).run();
+  "WHERE id=1 AND last_at<=?"
+ ).bind(day,day,now,now-MONITOR_RENDER_COOLDOWN).run();
  return result.meta?.changes===1;
 }
 async function claimMonitorItemBrowserAttempt(env,shortlinkId,at){
@@ -1084,7 +1083,7 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
    try{result=await inspectMonitorShortlink(item.short_url,{fetcher});}
    catch{result={product:null,kind:'temporary',reason:'Erro temporário consultando anúncio'};}
    const tries=Number(item.auto_attempts||0);
-   // No máximo um Browser Run por pulsação. A quota diária permanece em D1.
+   // No máximo um Browser Run por pulsação. D1 controla o intervalo e contabiliza uso diário.
    // Tentativas antigas não eliminam a renderização: links podem estar em
    // revisão há dias sem ter recebido nenhuma consulta de navegador.
    const shouldBrowser=!result.product&&result.social_url&&
