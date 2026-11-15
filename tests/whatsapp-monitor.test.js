@@ -1362,3 +1362,31 @@ test('revogar autorização impede resolver link, mesmo que ele tenha sido receb
   await assert.rejects(reviewMonitorShortlink(env,id,{action:'retry'}),/sem autorização/);
  }finally{globalThis.fetch=oldFetch;DB.close();}
 });
+
+test('diagnóstico distingue revisão automática, bloqueio externo e links de grupos pausados',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Pausado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Produto A https://meli.la/REVIEWA1'));
+  await ingestMonitorEvent(env,{...event(GROUP,'Produto B https://meli.la/REVIEWB2'),
+   data:{...event(GROUP,'Produto B https://meli.la/REVIEWB2').data,
+    key:{remoteJid:GROUP,fromMe:false,id:'ABCD5555'}}});
+  const entries=DB.prepare('SELECT id FROM ml_monitor_shortlinks ORDER BY id').all().results;
+  assert.equal(entries.length,2);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Vitrine encontrada, mas CTA indisponível' WHERE id=?").bind(entries[0].id).run();
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Redirecionamento para domínio não verificado (example.org); revisão manual necessária' WHERE id=?").bind(entries[1].id).run();
+  DB.prepare("INSERT INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) VALUES(?,?,?,?,0)")
+   .bind(entries[0].id,1700000100,1700000070,4).run();
+  await updateMonitorGroup(env,DB.prepare('SELECT id FROM ml_monitor_groups').first().id,{enabled:false});
+  const state=await monitorState(env);
+  assert.equal(state.retry_progress.total,2);
+  assert.equal(state.retry_progress.automatic,1);
+  assert.equal(state.retry_progress.manual,1);
+  assert.equal(state.retry_progress.from_paused_groups,2);
+  assert.equal(state.retry_progress.last_attempt_at,1700000070);
+  assert.match(MONITOR_CLIENT_JS,/Revisão automática:/);
+  assert.match(MONITOR_CLIENT_JS,/A pausa não interrompe a revalidação/);
+  assert.equal(state.groups[0].enabled,0);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
