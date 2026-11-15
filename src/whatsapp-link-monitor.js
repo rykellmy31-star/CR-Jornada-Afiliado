@@ -306,7 +306,7 @@ export async function monitorState(env){
    worker_heartbeat:workerHeartbeat||{},
    browser_usage:{used:browserUsage?.day_key===new Date().toISOString().slice(0,10)
      ?Number(browserUsage.daily_count||0):0,
-     daily_limit:36,last_attempt_at:Number(browserUsage?.last_at||0)},
+     daily_limit:MONITOR_RENDER_DAILY_LIMIT,last_attempt_at:Number(browserUsage?.last_at||0)},
    retry_progress:{
      total:Number(retryProgress?.total||0),automatic:Number(retryProgress?.automatic||0),
      manual:Number(retryProgress?.manual||0),
@@ -518,8 +518,18 @@ export async function reviewMonitorShortlink(env,id,body){
  if(!short.authorized)throw fail('Grupo sem autorização para revisar o link.',403);
  let candidate;
  if(action==='retry'){
-  const inspected=await inspectMonitorShortlink(short.short_url);
+  let inspected=await inspectMonitorShortlink(short.short_url);
   candidate=inspected.product;
+  // O botão em massa e o Cron exigem o produto principal identificado;
+  // nunca aprovar o primeiro anúncio recomendado na vitrine.
+  if(!candidate&&inspected.social_url&&['showcase','auth'].includes(inspected.kind)){
+   if(await claimSocialBrowserBudget(env)){
+    const featured=await browserFeaturedProduct(env,inspected.social_url);
+    if(featured)candidate=featured;
+   }else{
+    inspected={...inspected,reason:'Vitrine exige navegador; limite ou intervalo de segurança atingido. Nova tentativa necessária.'};
+   }
+  }
   if(!candidate){
    await env.DB.prepare(
     "UPDATE ml_monitor_shortlinks SET tries=tries+1,reason=? WHERE id=? AND status='review'"
@@ -548,6 +558,76 @@ export async function reviewMonitorShortlink(env,id,body){
  await env.DB.prepare('DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?').bind(n).run();
  await env.DB.prepare('DELETE FROM ml_monitor_browser_attempts WHERE shortlink_id=?').bind(n).run();
  return {ok:true,resolved:true,manual:action==='approve',product_id:candidate.product_id};
+}
+// Processa a revisão inteira em páginas pequenas, preservando limites do Worker.
+// Nunca converte link de terceiros em um link de afiliado nem publica a oferta.
+export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={}){
+ await ensureMonitor(env);
+ const after=Number(after_id),batchSize=Number(limit);
+ if(!Number.isSafeInteger(after)||after<0||!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>3)
+  throw fail('Lote de revisão inválido.');
+ const candidates=(await env.DB.prepare(
+  "SELECT s.id,s.reason,g.authorized FROM ml_monitor_shortlinks s "+
+  "JOIN ml_monitor_groups g ON g.id=s.group_id "+
+  "WHERE s.status='review' AND s.id>? ORDER BY s.id LIMIT ?"
+ ).bind(after,batchSize).all()).results;
+ const outcome={ok:true,processed:0,resolved:0,not_confirmed:0,requires_manual:0,
+  busy:0,results:[],next_cursor:after,has_more:false};
+ const t=epoch();
+ for(const item of candidates){
+  outcome.next_cursor=Number(item.id);
+  if(!item.authorized){
+   outcome.requires_manual++;
+   outcome.results.push({id:item.id,status:'requires_manual',reason:'Grupo sem autorização'});
+   continue;
+  }
+  if(/^(Redirecionamento para domínio não verificado|Redirecionamento circular|Produto associado por confirmação manual)/.test(item.reason||'')){
+   outcome.requires_manual++;
+   outcome.results.push({id:item.id,status:'requires_manual',reason:item.reason});
+   continue;
+  }
+  // Lease usado também pelo Cron: impede processar o mesmo link simultaneamente.
+  const inserted=await env.DB.prepare(
+   "INSERT OR IGNORE INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) VALUES(?,0,0,0,?)"
+  ).bind(item.id,t+120).run();
+  let claimed=inserted.meta?.changes===1;
+  if(!claimed){
+   const lease=await env.DB.prepare(
+    'UPDATE ml_monitor_retry_schedule SET lease_until=? WHERE shortlink_id=? AND lease_until<=?'
+   ).bind(t+120,item.id,t).run();
+   claimed=lease.meta?.changes===1;
+  }
+  if(!claimed){
+   outcome.busy++;
+   outcome.results.push({id:item.id,status:'busy'});
+   continue;
+  }
+  outcome.processed++;
+  try{
+   const result=await reviewMonitorShortlink(env,item.id,{action:'retry'});
+   if(result.resolved){
+    outcome.resolved++;
+    outcome.results.push({id:item.id,status:'resolved'});
+   }else{
+    outcome.not_confirmed++;
+    const reason=String(result.reason||'Produto não confirmado').slice(0,220);
+    await env.DB.prepare(
+     'UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 WHERE shortlink_id=?'
+    ).bind(t,t+monitorRetryDelaySeconds(1),item.id).run();
+    outcome.results.push({id:item.id,status:'not_confirmed',reason});
+   }
+  }catch(error){
+   outcome.not_confirmed++;
+   await env.DB.prepare('UPDATE ml_monitor_retry_schedule SET lease_until=0,next_retry_at=?,last_attempt_at=? WHERE shortlink_id=?')
+    .bind(t+120,t,item.id).run();
+   outcome.results.push({id:item.id,status:'not_confirmed',reason:String(error?.message||error).slice(0,220)});
+  }
+ }
+ const next=await env.DB.prepare(
+  "SELECT 1 AS available FROM ml_monitor_shortlinks WHERE status='review' AND id>? LIMIT 1"
+ ).bind(outcome.next_cursor).first();
+ outcome.has_more=!!next;
+ return outcome;
 }
 export async function updateMonitorLinkCategory(env,id,body){
  await ensureMonitor(env);await ensureAutomationCenter(env);
@@ -780,8 +860,9 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
 // Browser Run é usado APENAS quando HTML estático não contém o CTA.
 // Acesso com quota diária fixa em D1 impede consumo descontrolado mesmo
 // quando o cron revalida links a cada 30 segundos.
-const MONITOR_RENDER_DAILY_LIMIT=36;
-const MONITOR_RENDER_COOLDOWN=30;
+const MONITOR_RENDER_DAILY_LIMIT=120;
+export const MONITOR_BROWSER_DAILY_LIMIT=MONITOR_RENDER_DAILY_LIMIT;
+const MONITOR_RENDER_COOLDOWN=5;
 export async function claimSocialBrowserBudget(env,now=epoch()){
  if(typeof env?.BROWSER?.quickAction!=='function')return false;
  await ensureMonitor(env);
