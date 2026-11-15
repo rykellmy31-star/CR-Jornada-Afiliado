@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup,monitorCouponOnly} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,bulkValidateMonitorShortlinks,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup,monitorCouponOnly} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
@@ -1602,4 +1602,83 @@ test('sem produto destacado Cloudflare /scrape não aprova anúncios recomendado
   }};
   assert.equal(await browserFeaturedProduct(env,social),null);
  }finally{DB.close();}
+});
+
+test('Validar todas percorre toda a revisão em lotes sem aprovar links externos ou publicar ofertas',async()=>{
+ const {env,DB}=setup(),old=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Promoções',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  for(let i=1;i<=5;i++){
+   const short='https://meli.la/BULKITEM'+i+'AB';
+   const e=event(GROUP,'Produto '+i+' '+short);
+   e.data.key.id='BULK'+String(i).padStart(10,'0');
+   await ingestMonitorEvent(env,e);
+  }
+  const items=DB.prepare('SELECT id,short_url FROM ml_monitor_shortlinks ORDER BY id').all().results;
+  assert.equal(items.length,5);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Vitrine sem identificação confirmada'").run();
+  DB.prepare("UPDATE ml_monitor_shortlinks SET reason='Redirecionamento para domínio não verificado (example.org); revisão manual necessária' WHERE id=?").bind(items[4].id).run();
+  await updateMonitorGroup(env,DB.prepare('SELECT id FROM ml_monitor_groups').first().id,{enabled:false});
+  globalThis.fetch=async url=>{
+   const u=String(url);
+   if(u===items[2].short_url)return new Response('Bloqueado',{status:403});
+   if(items.some((x,j)=>j!==2&&u===x.short_url))
+    return new Response(null,{status:302,headers:{location:PRODUCT}});
+   throw Error('Consulta inesperada '+u);
+  };
+  const first=await bulkValidateMonitorShortlinks(env,{after_id:0,limit:3});
+  assert.equal(first.processed,3);
+  assert.equal(first.resolved,2);
+  assert.equal(first.not_confirmed,1);
+  assert.equal(first.has_more,true);
+  const second=await bulkValidateMonitorShortlinks(env,{after_id:first.next_cursor,limit:3});
+  assert.equal(second.processed,1);
+  assert.equal(second.resolved,1);
+  assert.equal(second.requires_manual,1);
+  assert.equal(second.has_more,false);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM ml_monitor_shortlinks WHERE status='resolved'").first().n,3);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM ml_monitor_shortlinks WHERE status='review'").first().n,2);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers").first().n,0);
+  await assert.rejects(bulkValidateMonitorShortlinks(env,{after_id:0,limit:50}),/inválido/);
+  const denied=await worker.fetch(new Request('https://afiliados.test/api/monitor/review-all',{
+   method:'POST',headers:{origin:'https://afiliados.test','content-type':'application/json'},
+   body:JSON.stringify({after_id:0,limit:1})}),env);
+  assert.equal(denied.status,401);
+ }finally{globalThis.fetch=old;DB.close();}
+});
+test('Validação em massa usa apenas botão do produto principal da vitrine, nunca recomendações',async()=>{
+ const {env,DB}=setup(),old=globalThis.fetch;
+ const short='https://meli.promo/s/BULKBROWSER',social='https://www.mercadolivre.com.br/social/perfil/aba';
+ const other='https://www.mercadolivre.com.br/outra-coisa/p/MLB99999999';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const e=event(GROUP,'Furadeira '+short);e.data.key.id='BROWSER_BULK_0001';
+  await ingestMonitorEvent(env,e);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Vitrine encontrada, mas botão indisponível'").run();
+  globalThis.fetch=async url=>{
+   const u=String(url);
+   if(u===short)return new Response(null,{status:302,headers:{location:social}});
+   if(u===social)return new Response('<html>Conteúdo carregado por JS</html>',{headers:{'content-type':'text/html'}});
+   throw Error('URL inesperada '+u);
+  };
+  let browserCalls=0;
+  env.BROWSER={quickAction:async(action)=>{
+   browserCalls++;
+   if(action==='content')return new Response('<html><section class="rl-card-featured-wrapper">'+
+    '<a class="poly-action-links__action--link" href="'+PRODUCT+'">Ir para produto</a></section>'+
+    '<section class="rl-card-recommendations"><a href="'+other+'">Ir para produto</a></section></html>',
+    {headers:{'content-type':'text/html'}});
+   return Response.json({result:[]});
+  }};
+  const result=await bulkValidateMonitorShortlinks(env,{after_id:0,limit:1});
+  assert.equal(result.resolved,1);
+  assert.equal(result.has_more,false);
+  assert.equal(browserCalls,1);
+  const captured=DB.prepare('SELECT product_id,source_url FROM ml_monitor_links').first();
+  assert.equal(captured.product_id,'MLB12345678');
+  assert.equal(captured.source_url,PRODUCT);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=old;DB.close();}
 });
