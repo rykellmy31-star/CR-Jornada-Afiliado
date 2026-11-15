@@ -1,7 +1,7 @@
 import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
-import { resolveProductImage } from './offer-images.js';
+import { sharedWhatsAppProductPhoto } from './offer-images.js';
 import { categoryMatches,normalizeChannelCategory } from './multichannel.js';
 import { listWhatsAppGroups,connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,evolutionOrigin,ensureWhatsAppTables } from './whatsapp.js';
 
@@ -268,7 +268,7 @@ async function sendWhatsApp(env,g,offer,{photoUrl=null,requirePhoto=false}={}){
  const link=offer.affiliate_url;
  const text=formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
  let photo=photoUrl;
- if(!photo)try{photo=await resolveProductImage(env,link,findProductImage);}catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
+ if(!photo)try{photo=await sharedWhatsAppProductPhoto(env,link,findProductImage);}catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
  if(requirePhoto&&!photo)throw fail('Imagem não confirmada. Nenhuma mensagem sem foto foi enviada.');
  const body=photo
    ?{number:g.group_jid,mediatype:'image',mimetype:photo.endsWith('.png')?'image/png':'image/jpeg',
@@ -340,7 +340,7 @@ export async function runManagedWhatsAppScheduled(env){
    if(!offer)continue;
    // Só consome intervalo e compartilha o número quando a imagem estiver pronta.
    let image=null;
-   try{image=await resolveProductImage(env,offer.affiliate_url,findProductImage);}
+   try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage);}
    catch(err){console.warn('Foto automática do grupo:',String(err?.message||err).slice(0,90));}
    if(!image){
      await env.DB.prepare(
