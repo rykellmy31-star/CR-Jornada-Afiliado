@@ -508,3 +508,80 @@ test('webhook bloqueia corpo acima do limite de mídia sem registrar evento',asy
   assert.equal((await monitorState(env)).diagnostics.events_received,0);
  }finally{DB.close();}
 });
+
+test('imagem de oferta reconhecida em formatos alternativos da Evolution e legenda com quebra',()=>{
+ const short='https://melila.me/MpuhFvqiqmsu';
+ const nestedMessage=[
+  {ephemeralMessage:{message:{viewOnceMessageV2:{message:{imageMessage:{caption:'COLCHÃO SOLTEIRO '+short}}}}}},
+  {message:{documentWithCaptionMessage:{message:{documentMessage:{caption:'Oferta: '+short}}}}},
+  {interactiveMessage:{body:{text:'Oferta: '+short}}},
+  {imageMessage:{caption:''}}
+ ];
+ for(const [i,message] of nestedMessage.entries()){
+  const payload={event:'MESSAGES_UPSERT',instance:INSTANCE,data:{
+   key:{remoteJid:GROUP,fromMe:false,id:'TESTNEST'+i},
+   message,...(i===3?{caption:'Oferta: '+short}:{})}};
+  const items=parseMonitorEvent(payload);
+  assert.equal(items.length,1,'formato '+i);
+  assert.deepEqual(items[0].urls,[short],'formato '+i);
+ }
+ const newline='https://melila.me/\\nMpuhFvqiqmsu';
+ assert.deepEqual(extractUrls(newline),[short]);
+});
+
+test('recupera legenda ausente por consulta pontual e somente de grupo autorizado',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ env.EVOLUTION_API_URL='https://evolution.crjornada.com';
+ env.EVOLUTION_API_KEY='example-read-key';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'ACHADINHOS DA INTERNET',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const short='https://melila.me/MpuhFvqiqmsu';
+  let called=0;
+  globalThis.fetch=async (url,options)=>{
+   called++;
+   assert.equal(String(url),'https://evolution.crjornada.com/chat/findMessages/'+INSTANCE);
+   assert.equal(options.method,'POST');
+   assert.equal(options.headers.apikey,'example-read-key');
+   assert.equal(JSON.parse(options.body).where.key.id,'RECOVER1');
+   return new Response(JSON.stringify({messages:{records:[{
+    key:{remoteJid:GROUP,fromMe:false,id:'RECOVER1'},
+    message:{imageMessage:{caption:'COLCHÃO SOLTEIRO CONFORT MAX 188X88 CM\\n'+short}}}
+   ]}}),{status:200,headers:{'content-type':'application/json'}});
+  };
+  const blank={event:'messages.upsert',instance:INSTANCE,data:{
+   key:{remoteJid:GROUP,fromMe:false,id:'RECOVER1'},message:{imageMessage:{mimetype:'image/jpeg'}}}};
+  await ingestMonitorEvent(env,blank);
+  assert.equal(called,1);
+  const state=await monitorState(env);
+  assert.equal(state.groups[0].delivery.received_messages,1);
+  assert.equal(state.groups[0].delivery.with_urls,1);
+  assert.equal(state.diagnostics.links_recognized,1);
+  assert.equal(state.recent_domains[0].domain,'melila.me');
+  assert.equal(state.recent_domains[0].message_format,'evolution:imageMessage');
+  assert.equal(state.shortlinks.find(s=>s.status==='pending').total,1);
+  assert.equal(state.counts.captured,0); // Aguarda confirmar produto de destino.
+  await ingestMonitorEvent(env,{...blank,data:{...blank.data,key:{...blank.data.key,id:'FORBIDDEN',remoteJid:OTHER}}});
+  assert.equal(called,1,'não consultar grupo não autorizado');
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+
+test('não importa legendas de mensagens diferentes em resultado de busca da Evolution',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ env.EVOLUTION_API_URL='https://evolution.crjornada.com';
+ env.EVOLUTION_API_KEY='example-read-key';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo permitido',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  globalThis.fetch=async()=>new Response(JSON.stringify({messages:{records:[{
+   key:{remoteJid:OTHER,fromMe:false,id:'RECOVER2'},
+   message:{imageMessage:{caption:'https://melila.me/OTHER12345'}}}
+  ]}}),{status:200});
+  await ingestMonitorEvent(env,{event:'messages.upsert',instance:INSTANCE,data:{
+   key:{remoteJid:GROUP,fromMe:false,id:'RECOVER2'},message:{imageMessage:{mimetype:'image/jpeg'}}}});
+  const state=await monitorState(env);
+  assert.equal(state.counts.captured,0);
+  assert.equal(state.diagnostics.links_recognized,0);
+  assert.equal(state.groups[0].delivery.received_messages,1);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
