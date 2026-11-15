@@ -150,9 +150,12 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
     if(offer.promo_terms_json){
       const terms=safePromotionTerms(offer.promo_terms_json);
       if(terms&&terms.price_source==='mercadolivre'){
-        if(terms.payment_mode==='pix_only')info.push('💠 Pagamento: somente Pix');
+        if(terms.payment_mode==='pix_only')info.push(
+          validMoney(terms.card_price_cents)?'💠 Preço destacado no Pix':'💠 Pagamento: somente Pix');
         else if(terms.payment_mode==='pix')info.push('💠 Pagamento: Pix');
         else if(terms.payment_mode==='card')info.push('💳 Pagamento: cartão');
+        if(validMoney(terms.card_price_cents)&&terms.card_price_cents!==price)
+          info.push('💳 Preço no cartão: '+formatBRL(terms.card_price_cents));
         if(terms.installments!==null&&Number.isInteger(terms.installments)){
           info.push('💳 Parcelamento: '+terms.installments+'x'+
             (validMoney(terms.installment_cents)?' de '+formatBRL(terms.installment_cents):'')+
