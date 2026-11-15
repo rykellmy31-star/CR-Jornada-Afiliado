@@ -524,6 +524,58 @@ async function productFromShortPage(response){
  }
  return unique.size===1?[...unique.values()][0]:null;
 }
+// Em páginas sociais do Mercado Livre, o anúncio principal fica dentro de
+// rl-card-featured-wrapper. Só seguimos o botão "Ir para produto" desse bloco:
+// as sugestões ("Você também pode gostar") nunca podem ser escolhidas.
+function featuredProductFromHtml(html,baseUrl){
+ if(typeof html!=='string'||html.length>2100000)return null;
+ const featured=/<(?:section|div)\b[^>]{0,1200}\bclass\s*=\s*(["'])[^"']*\brl-card-featured-wrapper\b[^"']*\1[^>]*>/i.exec(html);
+ if(!featured)return null;
+ const start=featured.index+featured[0].length;
+ // Limite de leitura impede que um card recomendado em outra seção seja usado.
+ const excerpt=html.slice(start,start+280000);
+ const boundary=excerpt.search(/(?:Voc(?:ê|&ecirc;|&#234;)\s+tamb(?:é|&eacute;|&#233;)m\s+pode\s+gostar|rl-card-recommendations|recommendations-wrapper)/i);
+ const scope=boundary>=0?excerpt.slice(0,boundary):excerpt;
+ const anchors=scope.match(/<a\b[^>]{0,5000}>[\s\S]{0,12000}?<\/a\s*>/gi)||[];
+ const candidates=new Map();
+ for(const a of anchors.slice(0,180)){
+  const opening=/^<a\b[^>]*>/i.exec(a)?.[0]||'';
+  const label=a.slice(opening.length).replace(/<[^>]{0,2000}>/g,' ').replace(/&nbsp;|&#160;/gi,' ').replace(/\s+/g,' ').trim();
+  const linkButton=/poly-action-links__action--link/i.test(opening);
+  const mainLabel=/\bir\s+para\s+(?:o\s+)?produto\b/i.test(label);
+  if(!linkButton&&!mainLabel)continue;
+  const href=/\bhref\s*=\s*(?:"([^"]{1,3000})"|'([^']{1,3000})')/i.exec(opening);
+  if(!href)continue;
+  const raw=(href[1]||href[2]).replace(/&amp;/gi,'&').replace(/&#38;/gi,'&');
+  let resolved;
+  try{resolved=new URL(raw,baseUrl).href;}catch{continue;}
+  const candidate=urlCandidate(resolved);
+  if(candidate?.kind==='product')candidates.set(candidate.product_id,candidate);
+  if(candidates.size>1)return null;
+ }
+ return candidates.size===1?[...candidates.values()][0]:null;
+}
+async function featuredProductFromShowcasePage(response,baseUrl){
+ const type=(response.headers.get('content-type')||'').toLowerCase();
+ if(!/^text\/html(?:;|$)/.test(type))return null;
+ const declared=Number(response.headers.get('content-length')||0);
+ const maxBytes=2100000;
+ if(declared>maxBytes)return null;
+ const reader=response.body?.getReader();
+ if(!reader)return null;
+ const decoder=new TextDecoder(),pieces=[];let size=0;
+ try{
+  for(;;){
+   const {done,value}=await reader.read();
+   if(done)break;
+   size+=value.byteLength;
+   if(size>maxBytes){await reader.cancel();return null;}
+   pieces.push(decoder.decode(value,{stream:true}));
+  }
+ }catch{return null;}
+ return featuredProductFromHtml(pieces.join('')+decoder.decode(),baseUrl);
+}
+export {featuredProductFromHtml};
 function trustedHop(input){
  try{
   const u=new URL(input);
@@ -542,8 +594,7 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   visited.add(u.href);
   const product=urlCandidate(u.href);
   if(product?.kind==='product')return {product,kind:'product',reason:null};
-  if(/^\/social(?:\/|$)/i.test(u.pathname)&&REDIRECT_HOSTS.has(u.hostname.toLowerCase()))
-   return {product:null,kind:'showcase',reason:'Link abre uma vitrine com vários produtos, não um anúncio individual'};
+  const social=/^\/social(?:\/|$)/i.test(u.pathname)&&REDIRECT_HOSTS.has(u.hostname.toLowerCase());
   let res;
   try{
    res=await fetcher(u.href,{redirect:'manual',method:'GET',signal:AbortSignal.timeout(4500),
@@ -563,7 +614,11 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   if(res.status>=500)
    return {product:null,kind:'temporary',reason:'O site está indisponível temporariamente ('+res.status+')'};
   if(res.status===200){
-   // Uma página de vitrine nunca pode ser confundida com um único produto.
+   if(social){
+    const featured=await featuredProductFromShowcasePage(res,u.href);
+    if(featured)return {product:featured,kind:'featured_product',reason:null};
+    return {product:null,kind:'showcase',reason:'Vitrine encontrada, mas o botão do produto principal não pôde ser identificado no HTML público'};
+   }
    const candidate=await productFromShortPage(res);
    if(candidate)return {product:candidate,kind:'product',reason:null};
    return {product:null,kind:'intermediate',reason:'Página sem identificação segura de um produto individual'};
@@ -579,11 +634,13 @@ export async function resolveMonitorShortlinks(env){
  await ensureMonitor(env);
  const state=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
  if(!state?.enabled)return {skipped:'disabled'};
- // Reavalia uma vez os erros genéricos antigos, sem consultar vitrines repetidamente.
+ // Reprocessa os erros genéricos antigos e as vitrines já conhecidas, uma vez. A razão muda após a tentativa.
  const items=(await env.DB.prepare(
   "SELECT s.*,g.instance_name,g.group_jid FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
   "WHERE g.enabled=1 AND g.authorized=1 AND "+
-  "(s.status='pending' OR (s.status='review' AND s.reason='Sem destino seguro de produto' AND s.tries<2)) "+
+  "(s.status='pending' OR (s.status='review' AND s.reason IN ("+
+  "'Sem destino seguro de produto',"+
+  "'Link abre uma vitrine com vários produtos, não um anúncio individual') AND s.tries<=4)) "+
   "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END,s.id LIMIT 5"
  ).all()).results;
  let resolved=0,reviewed=0;
