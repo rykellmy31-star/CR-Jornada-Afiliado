@@ -1,6 +1,7 @@
 import {CATEGORY_PAGE_HTML,CATEGORY_CSS,CATEGORY_CLIENT_JS} from './ui-categories.js';
 import {LINK_BATCH_HTML,LINK_BATCH_CSS,LINK_BATCH_CLIENT_JS} from './ui-link-batches.js';
 import {OVERVIEW_PAGE_HTML,OVERVIEW_CSS,OVERVIEW_CLIENT_JS} from './ui-overview.js';
+import {STORES_PAGE_HTML,STORES_CSS,STORES_CLIENT_JS} from './ui-stores.js';
 export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
   <header><div class="brand"><div class="logo">CR</div><div><strong>CR Jornada</strong><small>AFILIADOS • MULTIPLATAFORMA</small></div></div><div class="header-end"><button id="master-toggle" type="button" class="pill master-toggle hidden" aria-pressed="false" hidden disabled>Ligar robô</button><span id="top-status" class="hidden">Aguardando conexão</span><button id="logout" class="ghost hidden" type="button">Sair</button></div></header>
@@ -15,6 +16,8 @@ export function renderPage() {
         <button class="platform-nav-item active" type="button" data-platform="mercadolivre"><span>🛍️</span> Mercado Livre</button>
         <button class="platform-nav-item" type="button" data-platform="shopee"><span>🧡</span> Shopee</button>
         <div class="platform-side-divider"></div>
+        <div class="platform-nav-heading">GERENCIAMENTO</div>
+        <button class="platform-nav-item" type="button" data-panel="stores"><span>🏬</span> LOJAS</button>
         <button class="platform-nav-item" type="button" data-panel="linkbatches"><span>🔗</span> Conversão de Link em Lote</button>
         <button class="platform-nav-item" type="button" data-panel="categories"><span>📁</span> Categorias</button>
         <button class="platform-nav-item" type="button" data-panel="activity"><span>📋</span> Atividade recente</button>
@@ -24,6 +27,7 @@ export function renderPage() {
       </aside>
       ${OVERVIEW_PAGE_HTML}
       ${CATEGORY_PAGE_HTML}
+      ${STORES_PAGE_HTML}
       <section id="affiliate-page" class="card history hidden">
         <div class="section-header"><div><h2>🔐 Conexão de Afiliado • Mercado Livre</h2>
           <p>Integração da conta no menu lateral, sem interferir nas publicações que já funcionam.</p></div></div>
@@ -612,6 +616,7 @@ export function renderPage() {
 }
 
 export const CSS = `
+${STORES_CSS}
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
 *{box-sizing:border-box}body{margin:0}h1,h2,p{margin:0}h1{font-size:clamp(26px,3vw,39px);letter-spacing:-1px;line-height:1.18}h2{font-size:18px;letter-spacing:-.3px}p{color:#68748b;line-height:1.6}header{background:#0b1b35;color:#fff;padding:17px max(22px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{display:flex;align-items:center;gap:12px}.logo{width:43px;height:43px;border-radius:12px;background:linear-gradient(135deg,#18b4a1,#1784be);display:grid;place-items:center;font-weight:900;letter-spacing:-1px}.brand strong{font-size:16px;display:block}.brand small{font-size:10px;letter-spacing:1.2px;color:#a0b4cc}.header-end{display:flex;align-items:center;gap:8px}.pill{border:1px solid #37516f;color:#cbd9eb;border-radius:25px;padding:7px 12px;font-size:12px;white-space:nowrap}main{max-width:1200px;margin:0 auto;padding:28px 20px 40px}.hidden{display:none!important}
 /* Aba ativa é a única visível, inclusive durante consultas assíncronas atrasadas. */
@@ -749,7 +754,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
-    if(['overview','platform','categories','activity','affiliate','linkbatches'].includes(state.page))selectedPage=state.page;
+    if(['overview','platform','categories','activity','affiliate','linkbatches','stores'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -963,6 +968,7 @@ function applyPlatformView(){
     if(item.id==='platform-sidebar')continue;
     if(item.id==='overview-page'){item.classList.toggle('hidden',selectedPage!=='overview');continue;}
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
+    if(item.id==='stores-page'){item.classList.toggle('hidden',selectedPage!=='stores');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
     if(item.id==='ml-link-batches'){item.classList.toggle('hidden',selectedPage!=='linkbatches');continue;}
      if(item.id==='affiliate-page'){item.classList.toggle('hidden',selectedPage!=='affiliate'||!isML);continue;}
@@ -1801,6 +1807,7 @@ for(const button of document.querySelectorAll('[data-panel]')){
     applyPlatformView();
     if(selectedPage==='overview')await refreshOverview();
     if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
+    if(selectedPage==='stores')await refreshStores().catch(error=>notice(error.message,true,'stores-ml-feedback'))
     if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
     if(selectedPage==='linkbatches')await refreshMLLinkBatches().catch(error=>notice(error.message,true,'ml-batch-feedback'));
     if(selectedPage==='affiliate'&&selectedPlatform==='shopee')await refreshShopeeAccount().catch(error=>notice(error.message,true,'shopee-account-feedback'));
@@ -2162,6 +2169,7 @@ $('refresh').addEventListener('click',refresh);
 ${LINK_BATCH_CLIENT_JS}
 ${CATEGORY_CLIENT_JS}
 ${OVERVIEW_CLIENT_JS}
+${STORES_CLIENT_JS}
 // Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
 async function bootstrap(){
   const ticket=authGeneration;
@@ -2178,6 +2186,7 @@ async function bootstrap(){
     const tasks=[loadMasterState(),fetchCategoryOptions()];
     if(selectedPage==='overview')tasks.push(refreshOverview());
     else if(selectedPage==='categories')tasks.push(refreshCategories());
+    else if(selectedPage==='stores')tasks.push(refreshStores());
     else if(selectedPage==='activity')tasks.push(refreshActivity());
     else if(selectedPage==='linkbatches')tasks.push(refreshMLLinkBatches());
     else if(selectedPage==='affiliate'&&selectedPlatform==='shopee')tasks.push(refreshShopeeAccount());
