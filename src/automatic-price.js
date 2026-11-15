@@ -1,13 +1,14 @@
 // Pré-verificação de preço para ofertas automáticas do Mercado Livre.
 // Uma falha temporária de preço nunca bloqueia os demais produtos.
-import {fetchMercadoLivrePrice,extractMercadoLivrePagePrice} from './mercado-livre-price.js';
+import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractMercadoLivrePagePrice} from './mercado-livre-price.js';
 import {sourcePageForAffiliateImage} from './offer-images.js';
 import {inspectMonitorShortlink,browserFeaturedProduct,claimSocialBrowserBudget} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
 import {safePromotionTerms,MAX_AGE_MS} from './promotion-terms.js';
 
 const VERIFY_CACHE=15*60;
-const LAST_CONFIRMED=60*60;
+const PRICE_BROWSER_DAILY_LIMIT=96;
+const PRICE_BROWSER_COOLDOWN=8;
 const SOURCES="CREATE TABLE IF NOT EXISTS affiliate_verified_sources ("+
  "affiliate_url TEXT PRIMARY KEY,source_url TEXT NOT NULL,checked_at INTEGER NOT NULL)";
 const DETAILS="CREATE TABLE IF NOT EXISTS affiliate_verified_offer_details ("+
@@ -46,11 +47,11 @@ async function renderedOfficialPrice(env,source,now){
   const quota=await env.DB.prepare(
    "UPDATE affiliate_price_browser_budget SET "+
    "daily_count=CASE WHEN day_key=? THEN daily_count+1 ELSE 1 END,day_key=?,last_at=? "+
-   "WHERE id=1 AND (day_key<>? OR daily_count<24) AND last_at<=?"
-  ).bind(day,day,now,day,now-45).run();
+   "WHERE id=1 AND (day_key<>? OR daily_count<"+PRICE_BROWSER_DAILY_LIMIT+") AND last_at<=?"
+  ).bind(day,day,now,day,now-PRICE_BROWSER_COOLDOWN).run();
   if(quota.meta?.changes!==1)return null;
   const response=await env.BROWSER.quickAction('content',{
-   url:source,gotoOptions:{waitUntil:'domcontentloaded',timeout:14000},
+   url:source,gotoOptions:{waitUntil:'networkidle2',timeout:20000},
    rejectResourceTypes:['image','font','media']
   });
   if(!response?.ok||typeof response.text!=='function')return null;
@@ -128,6 +129,13 @@ export async function prepareAutomaticOfferPrice(env,offer,
    try{const live=await fetchMercadoLivrePrice(source,fetcher);
     if(positive(live?.price_cents))details=live;
    }catch(error){console.warn('Preço direto do Mercado Livre:',String(error?.message||error).slice(0,100));}
+   if(!positive(details?.price_cents)){
+    // Consulta pública oficial, sem credenciais. Nunca troca o ID do produto.
+    try{
+     const publicPrice=await fetchMercadoLivrePublicPrice(source,fetcher);
+     if(positive(publicPrice?.price_cents))details=publicPrice;
+    }catch(error){console.warn('Preço público do Mercado Livre:',String(error?.message||error).slice(0,100));}
+   }
    if(!positive(details?.price_cents)){
     const rendered=await renderedOfficialPrice(env,source,now);
     if(positive(rendered?.price_cents))details=rendered;
