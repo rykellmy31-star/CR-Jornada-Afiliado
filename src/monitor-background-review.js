@@ -1,4 +1,4 @@
-import {monitorState,bulkValidateMonitorShortlinks,MONITOR_BROWSER_DAILY_LIMIT} from './whatsapp-link-monitor.js';
+import {monitorState,bulkValidateMonitorShortlinks} from './whatsapp-link-monitor.js';
 
 // Controle persistente no D1. A interface apenas solicita o trabalho;
 // o Cron da Cloudflare avança um link por execução, sem navegador aberto.
@@ -75,10 +75,6 @@ export async function queueBackgroundReview(env){
  ).bind(status,total,t,t,t).run();
  return {ok:true,already_running:false,job:publicJob(await jobRow(env))};
 }
-function nextUtcDay(t){
- const date=new Date(t*1000);
- return Math.floor(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate()+1)/1000)+30;
-}
 async function updateJob(env,values){
  const keys=Object.keys(values);
  await env.DB.prepare(
@@ -91,6 +87,12 @@ export async function runBackgroundReview(env,{now=null}={}){
  if(!env?.DB)return {skipped:'db'};
  await ensureJob(env);
  const at=Number.isSafeInteger(now)&&now>0?now:stamp();
+ // Destrava tarefas criadas na versão antiga com teto diário de 120.
+ // Mantém contagens e cursor; nunca apaga resultados ou recomeça um lote.
+ await env.DB.prepare(
+  "UPDATE ml_monitor_background_review SET status='waiting_retry',next_run_at=0,updated_at=? "+
+  "WHERE id=1 AND status='waiting_budget' AND lease_until<=?"
+ ).bind(at,at).run();
  const claimed=await env.DB.prepare(
   "UPDATE ml_monitor_background_review SET lease_until=?,status='running',updated_at=? "+
   "WHERE id=1 AND status IN ('running','waiting_retry','waiting_budget','waiting_monitor') "+
@@ -103,16 +105,6 @@ export async function runBackgroundReview(env,{now=null}={}){
   if(!state.enabled){
    await updateJob(env,{status:'waiting_monitor',next_run_at:at+60,last_run_at:at,updated_at:at,lease_until:0});
    return {skipped:'monitor_off'};
-  }
-  const usage=await env.DB.prepare(
-   'SELECT day_key,daily_count FROM ml_monitor_browser_budget WHERE id=1'
-  ).first();
-  const utcDay=new Date(at*1000).toISOString().slice(0,10);
-  if(state.browser_binding_available!==false&&usage?.day_key===utcDay&&
-     Number(usage.daily_count||0)>=MONITOR_BROWSER_DAILY_LIMIT){
-   const next=nextUtcDay(at);
-   await updateJob(env,{status:'waiting_budget',next_run_at:next,last_run_at:at,updated_at:at,lease_until:0});
-   return {skipped:'daily_browser_limit',next_run_at:next};
   }
   const result=await bulkValidateMonitorShortlinks(env,{after_id:Number(row.cursor||0),limit:1});
   const advance=Number(result.next_cursor||row.cursor||0);
