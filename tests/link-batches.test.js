@@ -5,6 +5,8 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {parseSelection,validateSourceUrl,validatePairs,createLinkBatch,importLinkBatch,readLinkBatch,listLinkBatches,isIneligibleWarning,previewLinkBatchDuplicates} from '../src/link-batches.js';
 import {runInNewContext} from 'node:vm';
+import {ensureWhatsAppTables} from '../src/whatsapp.js';
+import {ensureMultiChannelTables} from '../src/multichannel.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 
 const URL1='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
@@ -208,6 +210,8 @@ test('lote misto ignora links já registrados no Telegram, WhatsApp e multicanal
    'https://www.mercadolivre.com.br/jogo-soquetes/p/MLB99990001',
    'https://www.mercadolivre.com.br/maleta-ferramentas/p/MLB99990002'];
   const prepared=await createLinkBatch(env,{text:urls.map((u,i)=>'Ferramenta especial '+(i+1)+' | '+u+' | Ferramentas e Peças Automotivas').join('\n')});
+  await ensureWhatsAppTables(env);
+  await ensureMultiChannelTables(env);
   const aff=['https://meli.la/NEWLINK01','https://meli.la/ALREADYTG','https://meli.la/ALREADYWA',
    'https://meli.la/ALREADYCHANNEL','https://meli.la/NEWLINK05'];
   const t=Math.floor(Date.now()/1000);
