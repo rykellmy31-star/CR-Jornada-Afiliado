@@ -60,6 +60,13 @@ const SCHEMA=[
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   channel_id INTEGER NOT NULL REFERENCES telegram_channels(id),
   offer_id INTEGER, event TEXT NOT NULL, detail TEXT, created_at INTEGER NOT NULL
+)`,
+`CREATE TABLE IF NOT EXISTS telegram_channel_photo_retries (
+  offer_id INTEGER PRIMARY KEY REFERENCES channel_offers(id),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_retry_at INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0
 )`
 ];
 const OFFERS_SQL="SELECT o.*, c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,c.discount_value AS coupon_discount_value,c.min_cart_cents AS coupon_min_cart_cents,c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,c.owner_confirmed AS coupon_owner_confirmed FROM channel_offers o LEFT JOIN channel_offer_coupons c ON c.offer_id=o.id";
@@ -330,11 +337,13 @@ export async function requeueChannelOffer(env,id,offerId){
   await log(env,c.id,'manual_requeue','Reenfileiramento após conferência.',Number(offerId));
   return {ok:true};
 }
-async function sendOfferWithImage(env,token,chat,offer){
+async function sendOfferWithImage(env,token,chat,offer,{requirePhoto=false}={}){
   const payload=telegramPayload(offer,chat);
   let photo=null;
   try{photo=await resolveProductImage(env,offer.affiliate_url,findProductImage);}
   catch(err){console.warn('Imagem indisponível para novo canal:',offer.id,String(err?.message||'').slice(0,80));}
+  if(requirePhoto&&!photo)
+    throw Object.assign(new Error('Foto real do produto indisponível'),{code:'PHOTO_NOT_READY'});
   if(photo){
     try{
       const msg=await api(token,'sendPhoto',{chat_id:chat,photo,caption:payload.text,parse_mode:payload.parse_mode,reply_markup:payload.reply_markup});
@@ -343,13 +352,14 @@ async function sendOfferWithImage(env,token,chat,offer){
       return {message:msg,format:'photo'};
     }catch(error){
       if(error.telegramStatus!==400)throw error;
-      // Um erro 400 da foto é recusa explícita, seguro tentar enviar texto.
+      if(requirePhoto)throw Object.assign(new Error('Telegram recusou a foto real do anúncio'),{code:'PHOTO_NOT_READY'});
+      // A publicação manual mantém o comportamento anterior.
     }
   }
   const msg=await api(token,'sendMessage',{...telegramPayload(offer,chat,Date.now(),{includeLink:true})});
   return {message:msg,format:photo?'text_photo_rejected':'text_no_image'};
 }
-export async function publishChannelOffer(env,id,offerId){
+export async function publishChannelOffer(env,id,offerId,{automatic=false}={}){
   const c=await row(env,id);
   if(!c.telegram_enabled||!c.channel_registered)throw bad('Habilite e autorize o canal antes de publicar.');
   const token=await globalToken(env,c);
@@ -359,14 +369,39 @@ export async function publishChannelOffer(env,id,offerId){
   const claim=await env.DB.prepare("UPDATE channel_offers SET status='sending',last_error=NULL WHERE id=? AND channel_id=? AND status='ready'").bind(offer.id,c.id).run();
   if(claim.meta?.changes!==1)throw bad('Oferta já publicada ou em revisão.',409);
   try{
-    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,offer);
+    const result=await sendOfferWithImage(env,token,c.telegram_chat_id,offer,{requirePhoto:automatic});
     const now=epoch(),day=localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE channel_offers SET status='published',published_at=?,published_day=?,telegram_message_id=? WHERE id=? AND channel_id=? AND status='sending'")
       .bind(now,day,result.message.message_id,offer.id,c.id).run();
     await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=?').bind(now,c.id).run();
+    await env.DB.prepare('DELETE FROM telegram_channel_photo_retries WHERE offer_id=?').bind(offer.id).run();
     await log(env,c.id,'published','Telegram enviado • '+result.format,offer.id);
     return {status:'published',message_id:result.message.message_id,format:result.format};
   }catch(e){
+    if(automatic&&e?.code==='PHOTO_NOT_READY'){
+      const now=epoch();
+      await env.DB.prepare(
+       "INSERT INTO telegram_channel_photo_retries(offer_id,attempts,next_retry_at,reason,updated_at) VALUES(?,1,?,?,?) "+
+       "ON CONFLICT(offer_id) DO UPDATE SET attempts=attempts+1,"+
+       "next_retry_at=excluded.next_retry_at,reason=excluded.reason,updated_at=excluded.updated_at"
+      ).bind(offer.id,now+120,String(e.message).slice(0,160),now).run();
+      const row=await env.DB.prepare('SELECT attempts FROM telegram_channel_photo_retries WHERE offer_id=?')
+       .bind(offer.id).first();
+      const attempts=Number(row?.attempts||1);
+      if(attempts<6){
+        const delay=attempts<=2?120:attempts<=4?300:900;
+        await env.DB.prepare('UPDATE telegram_channel_photo_retries SET next_retry_at=? WHERE offer_id=?')
+         .bind(now+delay,offer.id).run();
+        await env.DB.prepare("UPDATE channel_offers SET status='ready',last_error=? WHERE id=? AND status='sending'")
+         .bind('Aguardando foto real do produto',offer.id).run();
+        await log(env,c.id,'awaiting_photo','Tentativa '+attempts+'/6, sem publicação de link como prévia.',offer.id);
+        return {status:'awaiting_photo',attempts,next_retry_at:now+delay};
+      }
+      await env.DB.prepare("UPDATE channel_offers SET status='needs_review',last_error=? WHERE id=? AND status='sending'")
+       .bind('Não foi possível confirmar a foto após seis tentativas automáticas.',offer.id).run();
+      await log(env,c.id,'needs_review','Foto indisponível, sem publicação de link como prévia',offer.id);
+      return {status:'needs_review',reason:'photo_not_found',attempts};
+    }
     const msg=String(e.message||e).slice(0,220);
     await env.DB.prepare("UPDATE channel_offers SET status='needs_review',last_error=? WHERE id=? AND channel_id=? AND status='sending'")
       .bind(msg,offer.id,c.id).run();
@@ -387,14 +422,24 @@ export async function runMultiChannelScheduled(env){
       env.DB.prepare("SELECT MAX(published_at) AS time FROM channel_offers WHERE channel_id=? AND status='published'").bind(c.id).first()
     ]);
     if(!shouldSend(c,now,counts?.total||0,latest?.time?latest.time*1000:null))continue;
-    const offer=await env.DB.prepare("SELECT id FROM channel_offers WHERE channel_id=? AND status='ready' AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at,id LIMIT 1").bind(c.id,c.category,c.category).first();
+    const offer=await env.DB.prepare(
+      "SELECT o.id FROM channel_offers o LEFT JOIN telegram_channel_photo_retries pr ON pr.offer_id=o.id "+
+      "WHERE o.channel_id=? AND o.status='ready' AND "+
+      "(pr.offer_id IS NULL OR (pr.attempts<6 AND pr.next_retry_at<=?)) "+
+      "AND (lower(?)='geral' OR lower(o.category)=lower(?)) ORDER BY o.created_at,o.id LIMIT 1"
+    ).bind(c.id,epoch(),c.category,c.category).first();
     if(!offer)continue;
     const stamp=epoch();
     const slot=await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND automation_enabled=1 AND telegram_enabled=1 AND channel_registered=1 AND (last_attempt_at=0 OR last_attempt_at<=?)')
       .bind(stamp,c.id,stamp-c.interval_minutes*60).run();
     if(slot.meta?.changes!==1)continue;
     try{
-      results.push({channel_id:c.id,...await publishChannelOffer(env,c.id,offer.id)});
+      const outcome=await publishChannelOffer(env,c.id,offer.id,{automatic:true});
+      if(outcome.status==='awaiting_photo'){
+        await env.DB.prepare('UPDATE telegram_channels SET last_attempt_at=? WHERE id=? AND last_attempt_at=?')
+         .bind(c.last_attempt_at,c.id,stamp).run();
+      }
+      results.push({channel_id:c.id,...outcome});
     }catch(e){
       await log(env,c.id,'schedule_error',String(e.message||e).slice(0,150));
       results.push({channel_id:c.id,status:'error'});
