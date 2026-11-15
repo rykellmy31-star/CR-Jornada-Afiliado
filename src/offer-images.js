@@ -1,4 +1,4 @@
-import { trustedProductImage, trustedProductPage } from './images.js';
+import { trustedProductImage, trustedProductPage, extractProductImage, validatedProductPhoto } from './images.js';
 
 // A URL é a chave porque a mesma oferta pode ser divulgada em canais diferentes.
 // Só guarda a URL pública da foto, nunca dados do comprador ou credenciais.
@@ -49,16 +49,53 @@ export async function sourcePageForAffiliateImage(env, affiliateUrl) {
   return url.href;
  }catch{return null;} // Batches opcionais e bancos legados.
 }
+
+// Última alternativa: uma vitrine React pode ocultar og:image numa consulta HTTP.
+// Browser Run executa o JavaScript, porém só é usado após as duas tentativas
+// normais. A quota de D1 impede consumo excessivo do navegador.
+export async function claimAffiliateImageBrowserBudget(env,now=Math.floor(Date.now()/1000)){
+ if(!env?.DB||typeof env?.BROWSER?.quickAction!=='function')return false;
+ const day=new Date(now*1000).toISOString().slice(0,10);
+ await env.DB.prepare(
+  "CREATE TABLE IF NOT EXISTS affiliate_image_browser_budget (id INTEGER PRIMARY KEY CHECK(id=1),day_key TEXT NOT NULL DEFAULT '',daily_count INTEGER NOT NULL DEFAULT 0,last_at INTEGER NOT NULL DEFAULT 0)"
+ ).run();
+ await env.DB.prepare("INSERT OR IGNORE INTO affiliate_image_browser_budget(id) VALUES(1)").run();
+ const updated=await env.DB.prepare(
+  "UPDATE affiliate_image_browser_budget SET "+
+  "daily_count=CASE WHEN day_key=? THEN daily_count+1 ELSE 1 END,day_key=?,last_at=? "+
+  "WHERE id=1 AND (day_key<>? OR daily_count<12) AND last_at<=?"
+ ).bind(day,day,now,day,now-45).run();
+ return updated.meta?.changes===1;
+}
+async function photoFromRenderedPage(env,url){
+ if(!trustedProductPage(url)||!await claimAffiliateImageBrowserBudget(env))return null;
+ try{
+  const response=await env.BROWSER.quickAction('content',{
+    url,
+    gotoOptions:{waitUntil:'domcontentloaded',timeout:14000},
+    rejectResourceTypes:['font','media']
+  });
+  if(!response?.ok||typeof response.text!=='function')return null;
+  const html=(await response.text()).slice(0,3_000_000);
+  const candidate=extractProductImage(html);
+  if(!candidate)return null;
+  return await validatedProductPhoto(candidate);
+ }catch(error){
+  console.warn('Browser Run não confirmou imagem:',String(error?.message||error).slice(0,100));
+  return null;
+ }
+}
+
 export async function resolveProductImage(env, affiliateUrl, lookup) {
   let cached = null;
   try { cached = await cachedProductImage(env, affiliateUrl); }
   catch (error) { console.warn('Cache da foto indisponível:', String(error?.message || error).slice(0, 100)); }
   if (cached) return cached;
-  let image=null;
+  let image=null,source=null;
   try{image=await lookup(affiliateUrl);}
   catch(error){console.warn('Foto do encurtador indisponível:',String(error?.message||error).slice(0,100));}
   if(!trustedProductImage(image)){
-    const source=await sourcePageForAffiliateImage(env,affiliateUrl);
+    source=await sourcePageForAffiliateImage(env,affiliateUrl);
     if(source){
       // Reaproveita também o cache da página original, quando existir.
       try{image=await cachedProductImage(env,source);}
@@ -72,6 +109,11 @@ export async function resolveProductImage(env, affiliateUrl, lookup) {
         catch{}
       }
     }
+  }
+  if(!trustedProductImage(image)){
+    // Preferir o anúncio original confirmado no lote; caso não exista, a
+    // vitrine de afiliado pode conter a própria foto do produto nos metadados.
+    image=await photoFromRenderedPage(env,source||affiliateUrl);
   }
   if (image && trustedProductImage(image)) {
     try { await rememberProductImage(env, affiliateUrl, image); }
