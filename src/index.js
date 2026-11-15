@@ -1,7 +1,7 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { overviewState } from './overview.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
-import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
+import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink,bulkValidateMonitorShortlinks} from './whatsapp-link-monitor.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
@@ -349,6 +349,7 @@ async function router(request, env, ctx=null) {
   if(monitorGroup&&method==='POST')return json(await updateMonitorGroup(env,monitorGroup[1],await getBody(request)));
   const monitorCategory=u.pathname.match(/^\/api\/monitor\/links\/(\d+)\/category$/);
   if(monitorCategory&&method==='POST')return json(await updateMonitorLinkCategory(env,monitorCategory[1],await getBody(request)));
+  if(u.pathname==='/api/monitor/review-all'&&method==='POST')return json(await bulkValidateMonitorShortlinks(env,await getBody(request)));
   const monitorShortlinkReview=u.pathname.match(/^\/api\/monitor\/shortlinks\/(\d+)\/review$/);
   if(monitorShortlinkReview&&method==='POST')
     return json(await reviewMonitorShortlink(env,monitorShortlinkReview[1],await getBody(request)));
