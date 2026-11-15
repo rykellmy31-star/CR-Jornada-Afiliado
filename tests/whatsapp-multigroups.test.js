@@ -297,3 +297,42 @@ test('grupo principal e grupo extra no mesmo número não disparam simultaneamen
    assert.equal(sent[1].number,GROUP_FEM);
  }finally{globalThis.fetch=ownFetch;DB.close();}
 });
+
+test('grupos extras aguardam foto automaticamente sem publicar texto e retomam após recuperar imagem',async()=>{
+ const DB=dbMock(),env=envFor(DB),original=globalThis.fetch,sent=[];
+ try{
+  const id=await newGroup(env,'Grupo de fotos','Moda');
+  let picture=false;
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===WA_URL+'/group/fetchAllGroups/cr-jornada-afiliados?getParticipants=false')
+    return Response.json([{id:GROUP_MOTO,subject:'Motos & Peças'},{id:GROUP_FEM,subject:'Moda Feminina'}]);
+   if(u==='https://meli.la/AbCde1')return new Response(picture?
+    '<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">':'<html>Carregando</html>',
+    {headers:{'content-type':'text/html'}});
+   if(u==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg'&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'200000'}});
+   if(u===WA_URL+'/message/sendMedia/cr-jornada-afiliados'){
+    const body=JSON.parse(opts.body);assert.equal(body.number,GROUP_FEM);
+    assert.equal(body.mediatype,'image');sent.push(body);
+    return Response.json({key:{id:'PHOTO_GRP'}});
+   }
+   if(u===WA_URL+'/message/sendText/cr-jornada-afiliados')throw Error('Automático não pode enviar só texto');
+   throw Error('Unexpected '+u);
+  };
+  await activate(env,id,GROUP_FEM,'Grupo de fotos','Moda');
+  await addManagedWhatsAppOffer(env,id,ad('https://meli.la/AbCde1','Moda'));
+  const first=await runManagedWhatsAppScheduled(env);
+  assert.deepEqual(first.results,[]);
+  assert.equal(sent.length,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM whatsapp_group_media_retries WHERE attempts=1').first().n,1);
+  assert.equal(DB.prepare('SELECT last_attempt_at FROM whatsapp_groups WHERE id=?').bind(id).first().last_attempt_at,0);
+  assert.deepEqual((await runManagedWhatsAppScheduled(env)).results,[]);
+  picture=true;
+  DB.prepare('UPDATE whatsapp_group_media_retries SET next_attempt_at=0').run();
+  const second=await runManagedWhatsAppScheduled(env);
+  assert.equal(second.results[0].status,'published');
+  assert.equal(sent.length,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) n FROM whatsapp_group_media_retries').first().n,0);
+ }finally{globalThis.fetch=original;DB.close();}
+});
