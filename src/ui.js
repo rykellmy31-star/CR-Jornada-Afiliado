@@ -857,18 +857,16 @@ function forecastOfferCell(offer,forecast,configured){
  if(offer.status==='sending')return 'Envio em andamento';
  if(offer.status==='needs_review')return 'Aguardando revisão';
  if(offer.status!=='ready')return '—';
- if(String(offer.last_error||'').startsWith('Aguardando foto'))return '<span class="queue-forecast-muted">Foto em preparação • horário ainda não confirmado</span>';
- const pricePending=String(offer.last_error||'').startsWith('Aguardando preço');
  if(!configured)return '<span class="queue-forecast-muted">Bot não configurado</span>';
  if(forecast?.status==='paused')return '<span class="queue-forecast-muted">Automação pausada</span>';
  const timestamp=Number(forecast?.by_id?.[String(offer.id)]);
  if(Number.isSafeInteger(timestamp)&&timestamp>0){
    return '<strong class="queue-forecast-time">'+escape(new Date(timestamp*1000).toLocaleString('pt-BR',{
      timeZone:'America/Bahia',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'
-   }))+'</strong><small>'+(pricePending?'Preço do anúncio em verificação • previsão sujeita a alterações':'Previsão sujeita a alterações')+'</small>';
+   }))+'</strong><small>'+'Previsão sujeita a alterações'+'</small>';
  }
  if(forecast?.status==='unavailable')return 'Previsão indisponível';
- return '<span class="queue-forecast-muted">'+(pricePending?'Preço do anúncio em verificação • ':'')+'Aguardando vaga na programação</span>';
+ return '<span class="queue-forecast-muted">' + 'Aguardando vaga na programação</span>';
 }
 
 
@@ -1460,6 +1458,7 @@ async function refresh(){
     if(readyOffers.some(o=>String(o.id)===oldSelection)) couponSelect.value=oldSelection;
     couponSelect.disabled=!readyOffers.length;
     $('offers-rows').innerHTML=data.offers.length?data.offers.map(o=>{
+      const oldWarning=o.status==='ready'&&/^Aguardando (preço|foto)/.test(String(o.last_error||''));
       const action=o.status==='ready'?'<button class="mini" data-action="publish" data-id="'+o.id+'">Publicar</button>':o.status==='needs_review'?'<button class="mini" data-action="requeue" data-id="'+o.id+'">Reenfileirar</button>':'—';
       return '<tr><td><a rel="noopener noreferrer" target="_blank" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+(o.coupon_kind?'<small>🎟️ Cupom informado: '+escape(o.coupon_code||'ativação no app')+' • até '+escape(o.coupon_end_day)+' (sujeito às condições)</small>':'')+ (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td><span class="tag '+escape(o.status)+'">'+statusLabel(o.status)+'</span></td><td>'+forecastOfferCell(o,data.publication_forecast,data.telegram_token_configured)+'</td><td>'+toDate(o.created_at)+'</td><td>'+action+'</td></tr>';
     }).join(''):'<tr><td colspan="5">Nenhuma oferta cadastrada.</td></tr>';
