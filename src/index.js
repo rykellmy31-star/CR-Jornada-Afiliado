@@ -612,15 +612,15 @@ export default {
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     start(runShopeeScheduled,'Shopee e categorias',true);
     if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24){
-      ctx.waitUntil((async()=>{
-        // O Cron dispara a cada minuto. Uma segunda passagem após 30 segundos
-        // permite revalidar vitrines mesmo quando o painel estiver fechado.
-        await resolveMonitorShortlinks(env);
-        await refreshMonitorSitePrices(env);
-        await new Promise(resolve=>setTimeout(resolve,30000));
-        await resolveMonitorShortlinks(env);
-      })().catch(error=>console.error('Monitor links/precos:',String(error?.message||error).slice(0,120))));
-      ctx.waitUntil(recoverMissingMonitorPrices(env,{allowEvolution:true}).catch(error=>console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
+      // Cloudflare cron dispara a cada minuto. Não manter um waitUntil dormindo
+      // 30s: isso pode expirar antes da próxima rodada. Os trabalhos são
+      // independentes e não bloqueiam revisões por lentidão de preços.
+      ctx.waitUntil(resolveMonitorShortlinks(env).catch(error=>
+        console.error('Revisão automática:',String(error?.message||error).slice(0,120))));
+      ctx.waitUntil(refreshMonitorSitePrices(env).catch(error=>
+        console.error('Monitor preços:',String(error?.message||error).slice(0,120))));
+      ctx.waitUntil(recoverMissingMonitorPrices(env,{allowEvolution:true}).catch(error=>
+        console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
     }
   }
 };
