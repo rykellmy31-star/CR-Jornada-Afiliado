@@ -1,7 +1,8 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { overviewState } from './overview.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
-import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink,bulkValidateMonitorShortlinks} from './whatsapp-link-monitor.js';
+import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
+import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
@@ -348,7 +349,10 @@ async function router(request, env, ctx=null) {
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
   if(u.pathname==='/api/overview'&&method==='GET')return json(await overviewState(env));
-  if(u.pathname==='/api/monitor/state'&&method==='GET')return json(await monitorState(env));
+  if(u.pathname==='/api/monitor/state'&&method==='GET'){
+    const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
+    return json({...state,background_review:backgroundReview});
+  }
   if(u.pathname==='/api/monitor/settings'&&method==='POST')return json(await saveMonitorSettings(env,await getBody(request)));
   if(u.pathname==='/api/monitor/evolution-groups'&&method==='GET')return json(await monitorEvolutionGroups(env,u.searchParams.get('instance')));
   if(u.pathname==='/api/monitor/groups'&&method==='POST')return json(await addMonitorGroup(env,await getBody(request)),201);
@@ -356,7 +360,7 @@ async function router(request, env, ctx=null) {
   if(monitorGroup&&method==='POST')return json(await updateMonitorGroup(env,monitorGroup[1],await getBody(request)));
   const monitorCategory=u.pathname.match(/^\/api\/monitor\/links\/(\d+)\/category$/);
   if(monitorCategory&&method==='POST')return json(await updateMonitorLinkCategory(env,monitorCategory[1],await getBody(request)));
-  if(u.pathname==='/api/monitor/review-all'&&method==='POST')return json(await bulkValidateMonitorShortlinks(env,await getBody(request)));
+  if(u.pathname==='/api/monitor/review-all'&&method==='POST')return json(await queueBackgroundReview(env));
   const monitorShortlinkReview=u.pathname.match(/^\/api\/monitor\/shortlinks\/(\d+)\/review$/);
   if(monitorShortlinkReview&&method==='POST')
     return json(await reviewMonitorShortlink(env,monitorShortlinkReview[1],await getBody(request)));
@@ -706,6 +710,9 @@ export default {
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     start(runShopeeScheduled,'Shopee e categorias',true);
+    // Tarefa persistente de validação em massa: não depende da página aberta.
+    if(env.DB)ctx.waitUntil(runBackgroundReview(env).catch(error=>
+      console.error('Validação em massa no Cron:',String(error?.message||error).slice(0,140))));
     if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24){
       // O Cron nativo dispara a cada minuto. Nas execuções Cloudflare,
       // scheduler.wait mantém a própria invocação Cron ativa até a segunda
