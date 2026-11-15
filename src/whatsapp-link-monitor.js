@@ -26,6 +26,9 @@ const GROUP=/^\d{6,30}(?:-\d{6,20})?@g\.us$/;
 const INSTANCE=/^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/;
 const HOSTS=new Set(['www.mercadolivre.com.br','mercadolivre.com.br','produto.mercadolivre.com.br']);
 const SHORT_HOSTS=new Set(['meli.la','melila.me']); // melila.me é de terceiros; nunca publicar como link de afiliado próprio.
+// Domínios usados como passagem em redirecionamentos do próprio Mercado Livre.
+// Apenas as URLs brasileiras oficiais com MLB/MLBU viram produto captado.
+const REDIRECT_HOSTS=new Set([...HOSTS,'m.mercadolivre.com.br','mercadolivre.com','www.mercadolivre.com']);
 export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
@@ -428,13 +431,13 @@ export async function reviewMonitorShortlink(env,id,body){
  if(!short.enabled||!short.authorized)throw fail('Ative e autorize o grupo antes de revisar o link.',403);
  let candidate;
  if(action==='retry'){
-  try{candidate=await redirectSource(short.short_url);}
-  catch{candidate=null;}
+  const inspected=await inspectMonitorShortlink(short.short_url);
+  candidate=inspected.product;
   if(!candidate){
    await env.DB.prepare(
-    "UPDATE ml_monitor_shortlinks SET tries=tries+1,reason='Ainda sem destino verificável; confira manualmente' WHERE id=? AND status='review'"
-   ).bind(n).run();
-   return {ok:true,resolved:false,reason:'Ainda não foi possível verificar o produto automaticamente. Abra o link e, se for Mercado Livre, use a aprovação manual.'};
+    "UPDATE ml_monitor_shortlinks SET tries=tries+1,reason=? WHERE id=? AND status='review'"
+   ).bind(inspected.reason,n).run();
+   return {ok:true,resolved:false,reason:inspected.reason};
   }
  }else{
   if(body?.confirm_same_product!==true)
@@ -521,43 +524,92 @@ async function productFromShortPage(response){
  }
  return unique.size===1?[...unique.values()][0]:null;
 }
-export async function redirectSource(value){
- let current=value;
- for(let hop=0;hop<5;hop++){
-   let u;
-   try{u=new URL(current);}catch{return null;}
-   if(u.protocol!=='https:'||u.username||u.password||u.port||(!HOSTS.has(u.hostname.toLowerCase())&&!SHORT_HOSTS.has(u.hostname.toLowerCase())))return null;
-   const known=urlCandidate(u.href);
-   if(known?.kind==='product')return known;
-   const response=await fetch(current,{redirect:'manual',method:'GET',signal:AbortSignal.timeout(4000)});
-   if([301,302,303,307,308].includes(response.status)){
-     const to=response.headers.get('location');
-     if(!to)return null;
-     current=new URL(to,current).href;
-     continue;
-   }
-   if(response.status===200&&SHORT_HOSTS.has(u.hostname.toLowerCase()))
-     return productFromShortPage(response);
-   return null;
+function trustedHop(input){
+ try{
+  const u=new URL(input);
+  return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&
+   (SHORT_HOSTS.has(u.hostname.toLowerCase())||REDIRECT_HOSTS.has(u.hostname.toLowerCase()))?u:null;
+ }catch{return null;}
+}
+// A falha de resolução não prova que o domínio foi rejeitado: há vitrines,
+// páginas intermediárias, rate limit e links de outros sites. Informe o motivo.
+export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
+ let current=value;const visited=new Set();
+ for(let hop=0;hop<7;hop++){
+  const u=trustedHop(current);
+  if(!u)return {product:null,kind:'external',reason:'Destino fora dos domínios permitidos do Mercado Livre'};
+  if(visited.has(u.href))return {product:null,kind:'loop',reason:'Redirecionamento circular do link'};
+  visited.add(u.href);
+  const product=urlCandidate(u.href);
+  if(product?.kind==='product')return {product,kind:'product',reason:null};
+  if(/^\/social(?:\/|$)/i.test(u.pathname)&&REDIRECT_HOSTS.has(u.hostname.toLowerCase()))
+   return {product:null,kind:'showcase',reason:'Link abre uma vitrine com vários produtos, não um anúncio individual'};
+  let res;
+  try{
+   res=await fetcher(u.href,{redirect:'manual',method:'GET',signal:AbortSignal.timeout(4500),
+    headers:{accept:'text/html,application/xhtml+xml'}});
+  }catch{
+   return {product:null,kind:'temporary',reason:'Falha de conexão ou tempo esgotado ao consultar o link'};
+  }
+  if([301,302,303,307,308].includes(res.status)){
+   const location=res.headers.get('location');
+   if(!location)return {product:null,kind:'redirect',reason:'Redirecionamento sem endereço de destino'};
+   try{current=new URL(location,u.href).href;}
+   catch{return {product:null,kind:'redirect',reason:'Redirecionamento com destino inválido'};}
+   continue;
+  }
+  if([403,429].includes(res.status))
+   return {product:null,kind:'temporary',reason:'O site limitou ou negou a consulta automática ('+res.status+')'};
+  if(res.status>=500)
+   return {product:null,kind:'temporary',reason:'O site está indisponível temporariamente ('+res.status+')'};
+  if(res.status===200){
+   // Uma página de vitrine nunca pode ser confundida com um único produto.
+   const candidate=await productFromShortPage(res);
+   if(candidate)return {product:candidate,kind:'product',reason:null};
+   return {product:null,kind:'intermediate',reason:'Página sem identificação segura de um produto individual'};
+  }
+  return {product:null,kind:'http',reason:'O link não apresentou produto verificável (HTTP '+res.status+')'};
  }
- return null;
+ return {product:null,kind:'redirect',reason:'O link passou por muitos redirecionamentos'};
+}
+export async function redirectSource(value){
+ return (await inspectMonitorShortlink(value)).product;
 }
 export async function resolveMonitorShortlinks(env){
  await ensureMonitor(env);
  const state=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
  if(!state?.enabled)return {skipped:'disabled'};
- const items=(await env.DB.prepare("SELECT s.*,g.instance_name,g.group_jid FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status='pending' AND g.enabled=1 ORDER BY s.id LIMIT 5").all()).results;
- let resolved=0;
- for(const s of items){
+ // Reavalia uma vez os erros genéricos antigos, sem consultar vitrines repetidamente.
+ const items=(await env.DB.prepare(
+  "SELECT s.*,g.instance_name,g.group_jid FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
+  "WHERE g.enabled=1 AND g.authorized=1 AND "+
+  "(s.status='pending' OR (s.status='review' AND s.reason='Sem destino seguro de produto' AND s.tries<2)) "+
+  "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END,s.id LIMIT 5"
+ ).all()).results;
+ let resolved=0,reviewed=0;
+ for(const item of items){
+  const result=await inspectMonitorShortlink(item.short_url);
+  if(result.product){
    try{
-     const product=await redirectSource(s.short_url);
-     if(!product){await env.DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason='Sem destino seguro de produto' WHERE id=?").bind(s.id).run();continue;}
-     await saveProduct(env,{group_id:s.group_id,message_id:s.message_id,hint:s.message_hint},product);
-     await env.DB.prepare("UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL WHERE id=?").bind(s.id).run();
-     resolved++;
-   }catch(error){
-     await env.DB.prepare("UPDATE ml_monitor_shortlinks SET status=CASE WHEN tries>=2 THEN 'review' ELSE 'pending' END,tries=tries+1,reason='Falha temporária ao conferir link' WHERE id=?").bind(s.id).run();
+    await saveProduct(env,{group_id:item.group_id,message_id:item.message_id,hint:item.message_hint},result.product);
+    await env.DB.prepare(
+     "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL WHERE id=? AND status IN ('pending','review')"
+    ).bind(item.id).run();
+    resolved++;
+   }catch{
+    await env.DB.prepare(
+     "UPDATE ml_monitor_shortlinks SET status=CASE WHEN tries>=2 THEN 'review' ELSE 'pending' END,tries=tries+1,reason='Erro temporário ao salvar produto verificado' WHERE id=?"
+    ).bind(item.id).run();
    }
+   continue;
+  }
+  // Falha de rede recebe novas tentativas automáticas. Vitrine e URL externa
+  // ficam em revisão; nunca se deduz produto arbitrário a partir da página.
+  const temporary=result.kind==='temporary'&&item.status==='pending'&&item.tries<2;
+  await env.DB.prepare(
+   "UPDATE ml_monitor_shortlinks SET status=?,tries=tries+1,reason=? WHERE id=?"
+  ).bind(temporary?'pending':'review',result.reason,item.id).run();
+  if(!temporary)reviewed++;
  }
- return {resolved};
+ return {resolved,reviewed};
 }
