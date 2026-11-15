@@ -74,7 +74,7 @@ for(const delivery of ['manual','automatic']){
    await setupWhatsApp(env);
    DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
    const now=Math.floor(Date.now()/1000);
-   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
+   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
     .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',now).run();
    if(delivery==='manual'){
     const login=await worker.fetch(req('/api/login',{method:'POST',body:{password:env.ADMIN_PASSWORD}}),env);
@@ -123,7 +123,7 @@ test('falha de foto no automático NÃO publica preview; quando imagem volta, Te
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
   const now=Math.floor(Date.now()/1000);
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
    .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',now).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
@@ -182,9 +182,9 @@ test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
   const t=Math.floor(Date.now()/1000);
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
     .bind('Vitrine temporária sem foto','https://meli.la/SERPROBLEMA','Geral',t-20).run();
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
     .bind('Produto com foto real',SHORT,'Geral',t-10).run();
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
