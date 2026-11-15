@@ -581,6 +581,28 @@ async function featuredProductFromShowcasePage(response,baseUrl){
  return featuredProductFromHtml(pieces.join('')+decoder.decode(),baseUrl);
 }
 export {featuredProductFromHtml};
+// Quando uma URL intermediária inclui explicitamente o destino Mercado Livre,
+// usa só esse destino validado, sem consultar domínios externos.
+export function trustedEmbeddedRedirect(input){
+ let u;try{u=new URL(input);}catch{return null;}
+ if(u.protocol!=='https:'||u.username||u.password||u.port)return null;
+ const keys=['url','redirect_url','redirect','target','destination','dest','link','u','murl','m_url'];
+ const found=new Set();
+ for(const key of keys){
+  for(let value of u.searchParams.getAll(key).slice(0,2)){
+   for(let i=0;i<3;i++){
+    if(typeof value!=='string'||value.length>3500)break;
+    let candidate;try{candidate=new URL(value);}catch{}
+    if(candidate?.protocol==='https:'&&!candidate.username&&!candidate.password&&!candidate.port&&
+       (SHORT_HOSTS.has(candidate.hostname.toLowerCase())||REDIRECT_HOSTS.has(candidate.hostname.toLowerCase()))){
+      found.add(candidate.href);break;
+    }
+    try{const decoded=decodeURIComponent(value);if(decoded===value)break;value=decoded;}catch{break;}
+   }
+  }
+ }
+ return found.size===1?[...found][0]:null;
+}
 function trustedHop(input){
  try{
   const u=new URL(input);
@@ -594,7 +616,13 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
  let current=value;const visited=new Set();
  for(let hop=0;hop<7;hop++){
   const u=trustedHop(current);
-  if(!u)return {product:null,kind:'external',reason:'Destino fora dos domínios permitidos do Mercado Livre'};
+  if(!u){
+   const embedded=trustedEmbeddedRedirect(current);
+   if(embedded){current=embedded;continue;}
+   let domain='desconhecido';
+   try{domain=new URL(current).hostname.toLowerCase().slice(0,120);}catch{}
+   return {product:null,kind:'external',reason:'Redirecionamento para domínio não verificado ('+domain+'); revisão manual necessária'};
+  }
   if(visited.has(u.href))return {product:null,kind:'loop',reason:'Redirecionamento circular do link'};
   visited.add(u.href);
   const product=urlCandidate(u.href);
@@ -653,8 +681,9 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
   "WHERE g.enabled=1 AND g.authorized=1 "+
   "AND (s.status='pending' OR (s.status='review' AND (s.reason IS NULL OR "+
-  "(s.reason NOT LIKE 'Destino fora dos domínios%' "+
-  "AND s.reason NOT LIKE 'Redirecionamento circular%' "+
+  "(s.reason='Destino fora dos domínios permitidos do Mercado Livre' OR "+
+  "(s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' "+
+  "AND s.reason NOT LIKE 'Redirecionamento circular%')) "+
   "AND s.reason NOT LIKE 'Produto associado por confirmação manual%')))) "+
   "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? "+
   "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END, "+
