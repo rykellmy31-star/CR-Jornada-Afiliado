@@ -748,6 +748,65 @@ function featuredProductFromHtml(html,baseUrl){
  }
  return unique.size===1?[...unique.values()][0]:null;
 }
+// A vitrine de afiliado pode usar /sec/ no botão "Ir para produto".
+// Seguir somente o cartão destacado, nunca a grade de recomendações.
+export function featuredActionLinksFromHtml(html,baseUrl){
+ if(typeof html!=='string'||html.length>5_500_000)return [];
+ const wrapper=/<(?:section|div)\b[^>]{0,1500}\bclass\s*=\s*(["'])[^"']*\b(?:rl-card-featured-wrapper|card-featured-wrapper)\b[^"']*\1[^>]*>/i.exec(html);
+ if(!wrapper)return [];
+ const snippet=html.slice(wrapper.index+wrapper[0].length,wrapper.index+wrapper[0].length+350000);
+ const boundary=snippet.search(/(?:Voc(?:ê|&ecirc;|&#234;)\s+tamb(?:é|&eacute;|&#233;)m\s+pode\s+gostar|rl-card-recommendations|recommendations-wrapper)/i);
+ const scope=boundary>=0?snippet.slice(0,boundary):snippet;
+ const links=new Set();
+ for(const node of (scope.match(/<a\b[^>]{0,5500}>[\s\S]{0,18000}?<\/a\s*>/gi)||[]).slice(0,140)){
+  const tag=/^<a\b[^>]*>/i.exec(node)?.[0]||'';
+  const label=node.slice(tag.length).replace(/<[^>]{0,2000}>/g,' ').replace(/\s+/g,' ').trim();
+  if(!/\bir\s+para\s+(?:o\s+)?produto\b/i.test(label)&&
+     !/poly-component__link--action-link|poly-action-links__action--link/i.test(tag))continue;
+  const href=/\bhref\s*=\s*(?:"([^"]{1,4500})"|'([^']{1,4500})')/i.exec(tag);
+  if(!href)continue;
+  let u;try{u=new URL((href[1]||href[2]).replace(/&amp;|&#38;|&#x26;/gi,'&'),baseUrl);}catch{continue;}
+  if(!trustedHop(u.href)||/^\/social(?:\/|$)/i.test(u.pathname))continue;
+  links.add(u.href);
+  if(links.size>=6)break;
+ }
+ return [...links];
+}
+async function resolveFeaturedActionLink(value,fetcher=fetch){
+ let current=value;const visited=new Set();
+ for(let hop=0;hop<6;hop++){
+  const u=trustedHop(current);
+  if(!u||visited.has(u.href)||/^\/social(?:\/|$)/i.test(u.pathname))return null;
+  visited.add(u.href);
+  const candidate=urlCandidate(u.href);
+  if(candidate?.kind==='product')return candidate;
+  if(couponLandingUrl(u.href))return null;
+  let response;
+  try{response=await fetcher(u.href,{method:'GET',redirect:'manual',
+   headers:{accept:'text/html,application/xhtml+xml'},signal:AbortSignal.timeout(4500)});}
+  catch{return null;}
+  if([301,302,303,307,308].includes(response.status)){
+   const location=response.headers.get('location');
+   if(!location)return null;
+   try{current=new URL(location,u.href).href;}catch{return null;}
+   continue;
+  }
+  if(response.status===200)return await productFromShortPage(response);
+  return null;
+ }
+ return null;
+}
+async function featuredProductWithOfficialRedirect(html,baseUrl,fetcher=fetch){
+ const direct=featuredProductFromHtml(html,baseUrl);
+ if(direct)return direct;
+ const identified=new Map();
+ for(const link of featuredActionLinksFromHtml(html,baseUrl)){
+  const product=await resolveFeaturedActionLink(link,fetcher);
+  if(product?.kind==='product')identified.set(product.product_id,product);
+  if(identified.size>1)return null;
+ }
+ return identified.size===1?[...identified.values()][0]:null;
+}
 async function featuredProductFromShowcasePage(response,baseUrl){
  const type=(response.headers.get('content-type')||'').toLowerCase();
  if(!/^text\/html(?:;|$)/.test(type))return null;
@@ -766,7 +825,7 @@ async function featuredProductFromShowcasePage(response,baseUrl){
    pieces.push(decoder.decode(value,{stream:true}));
   }
  }catch{return null;}
- return featuredProductFromHtml(pieces.join('')+decoder.decode(),baseUrl);
+ return await featuredProductWithOfficialRedirect(pieces.join('')+decoder.decode(),baseUrl);
 }
 export {featuredProductFromHtml};
 // Quando uma URL intermediária inclui explicitamente o destino Mercado Livre,
@@ -927,7 +986,7 @@ export async function browserFeaturedProduct(env,socialUrl){
     if(!/ir\s+para\s+(?:o\s+)?produto/i.test(String(element?.text||'')))continue;
     const href=(element.attributes||[]).find(x=>x.name==='href')?.value;
     let absolute;try{absolute=new URL(href,u.href).href;}catch{continue;}
-    const candidate=urlCandidate(absolute);
+    const candidate=await resolveFeaturedActionLink(absolute);
     if(candidate?.kind==='product')identified.set(candidate.product_id,candidate);
    }
   }
