@@ -552,6 +552,36 @@ export async function runWhatsAppScheduled(env){
   const chooseDirect=!!direct&&(!mirrored||direct.created_at<=(mirrored.published_at||0));
   return dispatchPrimaryWhatsApp(env,cfg,chooseDirect?direct:mirrored,chooseDirect?'direct':'mirrored',{automatic:true});
 }
+// A publicação manual do Telegram deve iniciar o espelhamento deste item,
+// sem aguardar o próximo Cron nem enviar outra oferta mais antiga por engano.
+// O mesmo mecanismo de status 'sending' impede duplicidade com o Cron paralelo.
+export async function dispatchPublishedOfferToWhatsApp(env,offerId){
+ if(!env?.DB)return {skipped:'db'};
+ await ensureWhatsAppTables(env);
+ const cfg=await env.DB.prepare('SELECT * FROM whatsapp_settings WHERE id=1').first();
+ if(!cfg?.enabled||!cfg.public_registered||!configured(env))
+  return {skipped:'disabled'};
+ await ensureCouponTable(env);
+ await ensureAutomaticPrices(env);
+ const category=(await env.DB.prepare('SELECT category FROM whatsapp_primary_category WHERE id=1').first())?.category||'Geral';
+ const offer=await env.DB.prepare(
+  `SELECT o.*,c.kind AS coupon_kind,c.code AS coupon_code,c.discount_type AS coupon_discount_type,
+   c.discount_value AS coupon_discount_value,c.min_cart_cents AS coupon_min_cart_cents,
+   c.max_discount_cents AS coupon_max_discount_cents,c.start_day AS coupon_start_day,
+   c.end_day AS coupon_end_day,c.source_url AS coupon_source_url,c.notes AS coupon_notes,
+   c.owner_confirmed AS coupon_owner_confirmed
+   FROM offers o LEFT JOIN offer_coupons c ON c.offer_id=o.id
+   LEFT JOIN whatsapp_deliveries d ON d.offer_id=o.id AND d.group_jid=?
+   LEFT JOIN offer_delivery_routing route ON route.offer_id=o.id
+   WHERE o.id=? AND o.status='published' AND o.published_at>=?
+     AND d.offer_id IS NULL
+     AND (route.delivery_mode IS NULL OR route.delivery_mode='both')
+     AND (lower(?)='geral' OR lower(o.category)=lower(?)) LIMIT 1`
+ ).bind(cfg.group_jid,Number(offerId),cfg.started_at,category,category).first();
+ if(!offer)return {skipped:'not_eligible_or_already_sent'};
+ return await dispatchPrimaryWhatsApp(env,cfg,offer,'mirrored',{automatic:true});
+}
+
 export async function retryWhatsAppDelivery(env,offerId){
   await ensureWhatsAppTables(env);
   const id=Number(offerId);
