@@ -4,7 +4,7 @@ import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './l
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
-import { resolveProductImage,rememberTelegramSentPhoto } from './offer-images.js';
+import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
@@ -194,7 +194,7 @@ async function sendOfferWithImage(env, chat, offer, {requirePhoto=false}={}) {
   const payload = telegramPayload(offer, chat);
   let imageUrl = null;
   try {
-    imageUrl = await resolveProductImage(env, offer.affiliate_url, findProductImage);
+    imageUrl = await resolveProductImageWithRetry(env, offer.affiliate_url, findProductImage,{retryOnMiss:requirePhoto});
   } catch (error) {
     // Metadados indisponíveis não devem impedir a publicação do link validado.
     console.warn('Imagem indisponível para a oferta:', offer.id, String(error?.message || error).slice(0, 100));
