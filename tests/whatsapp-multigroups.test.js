@@ -142,14 +142,14 @@ test('agendador envia ofertas por categoria ao grupo correto e respeita interval
    const first=await runManagedWhatsAppScheduled(env);
    assert.equal(first.results.length,1);
    assert.equal(sent[0].number,GROUP_MOTO);
-   assert.equal(sent[0].text.includes('https://meli.la/AbCde1'),true);
+   assert.equal(sent[0].caption.includes('https://meli.la/AbCde1'),true);
    assert.deepEqual((await runManagedWhatsAppScheduled(env)).results,[]);
    const stamp=Math.floor(Date.now()/1000);
    DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=? WHERE instance_name=?').bind(stamp-65,'cr-jornada-afiliados').run();
    const second=await runManagedWhatsAppScheduled(env);
    assert.equal(second.results.length,1);
    assert.equal(sent[1].number,GROUP_FEM);
-   assert.equal(sent[1].text.includes('https://meli.la/AbCde2'),true);
+   assert.equal(sent[1].caption.includes('https://meli.la/AbCde2'),true);
    assert.equal((await getManagedWhatsAppGroupState(env,moto)).counts.find(x=>x.status==='published').total,1);
    assert.equal((await getManagedWhatsAppGroupState(env,mulher)).counts.find(x=>x.status==='published').total,1);
    assert.equal((await runManagedWhatsAppScheduled(env)).results.length,0);
@@ -221,7 +221,7 @@ test('categoria do Telegram principal e WhatsApp principal tem filtros próprios
    const result=await runWhatsAppScheduled(env);
    assert.equal(result.status,'sent');
    assert.equal(sent.length,1);
-   assert.match(sent[0].text,/https:\/\/meli\.la\/AbCde2/);
+   assert.match(sent[0].caption,/https:\/\/meli\.la\/AbCde2/);
  }finally{globalThis.fetch=ownFetch;DB.close();}
 });
 test('cupom e histórico do grupo ficam separados da integração existente',async()=>{
