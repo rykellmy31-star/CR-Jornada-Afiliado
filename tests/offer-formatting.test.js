@@ -103,3 +103,30 @@ test('mensagem padrão única usa preços do anúncio, parcelamento confirmado e
  assert.equal(tg.reply_markup.inline_keyboard[0][0].url,item.affiliate_url);
  assert.ok(tg.text.length<=1024);
 });
+
+
+test('nome com De/Por embutidos vira título limpo com preços destacados, sem contradição',()=>{
+ const now=Date.parse('2026-11-15T20:45:00Z');
+ const item={
+  title:'Smart Tv Aoc Dled 32 Wi-fi Roku Tv Quad Core 32s5155/78g De: R$ 1.244,41 Por: R$ 959,90 (23% OFF) Compre Aqui:',
+  affiliate_url:'https://meli.la/1xmGr6U',created_at:now/1000,price_cents:null,old_price_cents:null
+ };
+ const wa=formatOfferMessage(item,{network:'whatsapp',now,includeLink:true});
+ const tg=telegramPayload(item,'@achadinhosmlcr',now,{includeLink:true});
+ for(const txt of [wa,tg.text]){
+  assert.match(txt,/Smart Tv Aoc Dled 32 Wi-fi Roku Tv Quad Core 32s5155\/78g/);
+  assert.doesNotMatch(txt,/Compre Aqui:/);
+  assert.doesNotMatch(txt,/Consulte o preço atualizado na loja/);
+  assert.match(txt,/R\$\s*1\.244,41/);
+  assert.match(txt,/R\$\s*959,90/);
+  assert.match(txt,/Confira na loja/);
+ }
+ assert.match(wa,/~R\$\s*1\.244,41~/);
+ assert.match(tg.text,/<s>R\$\s*1\.244,41<\/s>/);
+ assert.ok(wa.endsWith('https://meli.la/1xmGr6U'));
+ const stale=formatOfferMessage({...item,created_at:(now-8*3600_000)/1000},
+  {network:'whatsapp',now,includeLink:true});
+ assert.doesNotMatch(stale,/1\.244,41|959,90|Compre Aqui:/);
+ assert.match(stale,/Consulte o preço atualizado na loja/);
+});
+
