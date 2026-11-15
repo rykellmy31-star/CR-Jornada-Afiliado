@@ -25,7 +25,7 @@ const epoch=()=>Math.floor(Date.now()/1000);
 const GROUP=/^\d{6,30}(?:-\d{6,20})?@g\.us$/;
 const INSTANCE=/^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/;
 const HOSTS=new Set(['www.mercadolivre.com.br','mercadolivre.com.br','produto.mercadolivre.com.br']);
-const SHORT_HOSTS=new Set(['meli.la','melila.me']); // melila.me é de terceiros; nunca publicar como link de afiliado próprio.
+const SHORT_HOSTS=new Set(['meli.la','melila.me','meli.promo']); // Domínios apenas de entrada; nunca reutilizar comissão alheia.
 // Domínios usados como passagem em redirecionamentos do próprio Mercado Livre.
 // Apenas as URLs brasileiras oficiais com MLB/MLBU viram produto captado.
 const REDIRECT_HOSTS=new Set([...HOSTS,'m.mercadolivre.com.br','mercadolivre.com','www.mercadolivre.com']);
@@ -35,11 +35,11 @@ export function extractUrls(text){
  // Normaliza artefatos de encaminhamento sem alterar o destino do link.
  const normalized=text.slice(0,16000)
   .replace(/[\u200b-\u200d\u2060\ufeff]/g,'')
-  .replace(/(https?:\/\/(?:melila\.me|meli\.la)\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,50}(?:\b|\/|[?#]|$))/gi,'$1')
+  .replace(/(https?:\/\/(?:melila\.me|meli\.la|meli\.promo\/s)\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,50}(?:\b|\/|[?#]|$))/gi,'$1')
   .replace(/(https?:\/\/(?:www\.|produto\.)?mercadolivre\.com\.br\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,})/gi,'$1');
  // Aceita URL absoluta ou domínio conhecido sem protocolo. A validação do
  // candidato continua restrita ao Mercado Livre e a encurtadores configurados.
- const pattern=/(?:https?:\/\/|www\.|(?:meli\.la|melila\.me|(?:produto\.)?mercadolivre\.com\.br)\/)[^\s<>"'()[\]{}]+/gi;
+ const pattern=/(?:https?:\/\/|www\.|(?:meli\.la|melila\.me|meli\.promo\/s|(?:produto\.)?mercadolivre\.com\.br)\/)[^\s<>"'()[\]{}]+/gi;
  const urls=[];
  for(const match of normalized.matchAll(pattern)){
   let url=match[0].replace(/[.,;!?]+$/g,'');
@@ -110,7 +110,10 @@ export function parseMonitorEvent(event,{includeNoLinks=false}={}){
 function urlCandidate(input){
  let u;try{u=new URL(input);}catch{return null;}
  if(u.protocol!=='https:'||u.username||u.password||u.port)return null;
- if(SHORT_HOSTS.has(u.hostname.toLowerCase())&&/^\/[A-Za-z0-9_-]{5,50}\/?$/.test(u.pathname)){
+ if(SHORT_HOSTS.has(u.hostname.toLowerCase())&&
+     (u.hostname.toLowerCase()==='meli.promo'
+       ? /^\/s\/[A-Za-z0-9_-]{5,50}\/?$/.test(u.pathname)
+       : /^\/[A-Za-z0-9_-]{5,50}\/?$/.test(u.pathname))){
    u.search='';u.hash='';return {kind:'short',url:u.href};
  }
  if(!HOSTS.has(u.hostname.toLowerCase()))return null;
