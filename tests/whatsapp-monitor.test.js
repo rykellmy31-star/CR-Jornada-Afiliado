@@ -8,6 +8,7 @@ import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup
  resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
+import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
 const TOKEN='monitor-test-webhook-token-strong-123456';
 const GROUP='120363000111222333@g.us';
 const OTHER='120363000999888777@g.us';
@@ -934,4 +935,85 @@ test('meli.promo não libera link externo nem rotas incorretas',async()=>{
   assert.equal(DB.prepare("SELECT status FROM ml_monitor_shortlinks").first().status,'review');
   assert.equal((await monitorState(env)).counts.captured,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+test('painel de monitoramento com seções recolhíveis e contadores visíveis',()=>{
+ assert.match(MONITOR_HTML,/<details class="ml-monitor-fold" id="ml-monitor-groups-fold">/);
+ assert.match(MONITOR_HTML,/<details class="ml-monitor-fold" id="ml-monitor-products-fold">/);
+ assert.match(MONITOR_HTML,/id="ml-monitor-diagnostics"/);
+ assert.match(MONITOR_HTML,/id="ml-monitor-count-captured"/);
+ assert.match(MONITOR_HTML,/id="ml-monitor-auto-batch"/);
+ assert.doesNotMatch(MONITOR_HTML,/<details[^>]+open(?:\s|>)/);
+ assert.match(MONITOR_CSS,/details\[data-monitor-panel\]>summary::before/);
+ assert.match(MONITOR_CSS,/summary:focus-visible/);
+ assert.doesNotThrow(()=>new Function(MONITOR_CLIENT_JS));
+});
+test('diagnóstico começa fechado e preserva setinhas abertas após atualizar contadores',()=>{
+ const start=MONITOR_CLIENT_JS.indexOf('function mlMonitorApplyDiagnostics(');
+ const end=MONITOR_CLIENT_JS.indexOf('function mlMonitorApplyReviews(',start);
+ assert.ok(start>=0&&end>start);
+ let open=[];
+ const box={
+  innerHTML:'',
+  querySelectorAll(selector){
+   assert.equal(selector,'details[data-monitor-panel]');
+   return open.map(key=>({open:true,dataset:{monitorPanel:key}}));
+  }
+ };
+ const run=new Function('$','escape',MONITOR_CLIENT_JS.slice(start,end)+
+  '\nreturn mlMonitorApplyDiagnostics;')(
+   id=>id==='ml-monitor-diagnostics'?box:null,
+   value=>String(value??'')
+  );
+ const state={
+  enabled:true,
+  diagnostics:{events_received:10,last_event_at:1234567890,authorized_messages:7,
+   messages_with_links:5,links_recognized:4},
+  shortlinks:[{status:'pending',total:1},{status:'review',total:2},{status:'resolved',total:3}],
+  recent_shortlinks:[{short_url:'https://meli.la/ABCDEFG',status:'review',reason:'Sem destino'}],
+  recent_domains:[{group_name:'Grupo',domain:'meli.la',reason:'encurtador_aceito',
+   created_at:1234567890,message_format:'imageMessage'}],
+  rejected_events:[{reason:'instancia_diferente',occurrences:1,last_at:1234567890}]
+ };
+ run(state);
+ for(const key of ['shortlinks','domains','discarded'])
+  assert.match(box.innerHTML,new RegExp('<details data-monitor-panel="'+key+'"><summary>'));
+ assert.doesNotMatch(box.innerHTML,/<details[^>]+open>/);
+ open=['domains','discarded'];
+ state.diagnostics.events_received=11;
+ run(state);
+ assert.match(box.innerHTML,/<details data-monitor-panel="domains" open>/);
+ assert.match(box.innerHTML,/<details data-monitor-panel="discarded" open>/);
+ assert.match(box.innerHTML,/<details data-monitor-panel="shortlinks"><summary>/);
+ assert.match(box.innerHTML,/Eventos recebidos: <b>11<\/b>/);
+});
+test('revisões permanecem fechadas inicialmente e preservam abertura ao atualizar',()=>{
+ const start=MONITOR_CLIENT_JS.indexOf('function mlMonitorApplyReviews(');
+ const end=MONITOR_CLIENT_JS.indexOf('function mlMonitorApplyCounts(',start);
+ assert.ok(start>=0&&end>start);
+ let isOpen=false;
+ const box={
+  innerHTML:'',
+  querySelector(selector){
+   assert.equal(selector,'details[data-monitor-panel="reviews"]');
+   return isOpen?{open:true}:null;
+  },
+  querySelectorAll(){return [];}
+ };
+ const run=new Function('$','escape',MONITOR_CLIENT_JS.slice(start,end)+
+  '\nreturn mlMonitorApplyReviews;')(
+   id=>id==='ml-monitor-review-list'?box:null,
+   value=>String(value??'')
+  );
+ const state={recent_shortlinks:[{
+  id:1,short_url:'https://meli.la/ABCDEFG',status:'review',group_name:'Promoções',
+  reason:'Sem destino seguro'
+ }]};
+ run(state);
+ assert.match(box.innerHTML,/<details data-monitor-panel="reviews" class="ml-monitor-fold">/);
+ assert.doesNotMatch(box.innerHTML,/<details[^>]+open>/);
+ isOpen=true;
+ run(state);
+ assert.match(box.innerHTML,/<details data-monitor-panel="reviews" class="ml-monitor-fold" open>/);
+ assert.match(box.innerHTML,/Aprovar produto para conversão/);
 });
