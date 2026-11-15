@@ -931,7 +931,7 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
    const retryable=!['external','loop'].includes(result.kind);
    const attempts=tries+1;
    const delay=!retryable?86400:
-    (result.kind==='showcase'?60:result.kind==='auth'?300:monitorRetryDelaySeconds(attempts));
+    (result.kind==='showcase'?30:result.kind==='auth'?300:monitorRetryDelaySeconds(attempts));
    await env.DB.prepare(
     "UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason=? "+
     "WHERE id=? AND status IN ('pending','review')"
