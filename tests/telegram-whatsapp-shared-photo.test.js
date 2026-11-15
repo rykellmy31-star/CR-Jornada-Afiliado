@@ -128,7 +128,7 @@ test('não compartilhar mídia sem confirmação real de sendPhoto ou com URL ex
 });
 
 
-test('agendador usa exatamente o fallback de texto do modo manual e não duplica oferta',async()=>{
+test('automático sem foto mantém oferta na fila, sem Telegram ou WhatsApp de texto',async()=>{
  const {DB,env}=setup(),old=globalThis.fetch;
  let tgText=0,tgMedia=0,waText=0;
  try{
@@ -143,39 +143,26 @@ test('agendador usa exatamente o fallback de texto do modo manual e não duplica
     return Response.json({ok:true,result:{type:'channel'}});
    if(u===SOURCE||u===SHORT)
     return new Response('<html>Sem foto oficial disponível</html>',{headers:{'content-type':'text/html'}});
-   if(u.endsWith('/sendMessage')){
-    const body=JSON.parse(opts.body);
-    assert.match(body.text,/Por R\$\s*79,90/);
-    assert.match(body.text,/https:\/\/meli\.la\/2ESKGQw/);
-    tgText++;
-    return Response.json({ok:true,result:{message_id:7373}});
-   }
-   if(u.endsWith('/sendPhoto')){tgMedia++;throw Error('Foto não disponível');}
-   if(u===EVOLUTION+'/message/sendText/'+INSTANCE){
-    const body=JSON.parse(opts.body);
-    assert.match(body.text,/https:\/\/meli\.la\/2ESKGQw/);
-    waText++;
-    return Response.json({key:{id:'EVOLUTION_TEXT'}});
-   }
+   if(u.endsWith('/sendMessage')){tgText++;throw Error('Não publicar texto no automático');}
+   if(u.endsWith('/sendPhoto')){tgMedia++;throw Error('Não havia foto');}
+   if(u===EVOLUTION+'/message/sendText/'+INSTANCE){waText++;throw Error('Sem envio de texto');}
    throw Error('Unexpected URL: '+u);
   };
   await setupWhatsApp(env);
   const first=await runScheduled(env);
-  assert.equal(first.status,'published');
-  assert.equal(first.format,'text_no_image');
-  assert.equal(first.whatsapp.status,'sent');
-  assert.equal(tgText,1);
+  assert.equal(first.skipped,'awaiting_photo');
+  assert.equal(tgText,0);
   assert.equal(tgMedia,0);
-  assert.equal(waText,1);
-  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
-  assert.equal((await runScheduled(env)).skipped,'interval_or_schedule');
-  assert.equal(tgText,1,'não reenviar a mesma oferta');
+  assert.equal(waText,0);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
+  assert.equal(DB.prepare('SELECT attempts FROM telegram_photo_retries').first().attempts,1);
+  assert.equal((await runScheduled(env)).skipped,'awaiting_photo');
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE status='published'").first().n,0);
  }finally{globalThis.fetch=old;DB.close();}
 });
-
-test('fila não fica presa na antiga verificação de preço e respeita o intervalo entre duas ofertas',async()=>{
+test('oferta sem foto não bloqueia a próxima com imagem e volta após o retry',async()=>{
  const {DB,env}=setup(),old=globalThis.fetch;
- let media=0,text=0;
+ let media=0,text=0,brokenReady=false;
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
   const now=Math.floor(Date.now()/1000);
@@ -186,31 +173,35 @@ test('fila não fica presa na antiga verificação de preço e respeita o interv
   globalThis.fetch=async(url,opts={})=>{
    const u=String(url);
    if(u===SOURCE||u===SHORT)return new Response('<meta property="og:image" content="'+PHOTO_PREVIEW+'">',{headers:{'content-type':'text/html'}});
-   if(u==='https://meli.la/SERPROBLEMA')return new Response('<html>Sem foto</html>',{headers:{'content-type':'text/html'}});
+   if(u==='https://meli.la/SERPROBLEMA')
+    return new Response(brokenReady?'<meta property="og:image" content="'+PHOTO_PREVIEW+'">':'<html>Sem foto</html>',
+     {headers:{'content-type':'text/html'}});
    if(u===PHOTO_LARGE&&opts.method==='HEAD')
     return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'240000'}});
    if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
-   if(u.endsWith('/sendMessage')){text++;return Response.json({ok:true,result:{message_id:8111}});}
-   if(u.endsWith('/sendPhoto')){media++;return Response.json({ok:true,result:{message_id:8222}});}
+   if(u.endsWith('/sendMessage')){text++;throw Error('Não enviar só texto');}
+   if(u.endsWith('/sendPhoto')){media++;return Response.json({ok:true,result:{message_id:8220+media}});}
    throw Error('Unexpected URL '+u);
   };
   const first=await runScheduled(env);
   assert.equal(first.status,'published');
-  assert.equal(first.format,'text_no_image');
-  assert.equal(DB.prepare("SELECT last_error FROM offers WHERE id=1").first().last_error,null);
-  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=2").first().status,'ready');
+  assert.equal(first.format,'photo');
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=2").first().status,'published');
+  assert.equal(DB.prepare("SELECT attempts FROM telegram_photo_retries").first().attempts,1);
   assert.equal((await runScheduled(env)).skipped,'interval_or_schedule');
-  // Simula a passagem do intervalo sem aguardar um minuto real.
-  DB.prepare('UPDATE offers SET published_at=? WHERE id=1').bind(now-120).run();
+  // Simular a foto recuperada e o prazo de retry/intervalo vencido.
+  brokenReady=true;
+  DB.prepare('UPDATE telegram_photo_retries SET next_retry_at=0').run();
+  DB.prepare('UPDATE offers SET published_at=? WHERE id=2').bind(now-120).run();
   const second=await runScheduled(env);
   assert.equal(second.status,'published');
   assert.equal(second.format,'photo');
-  assert.equal(text,1);
-  assert.equal(media,1);
-  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=2").first().status,'published');
+  assert.equal(media,2);
+  assert.equal(text,0);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
  }finally{globalThis.fetch=old;DB.close();}
 });
-
 test('foto Telegram liberada automaticamente reativa entrega WhatsApp antiga somente se o erro era falta de imagem',async()=>{
  const {env,DB}=setup();
  try{
@@ -230,7 +221,7 @@ test('foto Telegram liberada automaticamente reativa entrega WhatsApp antiga som
 });
 
 
-test('automático usa exatamente o resolvedor de foto e o fallback do botão manual',async()=>{
+test('automático reconsulta mesma fonte manual e publica apenas após recuperar foto',async()=>{
  const {DB,env}=setup(),old=globalThis.fetch;
  let imageReads=0,mediaSent=0,plainText=0;
  try{
@@ -245,21 +236,22 @@ test('automático usa exatamente o resolvedor de foto e o fallback do botão man
      '<html>Dados do anúncio</html>',{headers:{'content-type':'text/html'}});
    }
    if(u===SHORT)return new Response('<html>Vitrine sem imagem</html>',{headers:{'content-type':'text/html'}});
+   if(u===PHOTO_LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'240000'}});
    if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
-   if(u.endsWith('/sendMessage')){plainText++;return Response.json({ok:true,result:{message_id:9911}});}
-   if(u.endsWith('/sendPhoto')){mediaSent++;throw Error('Não havia foto confirmada');}
+   if(u.endsWith('/sendMessage')){plainText++;throw Error('Sem fallback textual');}
+   if(u.endsWith('/sendPhoto')){mediaSent++;return Response.json({ok:true,result:{message_id:9911}});}
    throw Error('Unexpected '+u);
   };
   const result=await runScheduled(env);
   assert.equal(result.status,'published');
-  assert.equal(result.format,'text_no_image');
-  assert.equal(imageReads,1,'mesmo resolvedor de imagem do botão manual');
-  assert.equal(mediaSent,0);
-  assert.equal(plainText,1);
+  assert.equal(result.format,'photo');
+  assert.ok(imageReads>=2,'segundo acesso ao anúncio recuperou a mesma imagem do manual');
+  assert.equal(mediaSent,1);
+  assert.equal(plainText,0);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
  }finally{globalThis.fetch=old;DB.close();}
 });
-
 test('Crons simultâneos publicam somente uma oferta e respeitam o intervalo configurado',async()=>{
  const {DB,env}=setup(),old=globalThis.fetch;
  let sends=0;
