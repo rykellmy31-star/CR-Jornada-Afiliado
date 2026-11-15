@@ -144,8 +144,9 @@ test('falha ambígua fica em revisão sem reenviar automaticamente',async()=>{
   const DB=dbMock();const env=envFor(DB);const sent=[];
   try{
     mockFetch((url,opts)=>{
-      if(url==='https://meli.la/2bsHW5y')return new Response('<html></html>',{headers:{'content-type':'text/html'}});
-      if(url===BASE+'/message/sendText/'+INSTANCE){
+      if(url==='https://meli.la/2bsHW5y')return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">',{headers:{'content-type':'text/html'}});
+      if(url==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'140000'}});
+      if(url===BASE+'/message/sendMedia/'+INSTANCE){
         sent.push(JSON.parse(opts.body));
         return new Response(JSON.stringify({status:'PENDING'}),{status:200});
       }
@@ -313,8 +314,9 @@ test('intervalo exclusivo do WhatsApp controla os envios sem mudar o Telegram',a
   try{
     mockFetch((url,opts)=>{
       if(url.startsWith('https://meli.la/'))
-        return new Response('<html></html>',{headers:{'content-type':'text/html'}});
-      if(url===BASE+'/message/sendText/'+INSTANCE){
+        return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">',{headers:{'content-type':'text/html'}});
+      if(url==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'140000'}});
+      if(url===BASE+'/message/sendMedia/'+INSTANCE){
         const msg=JSON.parse(opts.body);
         assert.equal(msg.number,GROUP);
         calls.push(msg);
@@ -396,8 +398,9 @@ test('intervalo arbitrário do WhatsApp de 7 minutos é respeitado entre duas of
   const DB=dbMock(),env=envFor(DB),sent=[];
   try {
     mockFetch((url,opts)=>{
-      if(url.startsWith('https://meli.la/')) return new Response('<html></html>',{headers:{'content-type':'text/html'}});
-      if(url===BASE+'/message/sendText/'+INSTANCE){
+      if(url.startsWith('https://meli.la/'))return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">',{headers:{'content-type':'text/html'}});
+      if(url==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'140000'}});
+      if(url===BASE+'/message/sendMedia/'+INSTANCE){
         sent.push(JSON.parse(opts.body));
         return Response.json({key:{id:'CUSTOM_'+sent.length}});
       }
