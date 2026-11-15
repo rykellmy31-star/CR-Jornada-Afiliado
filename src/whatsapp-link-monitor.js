@@ -810,21 +810,28 @@ async function featuredProductWithOfficialRedirect(html,baseUrl,fetcher=fetch){
 async function featuredProductFromShowcasePage(response,baseUrl,fetcher=fetch){
  const type=(response.headers.get('content-type')||'').toLowerCase();
  if(!/^text\/html(?:;|$)/.test(type))return null;
- const declared=Number(response.headers.get('content-length')||0);
- const maxBytes=5500000;
- if(declared>maxBytes)return null;
- const reader=response.body?.getReader();
- if(!reader)return null;
+ // Vitrines /social possuem listas extensas de produtos recomendados. A
+ // publicidade principal aparece no início; tamanho total >5,5MB não é
+ // motivo para descartar o produto. Ler no máximo 4MB, sem percorrer a
+ // grade de recomendações nem baixar HTML ilimitado.
+ const maxBytes=4_000_000;
  const decoder=new TextDecoder(),pieces=[];let size=0;
+ const reader=response.body?.getReader();
+ if(!reader){
+  if(typeof response.text!=='function')return null;
+  try{return await featuredProductWithOfficialRedirect((await response.text()).slice(0,maxBytes),baseUrl,fetcher);}
+  catch{return null;}
+ }
  try{
   for(;;){
    const {done,value}=await reader.read();
    if(done)break;
-   size+=value.byteLength;
-   if(size>maxBytes){await reader.cancel();return null;}
-   pieces.push(decoder.decode(value,{stream:true}));
+   const take=Math.min(value.byteLength,maxBytes-size);
+   if(take>0){pieces.push(decoder.decode(value.subarray(0,take),{stream:true}));size+=take;}
+   if(size>=maxBytes)break;
   }
  }catch{return null;}
+ finally{try{await reader.cancel();}catch{ }try{reader.releaseLock();}catch{ }}
  return await featuredProductWithOfficialRedirect(pieces.join('')+decoder.decode(),baseUrl,fetcher);
 }
 export {featuredProductFromHtml};

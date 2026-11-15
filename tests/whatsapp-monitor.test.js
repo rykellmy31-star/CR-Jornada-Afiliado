@@ -645,7 +645,7 @@ test('painel mostra opção para aprovar e revalidar links em revisão',()=>{
  assert.match(html,/id="ml-monitor-review-list"/);
  assert.match(CLIENT_JS,/mlMonitorApplyReviews/);
  assert.match(CLIENT_JS,/Aprovar produto para conversão/);
- assert.match(CLIENT_JS,/Validar todas as ofertas/);
+ assert.match(CLIENT_JS,/Validar e preparar conversão/);
   assert.doesNotMatch(MONITOR_CLIENT_JS,/Tentar validar novamente/);
  assert.doesNotThrow(()=>new Function(CLIENT_JS));
 });
