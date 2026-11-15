@@ -15,7 +15,8 @@ const SCHEMA=[
  "INSERT OR IGNORE INTO ml_monitor_diagnostics(id) VALUES(1)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_url_observations(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),domain TEXT NOT NULL,reason TEXT NOT NULL,message_format TEXT NOT NULL,created_at INTEGER NOT NULL)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_group_delivery(group_id INTEGER PRIMARY KEY REFERENCES ml_monitor_groups(id),received_messages INTEGER NOT NULL DEFAULT 0,with_urls INTEGER NOT NULL DEFAULT 0,last_received_at INTEGER,last_format TEXT NOT NULL DEFAULT 'desconhecido')",
- "CREATE TABLE IF NOT EXISTS ml_monitor_discard_reasons(reason TEXT PRIMARY KEY,occurrences INTEGER NOT NULL DEFAULT 0,last_at INTEGER)"
+ "CREATE TABLE IF NOT EXISTS ml_monitor_discard_reasons(reason TEXT PRIMARY KEY,occurrences INTEGER NOT NULL DEFAULT 0,last_at INTEGER)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_price_recovery(product_id TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0)"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -102,8 +103,50 @@ function productTitle(url,hint,id){
  const clean=hint.replace(/https:\/\/[^\s]+/gi,'').replace(/[|]/g,' ').replace(/\s+/g,' ').trim();
  return clean.length>=5?clean.slice(0,130):'Produto Mercado Livre '+id;
 }
+// Recupera somente preços ausentes de produtos ainda disponíveis.
+// Usa primeiro a legenda já guardada, e depois (em agendamento) consulta
+// apenas a mensagem original na instância e grupo autorizados. Não publica nada.
+export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={}){
+ await ensureMonitor(env);
+ const now=epoch();
+ const query=`SELECT l.product_id,l.message_id,l.group_id,l.created_at,g.instance_name,g.group_jid,
+   m.last_seen_at,
+   (SELECT s.message_hint FROM ml_monitor_shortlinks s
+    WHERE s.group_id=l.group_id AND s.message_id=l.message_id AND s.status='resolved'
+    ORDER BY s.created_at DESC LIMIT 1) AS saved_hint
+   FROM ml_monitor_links l
+   JOIN ml_monitor_groups g ON g.id=l.group_id
+   JOIN ml_monitor_product_meta m ON m.product_id=l.product_id
+   LEFT JOIN ml_monitor_price_recovery r ON r.product_id=l.product_id
+   WHERE l.status='available' AND l.created_at>=?
+     AND g.enabled=1 AND g.authorized=1 AND m.last_seen_price_cents IS NULL
+     AND m.last_seen_at<=l.created_at+5
+     AND (r.product_id IS NULL OR (r.attempts<3 AND r.last_attempt_at<=?))
+   ORDER BY l.created_at DESC LIMIT ?`;
+ const records=(await env.DB.prepare(query).bind(now-2*86400,now-900,allowEvolution?3:10).all()).results;
+ let recovered=0,attempted=0;
+ for(const row of records){
+  let terms=extractPromotionTerms(row.saved_hint||'');
+  if(!(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0)&&allowEvolution){
+   attempted++;
+   const msg=await recoverCaptionFromEvolution(env,{instance:row.instance_name,
+    group_jid:row.group_jid,message_id:row.message_id,urls:[],hint:''});
+   if(msg)terms=extractPromotionTerms(msg.hint);
+  }
+  if(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0){
+   const result=await env.DB.prepare(
+    "UPDATE ml_monitor_product_meta SET last_seen_price_cents=?,last_seen_deal_json=? WHERE product_id=? AND last_seen_price_cents IS NULL AND last_seen_at<=?"
+   ).bind(terms.price_cents,JSON.stringify(terms),row.product_id,row.created_at+5).run();
+   if(result.meta?.changes===1)recovered++;
+  }else if(allowEvolution){
+   await env.DB.prepare("INSERT INTO ml_monitor_price_recovery(product_id,last_attempt_at,attempts) VALUES(?,?,1) ON CONFLICT(product_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,attempts=attempts+1").bind(row.product_id,now).run();
+  }
+ }
+ return {recovered,attempted};
+}
 export async function monitorState(env){
  await ensureMonitor(env);
+ await recoverMissingMonitorPrices(env);
  const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
