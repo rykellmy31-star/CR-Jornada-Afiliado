@@ -4,7 +4,7 @@ import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './l
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
-import { resolveProductImage } from './offer-images.js';
+import { resolveProductImage,rememberTelegramSentPhoto } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
@@ -171,6 +171,8 @@ async function sendOfferWithImage(env, chat, offer) {
       const message = await telegramSend(env, chat, {
         photo: imageUrl, caption: payload.text, parse_mode:payload.parse_mode, reply_markup: payload.reply_markup
       }, 'sendPhoto');
+      try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
+      catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
       return { message, format: 'photo' };
     } catch (error) {
       // Só cai para texto após recusa EXPLÍCITA da foto (400); falha de rede é ambígua.
