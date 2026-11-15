@@ -11,6 +11,7 @@ import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './l
 import {readTelegramForecast} from './publication-forecast.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 import { masterState,setMasterState,listCategories,createGroupCategory,updateGroupCategory,listCategoryDestinations,saveCategoryRoutes,upsertProductCategory,runCategoryRoutingScheduled } from './automation-center.js';
+import {ensureOfferPromoColumns} from './monitor-repeat-policy.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, updateWhatsAppAutomation, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer, dispatchPublishedOfferToWhatsApp } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
 import {
@@ -289,6 +290,7 @@ async function runScheduled(env) {
     return retry;
   }
   const prepared=quote.offer;
+  await ensureOfferPromoColumns(env);
   await env.DB.prepare(
     "UPDATE offers SET price_cents=?,old_price_cents=?,promo_terms_json=?,promo_captured_at=?,last_error=NULL WHERE id=? AND status='ready'"
   ).bind(prepared.price_cents,prepared.old_price_cents,prepared.promo_terms_json,prepared.promo_captured_at,offer.id).run();
