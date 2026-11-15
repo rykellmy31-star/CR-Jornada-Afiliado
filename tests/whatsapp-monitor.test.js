@@ -1219,21 +1219,21 @@ test('renderização JS reconhece botão do destaque após primeiro HTML não tr
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
-test('orçamento de Browser Run limita 12 por dia e uma chamada a cada 65 segundos',async()=>{
+test('orçamento de Browser Run distribui até 36 consultas por dia com cooldown de 30 segundos',async()=>{
  const {env,DB}=setup();
  try{
   let used=0;
   env.BROWSER={quickAction:async()=>new Response('')};
   const start=1700000000;
   assert.equal(await claimSocialBrowserBudget(env,start),true);used++;
-  assert.equal(await claimSocialBrowserBudget(env,start+30),false);
-  for(let k=1;k<12;k++){
-   assert.equal(await claimSocialBrowserBudget(env,start+k*66),true);
+  assert.equal(await claimSocialBrowserBudget(env,start+29),false);
+  for(let k=1;k<36;k++){
+   assert.equal(await claimSocialBrowserBudget(env,start+k*31),true);
    used++;
   }
-  assert.equal(used,12);
-  assert.equal(await claimSocialBrowserBudget(env,start+12*66),false);
-  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,12);
+  assert.equal(used,36);
+  assert.equal(await claimSocialBrowserBudget(env,start+36*31),false);
+  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,36);
   assert.equal(await claimSocialBrowserBudget(env,start+86400),true);
  }finally{DB.close();}
 });
@@ -1502,4 +1502,53 @@ test('uma consulta bloqueada não cancela as outras revisões do mesmo ciclo',as
   assert.match(remaining.reason,/Falha de conexão/);
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks WHERE status=\'resolved\'').first().n,5);
  }finally{globalThis.fetch=old;DB.close();}
+});
+
+test('vitrine real em revisão há 20 tentativas usa navegador e confirma SOMENTE botão Ir para produto, mesmo grupo pausado',async()=>{
+ const {env,DB}=setup(),orig=globalThis.fetch;
+ const short='https://meli.promo/s/nxSshz';
+ const social='https://www.mercadolivre.com.br/social/dafhbgecd60351?matt_word=gear';
+ const original='https://www.mercadolivre.com.br/kit-4-pcs-tampinha-bico-pneu-valvula-carro-moto-bike-brinde/up/MLBU3365962146?pdp_filters=item_id:MLB5580660396';
+ const another='https://www.mercadolivre.com.br/kit-valvulas-recomendacao/p/MLB99999999';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Gear Ofertas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const e=event(GROUP,'Kit 4 Pçs Tampinha Bico Pneu '+short);
+  e.data.key.id='GEAR_001';
+  await ingestMonitorEvent(env,e);
+  const id=DB.prepare('SELECT id FROM ml_monitor_shortlinks').first().id;
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',tries=20,reason='Vitrine encontrada, mas o botão do produto principal não pôde ser identificado no HTML público' WHERE id=?").bind(id).run();
+  DB.prepare("INSERT INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) VALUES(?,?,?,?,0)")
+    .bind(id,1699999900,1699999500,20).run();
+  const groupId=DB.prepare('SELECT id FROM ml_monitor_groups').first().id;
+  await updateMonitorGroup(env,groupId,{enabled:false});
+  let browserCalls=0,htmlCalls=0;
+  globalThis.fetch=async url=>{
+   htmlCalls++;
+   if(String(url)===short)return new Response(null,{status:302,headers:{location:social}});
+   if(String(url)===social)return new Response('<html><main>Vitrine carregando</main></html>',{headers:{'content-type':'text/html'}});
+   throw Error('Unexpected URL '+url);
+  };
+  env.BROWSER={quickAction:async(action,options)=>{
+   browserCalls++;
+   assert.equal(action,'content');
+   assert.equal(options.url,social);
+   return new Response('<html><main>'+
+    '<section class="rl-card-featured-wrapper"><a class="poly-action-links__action--link" href="'+original+'">Ir para produto</a></section>'+
+    '<section class="rl-card-recommendations"><a href="'+another+'">Ir para produto</a></section>'+
+    '</main></html>',{headers:{'content-type':'text/html'}});
+  }};
+  const result=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(result.resolved,1);
+  assert.equal(result.reviewed,0);
+  assert.equal(browserCalls,1);
+  assert.equal(htmlCalls,2);
+  const row=DB.prepare('SELECT status FROM ml_monitor_shortlinks WHERE id=?').bind(id).first();
+  assert.equal(row.status,'resolved');
+  const state=await monitorState(env);
+  assert.equal(state.links[0].product_id,'MLBU3365962146');
+  assert.ok(state.links[0].source_url.endsWith('/up/MLBU3365962146'));
+  assert.equal(state.groups[0].enabled,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_browser_attempts').first().n,0);
+ }finally{globalThis.fetch=orig;DB.close();}
 });
