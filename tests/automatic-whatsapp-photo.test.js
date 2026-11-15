@@ -101,7 +101,7 @@ test('publicação AUTOMÁTICA realista do WhatsApp usa sendMedia quando meli.la
   assert.equal(media,1);
   assert.equal(text,0);
   assert.equal(shortReads,1,'foto consultada uma vez no encurtador');
-  assert.equal(sourceReads,2,'preço e imagem confirmados separadamente no anúncio original');
+  assert.equal(sourceReads,1,'WhatsApp reutiliza preço já confirmado e consulta somente a foto original');
   assert.equal(await cachedProductImage(env,SHORT),PHOTO_LARGE);
  }finally{globalThis.fetch=nativeFetch;DB.close();}
 });
