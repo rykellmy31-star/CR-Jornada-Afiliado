@@ -96,7 +96,7 @@ export async function listLinkBatches(env){
 // pelo Programa. Não eliminar linhas: isso deslocaria TODOS os links seguintes.
 export const INELIGIBLE_MARKER='Este produto não cumpre com os requisitos do Programa.';
 export function isIneligibleWarning(line){
- return /^\\s*(?:⚠️?\\s*)?este produto não cumpre com os requisitos do programa\\.?\\s*$/iu
+ return /^\s*(?:⚠️?\s*)?este produto não cumpre com os requisitos do programa\.?\s*$/iu
    .test(String(line||''));
 }
 export function validatePairs(items,links){
