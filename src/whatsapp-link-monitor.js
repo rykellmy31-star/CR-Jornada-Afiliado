@@ -29,41 +29,64 @@ const SHORT_HOSTS=new Set(['meli.la','melila.me']); // melila.me é de terceiros
 export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
- // Links de legendas encaminhadas podem conter caracteres invisíveis ou
- // quebra de linha logo depois da barra do encurtador.
- const normalized=text.slice(0,8000)
+ // Normaliza artefatos de encaminhamento sem alterar o destino do link.
+ const normalized=text.slice(0,16000)
   .replace(/[\u200b-\u200d\u2060\ufeff]/g,'')
-  .replace(/(https:\/\/(?:melila\.me|meli\.la)\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,50}(?:\b|\/|[?#]|$))/gi,'$1');
- return [...new Set((normalized.match(/https:\/\/[^\s<>"'()[\]{}]+/gi)||[])
-  .map(url=>url.replace(/[.,;!?]+$/g,'')))].slice(0,30);
+  .replace(/(https?:\/\/(?:melila\.me|meli\.la)\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,50}(?:\b|\/|[?#]|$))/gi,'$1')
+  .replace(/(https?:\/\/(?:www\.|produto\.)?mercadolivre\.com\.br\/)[\t \r\n]+(?=[A-Za-z0-9_-]{5,})/gi,'$1');
+ // Aceita URL absoluta ou domínio conhecido sem protocolo. A validação do
+ // candidato continua restrita ao Mercado Livre e a encurtadores configurados.
+ const pattern=/(?:https?:\/\/|www\.|(?:meli\.la|melila\.me|(?:produto\.)?mercadolivre\.com\.br)\/)[^\s<>"'()[\]{}]+/gi;
+ const urls=[];
+ for(const match of normalized.matchAll(pattern)){
+  let url=match[0].replace(/[.,;!?]+$/g,'');
+  if(!/^https?:\/\//i.test(url))url='https://'+url;
+  if(!urls.includes(url))urls.push(url);
+  if(urls.length>=30)break;
+ }
+ return urls;
 }
-// Só visita texto e contêineres de mensagens, sem varrer base64 ou metadados.
+// Lê apenas texto da mensagem recebida, sem procurar em contatos, citações,
+// previews com URL de terceiros ou dados de mídia (imagem, thumb, base64).
 function extractMessageText(message,entry=null){
  const values=[],seen=new Set(),visited=new Set();
  const nested=['message','ephemeralMessage','viewOnceMessage','viewOnceMessageV2',
   'viewOnceMessageV2Extension','documentWithCaptionMessage','editedMessage','imageMessage',
   'videoMessage','documentMessage','extendedTextMessage','buttonsResponseMessage',
-  'interactiveMessage','textMessage','mediaMessage','content','body','messageContent','captionMessage'];
+  'interactiveMessage','textMessage','mediaMessage','content','body','messageContent',
+  'captionMessage','templateMessage','hydratedTemplate','hydratedFourRowTemplate',
+  'listMessage','buttonsMessage','highlyStructuredMessage','productMessage','messageContextInfo'];
+ const fields=['conversation','text','caption','body','selectedDisplayText','messageText',
+  'contentText','description','title','footerText','hydratedContentText','hydratedFooterText'];
  let format='outro',nodeCount=0;
+ function collect(value,label){
+  if(typeof value!=='string'||!value.trim()||seen.has(value))return;
+  seen.add(value);values.push(value.slice(0,16000));
+  if(format==='outro')format=label;
+ }
  function walk(node,label,depth){
-  if(depth>7||nodeCount++>80||!node||typeof node!=='object'||Array.isArray(node)||visited.has(node))return;
+  if(depth>9||nodeCount++>120||!node||typeof node!=='object'||Array.isArray(node)||visited.has(node))return;
   visited.add(node);
-  for(const field of ['conversation','text','caption','body','selectedDisplayText','messageText']){
+  for(const field of fields){
    const value=node[field];
-   if(typeof value==='string'&&value.trim()&&!seen.has(value)){
-    seen.add(value);values.push(value.slice(0,8000));
-    if(format==='outro')format=label==='outro'?field:label;
-   }
+   if(typeof value==='string')collect(value,label==='outro'?field:label);
+   // Ex.: interactiveMessage.body.text.
+   if(field==='body'&&value&&typeof value==='object'&&!Array.isArray(value))
+    walk(value,label==='outro'?'body':label,depth+1);
   }
   for(const field of nested){
-   const child=node[field],label2=['message','content','messageContent'].includes(field)?label:field;
-   if((field==='content'||field==='message')&&typeof child==='string'&&child.trim()&&!seen.has(child)){
-    seen.add(child);values.push(child.slice(0,8000));if(format==='outro')format='content';
-   }else if(child&&typeof child==='object')walk(child,label2,depth+1);
+   const child=node[field];
+   if((field==='content'||field==='message')&&typeof child==='string')collect(child,label==='outro'?field:label);
+   else if(child&&typeof child==='object')walk(child,['message','content','messageContent'].includes(field)?label:field,depth+1);
   }
  }
- walk(message,'outro',0);if(entry&&entry!==message)walk(entry,'outro',0);
- return {text:values.join('\n').slice(0,8000),format};
+ walk(message,'outro',0);
+ if(entry&&entry!==message){
+  // Campos textuais superiores retornados por alguns adaptadores da Evolution.
+  for(const key of ['text','caption','body','messageText'])collect(entry[key],'outro'===format?key:format);
+  // Não varrer metadata inteira nem mensagens citadas.
+ }
+ return {text:values.join('\n').slice(0,16000),format};
 }
 export function parseMonitorEvent(event,{includeNoLinks=false}={}){
  if(!event||typeof event!=='object'||!['messages.upsert','MESSAGES_UPSERT','messages-upsert'].includes(event.event))return [];
@@ -76,7 +99,7 @@ export function parseMonitorEvent(event,{includeNoLinks=false}={}){
   const {text,format}=extractMessageText(entry.message||{},entry);
   const urls=extractUrls(text);
   if(!urls.length&&!includeNoLinks)continue;
-  const hint=text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,800);
+  const hint=text.replace(/https?:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,800);
   result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,urls,format});
  }
  return result;
