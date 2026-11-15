@@ -1,5 +1,6 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { overviewState } from './overview.js';
+import {affiliateStoreState,connectAffiliateStore,previewAffiliateLink,createAffiliateShortlink,followAffiliateShortlink} from './affiliate-stores.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
@@ -329,6 +330,9 @@ async function router(request, env, ctx=null) {
   if (method === 'GET' && u.pathname === '/') return html(renderPage());
   if (method === 'GET' && u.pathname === '/app.js') return new Response(CLIENT_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' } });
   if (method === 'GET' && u.pathname === '/styles.css') return new Response(CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' } });
+  // Links curtos públicos: apenas destinos Mercado Livre previamente validados e salvos.
+  const shortAffiliate=u.pathname.match(/^\/l\/([A-Za-z0-9_-]{12})$/);
+  if(method==='GET'&&shortAffiliate)return followAffiliateShortlink(env,shortAffiliate[1]);
   // Rota de entrada restrita para eventos da Evolution. Não modifica webhooks nem instâncias.
   const receiver=u.pathname.match(/^\/hooks\/wa-links\/([A-Za-z0-9_-]{24,128})$/);
   if(receiver&&method==='POST'){
@@ -355,6 +359,10 @@ async function router(request, env, ctx=null) {
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
   if(u.pathname==='/api/overview'&&method==='GET')return json(await overviewState(env));
+  if(u.pathname==='/api/stores/mercadolivre'&&method==='GET')return json(await affiliateStoreState(env));
+  if(u.pathname==='/api/stores/mercadolivre/connect'&&method==='POST')return json(await connectAffiliateStore(env,await getBody(request)));
+  if(u.pathname==='/api/stores/mercadolivre/preview'&&method==='POST')return json(await previewAffiliateLink(env,await getBody(request)));
+  if(u.pathname==='/api/stores/mercadolivre/shorten'&&method==='POST')return json(await createAffiliateShortlink(env,await getBody(request),u.origin),201);
   if(u.pathname==='/api/monitor/state'&&method==='GET'){
     const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
     return json({...state,background_review:backgroundReview});
