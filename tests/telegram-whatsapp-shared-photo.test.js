@@ -121,7 +121,6 @@ test('falha de foto no automático NÃO publica preview; quando imagem volta, Te
  const {DB,env}=setup(),native=globalThis.fetch;
  let ready=false,tgMedia=0,tgText=0,waMedia=0,waText=0,photoUsed=null;
  try{
-  await setupWhatsApp(env);
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
   const now=Math.floor(Date.now()/1000);
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
@@ -152,6 +151,7 @@ test('falha de foto no automático NÃO publica preview; quando imagem volta, Te
    if(u===EVOLUTION+'/message/sendText/'+INSTANCE){waText++;throw Error('WhatsApp não pode enviar só texto');}
    throw Error('Requisição inesperada: '+u);
   };
+  await setupWhatsApp(env);
   const first=await runScheduled(env);
   assert.equal(first.status,'awaiting_photo');
   assert.equal(tgMedia,0);
