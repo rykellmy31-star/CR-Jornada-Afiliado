@@ -87,6 +87,10 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   globalThis.fetch=async(url,options={})=>{
     const u=String(url);
     if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+    if(u==='https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678')
+      return new Response('<link rel="canonical" href="https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678"><script type="application/ld+json">'+
+       JSON.stringify({'@type':'Product',url:'https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678',offers:{price:'79.90',priceCurrency:'BRL'}})+
+       '</script>',{headers:{'content-type':'text/html'}});
     if(u.startsWith('https://meli.la/'))
       return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">',{status:200,headers:{'content-type':'text/html'}});
     if(u==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-F.jpg'&&options.method==='HEAD')
@@ -96,6 +100,9 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   };
   try{
     DB.prepare("UPDATE settings SET automation_enabled=1, telegram_enabled=1, channel_registered=1, max_daily=1, interval_minutes=15, start_hour=0, end_hour=24 WHERE id=1").run();
+    DB.prepare("CREATE TABLE ml_link_batch_items(id INTEGER PRIMARY KEY,source_url TEXT,affiliate_url TEXT,status TEXT)").run();
+    for(let i=0;i<2;i++)DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+      .bind('https://www.mercadolivre.com.br/oferta-verificada/p/MLB12345678','https://meli.la/TESTE'+i).run();
     for(let i=0;i<2;i++) DB.prepare("INSERT INTO offers (title, affiliate_url, category,created_at,price_cents) VALUES(?,?,?,?,7990)")
       .bind('Oferta simulada '+i,'https://meli.la/TESTE'+i,'Geral',Math.floor(Date.now()/1000)).run();
     const env={DB,TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
