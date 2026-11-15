@@ -204,3 +204,29 @@ test('validação de @canal impede usar grupos privados, urls erradas ou canais 
     await assert.rejects(createTelegramChannel(env,{name:'Principal',telegram_chat_id:'@achadinhosmlcr'}),/principal/);
   }finally{DB.close();}
 });
+
+
+test('canais Telegram adicionais: automático só envia mídia, tenta novamente quando foto não está disponível',async()=>{
+ const DB=dbMock(),env=envFor(DB),sent=[],native=globalThis.fetch;
+ try{
+  const [tech]=await channels(env);
+  await updateTelegramChannel(env,tech,config);
+  await addChannelOffer(env,tech,newOffer('https://meli.la/TESTEFOTO1'));
+  fakeTelegram(sent,{photoReady:false});
+  const first=await runMultiChannelScheduled(env);
+  assert.equal(first.results[0].status,'awaiting_photo');
+  assert.equal(sent.length,0);
+  assert.equal(DB.prepare('SELECT status FROM channel_offers WHERE channel_id=?').bind(tech).first().status,'ready');
+  assert.equal(DB.prepare('SELECT attempts FROM telegram_channel_photo_retries').first().attempts,1);
+  assert.equal(DB.prepare('SELECT last_attempt_at FROM telegram_channels WHERE id=?').bind(tech).first().last_attempt_at,0);
+  fakeTelegram(sent,{photoReady:true});
+  DB.prepare('UPDATE telegram_channel_photo_retries SET next_retry_at=0').run();
+  const second=await runMultiChannelScheduled(env);
+  assert.equal(second.results[0].status,'published');
+  assert.equal(second.results[0].format,'photo');
+  assert.equal(sent.length,1);
+  assert.match(sent[0].url,/\/sendPhoto$/);
+  assert.ok(sent[0].body.photo.startsWith('https://http2.mlstatic.com/'));
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_channel_photo_retries').first().n,0);
+ }finally{globalThis.fetch=native;DB.close();}
+});
