@@ -7,6 +7,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
+import {readTelegramForecast} from './publication-forecast.js';
 import { masterState,setMasterState,listCategories,createGroupCategory,updateGroupCategory,listCategoryDestinations,saveCategoryRoutes,upsertProductCategory,runCategoryRoutingScheduled } from './automation-center.js';
 import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, updateWhatsAppAutomation, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
@@ -296,7 +297,9 @@ async function router(request, env) {
       env.DB.prepare('SELECT status, COUNT(*) AS total FROM offers GROUP BY status').all(),
       env.DB.prepare('SELECT event,detail,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 20').all()
     ]);
-    return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
+    const forecast=await readTelegramForecast(env,{settings});
+    return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results,
+      publication_forecast:forecast, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
   // Conta e credenciais Shopee independentes: não usar o perfil Mercado Livre.
   if(u.pathname==='/api/shopee/account'&&method==='GET')
