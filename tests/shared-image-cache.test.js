@@ -81,7 +81,7 @@ test('imagem publicada no Telegram é reutilizada no WhatsApp sem visitar meli.l
       enabled:true,interval_minutes:1
     });
     DB.prepare('UPDATE settings SET telegram_enabled=1,channel_registered=1 WHERE id=1').run();
-    DB.prepare('INSERT INTO offers(title,affiliate_url,category,created_at) VALUES(?,?,?,?)')
+    DB.prepare('INSERT INTO offers(title,affiliate_url,category,created_at,price_cents) VALUES(?,?,?,?,7990)')
       .bind('Lavadora de alta pressão',LINK,'Geral',Math.floor(Date.now()/1000)).run();
     const origin='https://afiliados.example.test';
     const login=await worker.fetch(new Request(origin+'/api/login',{method:'POST',
