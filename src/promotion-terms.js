@@ -1,7 +1,7 @@
 // Extração conservadora de condições informadas por terceiros nos grupos de ofertas.
 const AMOUNT='\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?';
 const rPrice=new RegExp('R\\$\\s*('+AMOUNT+')(?![\\d,.])','gi');
-const rDePor=new RegExp('\\bde\\s*R\\$\\s*('+AMOUNT+')\\s*(?:por|→|->)\\s*R\\$\\s*('+AMOUNT+')','i');
+const rDePor=new RegExp('\\bde\\s*[:=-]?\\s*R\\$\\s*('+AMOUNT+')[^A-Za-z0-9]{0,32}por\\s*[:=-]?\\s*R\\$\\s*('+AMOUNT+')','i');
 const rPor=new RegExp('\\b(?:por|agora|apenas|s[oó]\\s+hoje)\\s*(?:[:=-]\\s*)?R\\$\\s*('+AMOUNT+')','i');
 // O preço condicionado a cupom prevalece sobre o preço normal anunciado.
 const rWithCoupon=new RegExp('\\bcom\\s+(?:o\\s+)?cupom\\b[^\\dA-Za-z]{0,24}R\\$\\s*('+AMOUNT+')','i');
