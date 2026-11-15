@@ -208,3 +208,22 @@ test('link sem foto não bloqueia outro produto pronto na fila Telegram',async()
   assert.equal(sent,1);
  }finally{globalThis.fetch=native;DB.close();}
 });
+
+
+test('foto Telegram liberada automaticamente reativa entrega WhatsApp antiga somente se o erro era falta de imagem',async()=>{
+ const {env,DB}=setup();
+ try{
+  DB.prepare("CREATE TABLE whatsapp_media_retries(affiliate_url TEXT PRIMARY KEY,attempts INTEGER,next_attempt_at INTEGER,last_reason TEXT,updated_at INTEGER)").run();
+  DB.prepare("CREATE TABLE whatsapp_deliveries(offer_id INTEGER,group_jid TEXT,status TEXT,last_error TEXT,created_at INTEGER,updated_at INTEGER,PRIMARY KEY(offer_id,group_jid))").run();
+  DB.prepare("INSERT INTO offers(id,title,affiliate_url,category,created_at,status) VALUES(1,'Kit Cebolinha',?,'Geral',1,'published')").bind(SHORT).run();
+  DB.prepare("INSERT INTO whatsapp_media_retries VALUES(?,6,123,'Sem foto',123)").bind(SHORT).run();
+  DB.prepare("INSERT INTO whatsapp_deliveries VALUES(1,?,'needs_review','Foto indisponível após 6 tentativas. Nenhuma mensagem sem foto foi enviada.',1,1)").bind(GROUP).run();
+  DB.prepare("INSERT INTO whatsapp_deliveries VALUES(1,'OUTRO_GRUPO','needs_review','A Evolution não confirmou o envio.',1,1)").run();
+  DB.prepare("INSERT INTO whatsapp_deliveries VALUES(1,'TERCEIRO_GRUPO','sent',NULL,1,1)").run();
+  assert.equal(await rememberTelegramSentPhoto(env,SHORT,PHOTO_LARGE,900),true);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM whatsapp_media_retries').first().n,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM whatsapp_deliveries WHERE group_jid=?').bind(GROUP).first().n,0);
+  assert.equal(DB.prepare("SELECT status FROM whatsapp_deliveries WHERE group_jid='OUTRO_GRUPO'").first().status,'needs_review');
+  assert.equal(DB.prepare("SELECT status FROM whatsapp_deliveries WHERE group_jid='TERCEIRO_GRUPO'").first().status,'sent');
+ }finally{DB.close();}
+});
