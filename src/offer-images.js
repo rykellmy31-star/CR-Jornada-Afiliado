@@ -148,6 +148,33 @@ async function photoFromRenderedPage(env,url){
  }
 }
 
+// O automático usa as mesmas fontes do botão Publicar, mas uma falha
+// transitória na primeira leitura não deve adiar um produto que já tem foto.
+// Não relaxa a validação da CDN nem altera a URL do produto.
+export async function resolveProductImageWithRetry(env,affiliateUrl,lookup,{retryOnMiss=false}={}){
+ const first=await resolveProductImage(env,affiliateUrl,lookup);
+ if(first||!retryOnMiss)return first;
+ // Reconsulta a página original do anúncio primeiro, caso a vitrine tenha
+ // retornado HTML incompleto na primeira solicitação.
+ let original=null;
+ try{original=await sourcePageForAffiliateImage(env,affiliateUrl);}catch{}
+ if(original){
+  try{
+   const recovered=await lookup(original);
+   if(trustedProductImage(recovered)){
+    await rememberProductImage(env,original,recovered);
+    await rememberProductImage(env,affiliateUrl,recovered);
+    return recovered;
+   }
+  }catch(error){console.warn('Nova leitura da foto no anúncio:',String(error?.message||error).slice(0,90));}
+ }
+ try{return await resolveProductImage(env,affiliateUrl,lookup);}
+ catch(error){
+  console.warn('Segunda tentativa de foto indisponível:',String(error?.message||error).slice(0,90));
+  return null;
+ }
+}
+
 export async function resolveProductImage(env, affiliateUrl, lookup) {
   let cached = null;
   try { cached = await cachedProductImage(env, affiliateUrl); }
