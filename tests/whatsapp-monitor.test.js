@@ -762,7 +762,7 @@ test('meli.la com redirecionamento por .com e depois .com.br confirma produto ú
   assert.equal(product.last_seen_price_cents,9900);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
-test('meli.la com HTTP403 entra em revisão com novas tentativas automáticas a cada 30s',async()=>{
+test('meli.la com HTTP403 respeita espera maior de 5 minutos para evitar bloqueio por excesso de consultas',async()=>{
  const {env,DB}=setup(),originalFetch=globalThis.fetch;
  try{
   await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
@@ -778,7 +778,9 @@ test('meli.la com HTTP403 entra em revisão com novas tentativas automáticas a 
   assert.equal(short.tries,1);
   assert.equal((await resolveMonitorShortlinks(env,{now:start+29})).reviewed,0);
   assert.equal(calls,1,'não repetir antes de 30 segundos');
-  assert.equal((await resolveMonitorShortlinks(env,{now:start+30})).reviewed,1);
+  assert.equal((await resolveMonitorShortlinks(env,{now:start+30})).reviewed,0);
+  assert.equal(calls,1,'não insistir durante bloqueio HTTP 403');
+  assert.equal((await resolveMonitorShortlinks(env,{now:start+300})).reviewed,1);
   short=DB.prepare('SELECT status,tries FROM ml_monitor_shortlinks').first();
   assert.equal(short.status,'review');
   assert.equal(short.tries,2);
