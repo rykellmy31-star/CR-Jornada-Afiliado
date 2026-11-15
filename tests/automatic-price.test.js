@@ -144,8 +144,6 @@ test('link meli.la direto resolve anúncio oficial e recebe texto fixo com preç
   assert.equal(result.ok,true);
   assert.equal(result.offer.price_cents,3482);
   assert.equal(result.offer.old_price_cents,4990);
-  assert.equal(await cachedProductImage(env,AFF),photoLarge,
-   'a foto original confirmada na vitrine deve ficar pronta para Telegram e WhatsApp');
   const msg=formatOfferMessage(result.offer,{network:'whatsapp',includeLink:true});
   assert.match(msg,/✨ CONFIRA ESTA OFERTA!/);
   assert.match(msg,/De: ~R\$\s*49,90~/);
@@ -240,6 +238,8 @@ test('preço da vitrine principal libera fila mesmo com anúncio e API bloqueado
   assert.equal(result.ok,true);
   assert.equal(result.offer.price_cents,3482);
   assert.equal(result.offer.old_price_cents,4990);
+  assert.equal(await cachedProductImage(env,AFF),photoLarge,
+   'a foto original confirmada na vitrine deve ficar pronta para Telegram e WhatsApp');
   const msg=formatOfferMessage(result.offer,{network:'whatsapp',includeLink:true});
   assert.match(msg,/Por R\$\s*34,82/);
   assert.match(msg,/Parcelamento: 3x de R\$\s*11,61 sem juros/);
