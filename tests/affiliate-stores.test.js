@@ -48,7 +48,7 @@ test('cadastro grava identificação no banco, oferece prévia e cria link curto
   assert.equal((await followAffiliateShortlink(app,'badcode')).status,404);
   await assert.rejects(previewAffiliateLink(app,{product_url:'https://evil.test/a/up/MLBU1978369947'}),/Mercado Livre Brasil/);
   assert.throws(()=>parseMercadoLivreProduct('https://www.mercadolivre.com.br/gz/account-verification?go=https://evil.test'),/endereço completo/);
-  const unauthorized=await worker.fetch(new Request('https://bot.crjornada.com/api/stores/mercadolivre'),{...app,SESSION_SECRET:'test-secret'});
+  const unauthorized=await worker.fetch(new Request('https://bot.crjornada.com/api/stores/mercadolivre'),{...app,ADMIN_PASSWORD:'local test password',SESSION_SECRET:'test-secret'});
   assert.equal(unauthorized.status,401);
   const publicResult=await worker.fetch(new Request(result.short_url),app);
   assert.equal(publicResult.status,302);
