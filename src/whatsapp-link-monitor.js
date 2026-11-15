@@ -807,7 +807,7 @@ async function featuredProductWithOfficialRedirect(html,baseUrl,fetcher=fetch){
  }
  return identified.size===1?[...identified.values()][0]:null;
 }
-async function featuredProductFromShowcasePage(response,baseUrl){
+async function featuredProductFromShowcasePage(response,baseUrl,fetcher=fetch){
  const type=(response.headers.get('content-type')||'').toLowerCase();
  if(!/^text\/html(?:;|$)/.test(type))return null;
  const declared=Number(response.headers.get('content-length')||0);
@@ -825,7 +825,7 @@ async function featuredProductFromShowcasePage(response,baseUrl){
    pieces.push(decoder.decode(value,{stream:true}));
   }
  }catch{return null;}
- return await featuredProductWithOfficialRedirect(pieces.join('')+decoder.decode(),baseUrl);
+ return await featuredProductWithOfficialRedirect(pieces.join('')+decoder.decode(),baseUrl,fetcher);
 }
 export {featuredProductFromHtml};
 // Quando uma URL intermediária inclui explicitamente o destino Mercado Livre,
@@ -905,7 +905,7 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   if(res.status===200){
    if(social){
     const copy=res.clone();
-    const featured=await featuredProductFromShowcasePage(res,u.href);
+    const featured=await featuredProductFromShowcasePage(res,u.href,fetcher);
     if(featured){
      // O preço pertence exclusivamente ao cartão principal confirmado.
      let featured_price=null;
