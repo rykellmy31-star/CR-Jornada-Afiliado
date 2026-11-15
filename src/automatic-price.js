@@ -73,7 +73,7 @@ export async function prepareAutomaticOfferPrice(env,offer,{fetcher=fetch,now=Ma
 }
 export async function recordAutomaticPriceRetry(env,queueType,offerId,reason,now=Math.floor(Date.now()/1000)){
  await ensureAutomaticPrices(env);
- if(!['telegram','channel','whatsapp','wa-group'].includes(queueType)||!Number.isSafeInteger(Number(offerId)))
+ if(!['telegram','channel','whatsapp','wa-direct','wa-group'].includes(queueType)||!Number.isSafeInteger(Number(offerId)))
   throw Error('Fila de preço inválida');
  await env.DB.prepare(
   'INSERT INTO affiliate_auto_price_retries(queue_type,offer_id,attempts,next_retry_at,last_error) VALUES(?,?,1,?,?) '+
