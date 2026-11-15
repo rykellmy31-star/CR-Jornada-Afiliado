@@ -18,7 +18,9 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_group_delivery(group_id INTEGER PRIMARY KEY REFERENCES ml_monitor_groups(id),received_messages INTEGER NOT NULL DEFAULT 0,with_urls INTEGER NOT NULL DEFAULT 0,last_received_at INTEGER,last_format TEXT NOT NULL DEFAULT 'desconhecido')",
  "CREATE TABLE IF NOT EXISTS ml_monitor_discard_reasons(reason TEXT PRIMARY KEY,occurrences INTEGER NOT NULL DEFAULT 0,last_at INTEGER)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_price_recovery(product_id TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0)",
- "CREATE TABLE IF NOT EXISTS ml_monitor_site_prices(product_id TEXT PRIMARY KEY,price_cents INTEGER,status TEXT NOT NULL DEFAULT 'unavailable' CHECK(status IN ('ok','unavailable')),checked_at INTEGER NOT NULL DEFAULT 0,tries INTEGER NOT NULL DEFAULT 0,method TEXT NOT NULL DEFAULT '')"
+ "CREATE TABLE IF NOT EXISTS ml_monitor_site_prices(product_id TEXT PRIMARY KEY,price_cents INTEGER,status TEXT NOT NULL DEFAULT 'unavailable' CHECK(status IN ('ok','unavailable')),checked_at INTEGER NOT NULL DEFAULT 0,tries INTEGER NOT NULL DEFAULT 0,method TEXT NOT NULL DEFAULT '')",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_retry_schedule(shortlink_id INTEGER PRIMARY KEY REFERENCES ml_monitor_shortlinks(id),next_retry_at INTEGER NOT NULL DEFAULT 0,last_attempt_at INTEGER NOT NULL DEFAULT 0,auto_attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0)",
+ "CREATE INDEX IF NOT EXISTS idx_ml_monitor_retry_due ON ml_monitor_retry_schedule(next_retry_at,lease_until)"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -633,43 +635,76 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
 export async function redirectSource(value){
  return (await inspectMonitorShortlink(value)).product;
 }
-export async function resolveMonitorShortlinks(env){
+// Revalida automaticamente os links em revisão a cada ~30 s enquanto houver
+// novas tentativas. Depois de 8 falhas, reduz a frequência para evitar bloqueios.
+// Não depende de navegador aberto: acionado em dois pulsos do Cron da Cloudflare.
+// O bloqueio em D1 evita consultas duplicadas por acionamentos simultâneos.
+export function monitorRetryDelaySeconds(attempts){
+ return attempts<=8?30:attempts<=16?300:1800;
+}
+export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  await ensureMonitor(env);
  const state=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
  if(!state?.enabled)return {skipped:'disabled'};
- // Reprocessa os erros genéricos antigos e as vitrines já conhecidas, uma vez. A razão muda após a tentativa.
- const items=(await env.DB.prepare(
-  "SELECT s.*,g.instance_name,g.group_jid FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
-  "WHERE g.enabled=1 AND g.authorized=1 AND "+
-  "(s.status='pending' OR (s.status='review' AND s.reason IN ("+
-  "'Sem destino seguro de produto',"+
-  "'Link abre uma vitrine com vários produtos, não um anúncio individual') AND s.tries<=4)) "+
-  "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END,s.id LIMIT 5"
- ).all()).results;
+ const at=Number.isSafeInteger(now)&&now>0?now:epoch();
+ const query=
+  "SELECT s.*,g.instance_name,g.group_jid,rs.next_retry_at,rs.lease_until "+
+  "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
+  "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
+  "WHERE g.enabled=1 AND g.authorized=1 "+
+  "AND (s.status='pending' OR (s.status='review' AND (s.reason IS NULL OR "+
+  "(s.reason NOT LIKE 'Destino fora dos domínios%' "+
+  "AND s.reason NOT LIKE 'Redirecionamento circular%' "+
+  "AND s.reason NOT LIKE 'Produto associado por confirmação manual%')))) "+
+  "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? "+
+  "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END, "+
+  "COALESCE(rs.next_retry_at,0),s.created_at DESC LIMIT 5";
+ const items=(await env.DB.prepare(query).bind(at,at).all()).results;
  let resolved=0,reviewed=0;
  for(const item of items){
-  const result=await inspectMonitorShortlink(item.short_url);
+  // Primeiro seleciona/garante uma linha de controle para a URL.
+  const created=await env.DB.prepare(
+   "INSERT OR IGNORE INTO ml_monitor_retry_schedule(shortlink_id,next_retry_at,last_attempt_at,auto_attempts,lease_until) "+
+   "VALUES(?,0,0,0,?)"
+  ).bind(item.id,at+120).run();
+  if(created.meta?.changes!==1){
+   const claimed=await env.DB.prepare(
+    "UPDATE ml_monitor_retry_schedule SET lease_until=? "+
+    "WHERE shortlink_id=? AND next_retry_at<=? AND lease_until<=?"
+   ).bind(at+120,item.id,at,at).run();
+   if(claimed.meta?.changes!==1)continue;
+  }
+  let result;
+  try{result=await inspectMonitorShortlink(item.short_url,{fetcher});}
+  catch{result={product:null,kind:'temporary',reason:'Falha temporária ao verificar o produto'};}
   if(result.product){
    try{
     await saveProduct(env,{group_id:item.group_id,message_id:item.message_id,hint:item.message_hint},result.product);
-    await env.DB.prepare(
-     "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL WHERE id=? AND status IN ('pending','review')"
+    const updated=await env.DB.prepare(
+     "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL "+
+     "WHERE id=? AND status IN ('pending','review')"
     ).bind(item.id).run();
-    resolved++;
+    await env.DB.prepare("DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?").bind(item.id).run();
+    if(updated.meta?.changes===1)resolved++;
+    continue;
    }catch{
-    await env.DB.prepare(
-     "UPDATE ml_monitor_shortlinks SET status=CASE WHEN tries>=2 THEN 'review' ELSE 'pending' END,tries=tries+1,reason='Erro temporário ao salvar produto verificado' WHERE id=?"
-    ).bind(item.id).run();
+    result={product:null,kind:'temporary',reason:'Erro temporário ao salvar produto verificado'};
    }
-   continue;
   }
-  // Falha de rede e vitrine sem HTML do destaque recebem até três tentativas.
-  // URL externa ou vitrine ainda ambígua ficam em revisão, nunca por dedução.
-  const temporary=['temporary','showcase'].includes(result.kind)&&item.status==='pending'&&item.tries<2;
+  // Continua sem revisão humana nas falhas recuperáveis. Um site externo
+  // nunca é promovido a produto válido.
+  const retryable=!['external','loop'].includes(result.kind);
+  const attempts=Number(item.auto_attempts||0)+1;
+  const delay=retryable?monitorRetryDelaySeconds(attempts):86400;
   await env.DB.prepare(
-   "UPDATE ml_monitor_shortlinks SET status=?,tries=tries+1,reason=? WHERE id=?"
-  ).bind(temporary?'pending':'review',result.reason,item.id).run();
-  if(!temporary)reviewed++;
+   "UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason=? "+
+   "WHERE id=? AND status IN ('pending','review')"
+  ).bind(result.reason||'Destino não verificável automaticamente',item.id).run();
+  await env.DB.prepare(
+   "UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 "+
+   "WHERE shortlink_id=?"
+  ).bind(at,at+delay,item.id).run();
+  reviewed++;
  }
  return {resolved,reviewed};
 }
