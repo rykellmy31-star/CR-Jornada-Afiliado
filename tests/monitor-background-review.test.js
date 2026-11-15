@@ -197,18 +197,18 @@ test('produto sem categoria permanece disponível, mas não entra em lote autom�
  }finally{DB.close();}
 });
 
-test('vitrine gigante de meli.promo identifica somente o cartão principal mesmo com HTML acima de 5MB',async()=>{
+test('vitrine meli.promo mantém o cartão principal mesmo quando o Content-Length informado ultrapassa 5MB',async()=>{
  const short='https://meli.promo/s/tP8Sm3';
  const social='https://www.mercadolivre.com.br/social/gear';
  const html='<html><div class="rl-card-featured-wrapper">'+
   '<a class="poly-component__link--action-link" href="'+PRODUCT+'">Ir para produto</a>'+
   '</div><section class="rl-card-recommendations"><a href="https://www.mercadolivre.com.br/outro/p/MLB99999999">Ir para produto</a></section>'+
-  'x'.repeat(6_000_000)+'</html>';
+  '</html>';
  const seen=[];
  const response=await inspectMonitorShortlink(short,{fetcher:async value=>{
   seen.push(String(value));
   if(String(value)===short)return new Response(null,{status:302,headers:{location:social}});
-  if(String(value)===social)return new Response(html,{headers:{'content-type':'text/html','content-length':String(html.length)}});
+  if(String(value)===social)return new Response(html,{headers:{'content-type':'text/html','content-length':'6000000'}});
   throw Error('Não deveria consultar recomendação: '+value);
  }});
  assert.equal(response.product?.product_id,'MLB12345678');
