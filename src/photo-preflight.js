@@ -1,7 +1,6 @@
 // Mesmo resolvedor de fotos do botão manual, antes do disparo do Cron.
 import {findProductImage} from './images.js';
 import {getPrimaryCategory} from './multichannel.js';
-import {prepareAutomaticOfferPrice} from './automatic-price.js';
 import {cachedProductImage,resolveProductImageWithRetry} from './offer-images.js';
 const TABLE="CREATE TABLE IF NOT EXISTS affiliate_photo_preflight (affiliate_url TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0)";
 const REVIEW='Foto real indisponível após seis tentativas automáticas. Nenhum texto foi enviado.';
@@ -23,14 +22,8 @@ export async function prewarmTelegramQueue(env){
     'UPDATE affiliate_photo_preflight SET attempts=attempts+1,next_attempt_at=? WHERE affiliate_url=? AND next_attempt_at<=?'
    ).bind(now+120,item.affiliate_url,now).run();
    if(slot.meta?.changes!==1)continue;
-   // Localiza o anúncio original para preencher tanto os preços quanto a foto.
-   try{
-    const quote=await prepareAutomaticOfferPrice(env,{affiliate_url:item.affiliate_url},{requireSite:true});
-    if(!quote.ok&&item.status==='ready')
-     await env.DB.prepare(
-      "UPDATE offers SET last_error=? WHERE id=? AND status='ready' AND (last_error IS NULL OR last_error LIKE 'Aguardando preço%')"
-     ).bind('Aguardando preço atualizado no Mercado Livre: '+quote.reason,item.id).run();
-   }catch(error){console.warn('Preparação de preço:',String(error?.message||error).slice(0,110));}
+   // O agendador verifica preços com retry próprio. A rotina de fotos não
+   // deve consumir o orçamento de navegador em consultas duplicadas.
    const cached=await cachedProductImage(env,item.affiliate_url);
    const image=cached||await resolveProductImageWithRetry(
      env,item.affiliate_url,findProductImage,{retryOnMiss:true});
