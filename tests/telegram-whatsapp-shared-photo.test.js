@@ -100,12 +100,8 @@ for(const delivery of ['manual','automatic']){
    assert.equal(DB.prepare('SELECT message_id FROM affiliate_telegram_sent_photos WHERE affiliate_url=?').bind(SHORT).first().message_id,'7171');
    postTelegram=true;
    const result=await runWhatsAppScheduled(env);
-   if(delivery==='manual')assert.deepEqual(result,{skipped:'empty'},
-      'publicação manual já deve espelhar no WhatsApp imediatamente');
-   else{
-    assert.equal(result.status,'sent');
-    assert.equal(result.format,'photo');
-   }
+   assert.deepEqual(result,{skipped:'empty'},
+    'publicação manual e automática devem espelhar no WhatsApp sem esperar outro Cron');
    assert.equal(waMedia,1);
    assert.equal(waText,0);
    assert.equal(shortReads,1,'somente Telegram consultou o link; WhatsApp reaproveitou a foto gravada');
