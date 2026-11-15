@@ -209,8 +209,9 @@ test('publicação manual WhatsApp respeita intervalo e falhas ambíguas vão pa
     DB.prepare('UPDATE whatsapp_instance_pacing SET last_attempt_at=?').bind(Math.floor(Date.now()/1000)-500).run();
     globalThis.fetch=async(url,opts={})=>{
       const s=String(url);
-      if(s.startsWith('https://meli.la/'))return new Response('<html></html>',{headers:{'content-type':'text/html'}});
-      if(s===BASE+'/message/sendText/'+INSTANCE)return Response.json({pending:true});
+      if(s.startsWith('https://meli.la/'))return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">',{headers:{'content-type':'text/html'}});
+      if(s==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg')return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'140000'}});
+      if(s===BASE+'/message/sendMedia/'+INSTANCE)return Response.json({pending:true});
       throw Error('Unexpected fetch '+s);
     };
     out=await api(env,cookie,'/api/whatsapp/offers/2/publish',{});
