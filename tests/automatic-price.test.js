@@ -200,3 +200,71 @@ test('API pública nunca aceita preço de ID diferente, moeda externa ou sem pre
   }
  }finally{DB.close();}
 });
+
+test('preço da vitrine principal libera fila mesmo com anúncio e API bloqueados',async()=>{
+ const {env,DB}=envDb();
+ const SOCIAL='https://www.mercadolivre.com.br/social/gearofertas';
+ const featured='<div class="rl-card-featured-wrapper">'+
+  '<a class="poly-component__title" href="'+PRODUCT_URL+'">Kit de limpeza automotiva</a>'+
+  '<div class="poly-component__price">'+
+  '<s class="poly-price__previous"><span class="andes-money-amount__currency-symbol">R$</span>'+
+  '<span class="andes-money-amount__fraction">49</span><span class="andes-money-amount__cents">90</span></s>'+
+  '<div class="poly-price__current"><span class="andes-money-amount poly-price__amount">'+
+  '<span class="andes-money-amount__currency-symbol">R$</span>'+
+  '<span class="andes-money-amount__fraction">34</span><span class="andes-money-amount__cents">82</span></span></div>'+
+  '<span class="poly-price__installments">3x <span class="andes-money-amount polylabel-price">'+
+  '<span class="andes-money-amount__currency-symbol">R$</span>'+
+  '<span class="andes-money-amount__fraction">11</span><span class="andes-money-amount__cents">61</span></span> sem juros</span>'+
+  '</div><a class="poly-action-links__action--link" href="'+PRODUCT_URL+'">Ir para produto</a></div>'+
+  '<div class="rl-card-recommendations"><a href="https://www.mercadolivre.com.br/errado/p/MLB99999999">Outro produto</a></div>';
+ try{
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+   .bind(PRODUCT_URL,AFF).run();
+  const fetcher=async url=>{
+   if(url===PRODUCT_URL||String(url).startsWith('https://api.mercadolibre.com/'))
+    return new Response('Acesso negado',{status:403});
+   if(url===AFF)return new Response(null,{status:302,headers:{location:SOCIAL}});
+   if(url===SOCIAL)return new Response(featured,{headers:{'content-type':'text/html'}});
+   throw Error('URL inesperada '+url);
+  };
+  const result=await prepareAutomaticOfferPrice(env,{id:91,title:'Kit limpeza automotiva',
+   affiliate_url:AFF,created_at:Math.floor(Date.now()/1000)}, {fetcher,requireSite:true});
+  assert.equal(result.ok,true);
+  assert.equal(result.offer.price_cents,3482);
+  assert.equal(result.offer.old_price_cents,4990);
+  const msg=formatOfferMessage(result.offer,{network:'whatsapp',includeLink:true});
+  assert.match(msg,/Por R\$\s*34,82/);
+  assert.match(msg,/Parcelamento: 3x de R\$\s*11,61 sem juros/);
+ }finally{DB.close();}
+});
+test('vitrine com HTML vazio usa navegador e nunca preço de recomendação',async()=>{
+ const {env,DB}=envDb();
+ const SOCIAL='https://www.mercadolivre.com.br/social/gearofertas';
+ try{
+  DB.prepare("INSERT INTO ml_link_batch_items(source_url,affiliate_url,status) VALUES(?,?,'queued')")
+   .bind(PRODUCT_URL,AFF).run();
+  const featured='<div class="rl-card-featured-wrapper">'+
+   '<a class="poly-component__title" href="'+PRODUCT_URL+'">Kit</a>'+
+   '<div class="poly-component__price"><div class="poly-price__current">'+
+   '<span class="andes-money-amount poly-price__amount">'+
+   '<span class="andes-money-amount__currency-symbol">R$</span>'+
+   '<span class="andes-money-amount__fraction">75</span><span class="andes-money-amount__cents">90</span>'+
+   '</span></div></div></div><div class="rl-card-recommendations">R$ 1,00</div>';
+  let browserCalls=0;
+  env.BROWSER={quickAction:async()=>{
+   browserCalls++;return new Response(featured,{headers:{'content-type':'text/html'}});
+  }};
+  const fetcher=async url=>{
+   if(url===PRODUCT_URL||String(url).startsWith('https://api.mercadolibre.com/'))
+    return new Response('Acesso negado',{status:403});
+   if(url===AFF)return new Response(null,{status:302,headers:{location:SOCIAL}});
+   if(url===SOCIAL)return new Response('<html>Carregando...</html>',{headers:{'content-type':'text/html'}});
+   throw Error('URL inesperada '+url);
+  };
+  const result=await prepareAutomaticOfferPrice(env,{id:92,title:'Kit limpeza automotiva',
+   affiliate_url:AFF,created_at:Math.floor(Date.now()/1000)}, {fetcher,requireSite:true});
+  assert.equal(result.ok,true);
+  assert.equal(result.offer.price_cents,7590);
+  assert.equal(browserCalls,1);
+ }finally{DB.close();}
+});
