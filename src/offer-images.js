@@ -9,6 +9,48 @@ const CREATE_CACHE = `CREATE TABLE IF NOT EXISTS affiliate_product_images (
 )`;
 const CACHE_LIFETIME = 7 * 24 * 60 * 60;
 
+// Registra a FOTO EFETIVAMENTE aceita pelo Telegram no sendPhoto.
+// O WhatsApp consulta primeiro esse registro em D1; assim o link da imagem
+// é compartilhado e não depende de recuperar uma prévia do link novamente.
+const TELEGRAM_PHOTO_TABLE = "CREATE TABLE IF NOT EXISTS affiliate_telegram_sent_photos ("+
+ "affiliate_url TEXT PRIMARY KEY,image_url TEXT NOT NULL,"+
+ "message_id TEXT NOT NULL,sent_at INTEGER NOT NULL)";
+export async function rememberTelegramSentPhoto(env,affiliateUrl,imageUrl,messageId){
+ if(!env?.DB||!trustedProductPage(affiliateUrl)||!trustedProductImage(imageUrl)||
+    !Number.isSafeInteger(Number(messageId))||Number(messageId)<=0)return false;
+ await env.DB.prepare(TELEGRAM_PHOTO_TABLE).run();
+ await env.DB.prepare(
+  "INSERT INTO affiliate_telegram_sent_photos(affiliate_url,image_url,message_id,sent_at) "+
+  "VALUES(?,?,?,?) ON CONFLICT(affiliate_url) DO UPDATE SET "+
+  "image_url=excluded.image_url,message_id=excluded.message_id,sent_at=excluded.sent_at"
+ ).bind(affiliateUrl,imageUrl,String(messageId),Math.floor(Date.now()/1000)).run();
+ // Também abastece o cache que já é usado nos fluxos manual e automático.
+ await rememberProductImage(env,affiliateUrl,imageUrl);
+ return true;
+}
+export async function telegramSentPhoto(env,affiliateUrl){
+ if(!env?.DB||!trustedProductPage(affiliateUrl))return null;
+ await env.DB.prepare(TELEGRAM_PHOTO_TABLE).run();
+ const data=await env.DB.prepare(
+  "SELECT image_url FROM affiliate_telegram_sent_photos "+
+  "WHERE affiliate_url=? AND sent_at>=?"
+ ).bind(affiliateUrl,Math.floor(Date.now()/1000)-CACHE_LIFETIME).first();
+ return trustedProductImage(data?.image_url)?data.image_url:null;
+}
+export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup){
+ // O mesmo produto enviado COM FOTO pelo Telegram deve ir COM A MESMA FOTO
+ // no WhatsApp, sem nova consulta ao meli.la. Para ofertas somente WhatsApp,
+ // continuam as fontes de foto do Mercado Livre e o cache original.
+ try{
+  const confirmed=await telegramSentPhoto(env,affiliateUrl);
+  if(confirmed)return confirmed;
+ }catch(error){
+  console.warn('Foto enviada no Telegram indisponível:',String(error?.message||error).slice(0,95));
+ }
+ return await resolveProductImage(env,affiliateUrl,lookup);
+}
+
+
 export async function cachedProductImage(env, affiliateUrl) {
   if (!env?.DB || !trustedProductPage(affiliateUrl)) return null;
   await env.DB.prepare(CREATE_CACHE).run();
