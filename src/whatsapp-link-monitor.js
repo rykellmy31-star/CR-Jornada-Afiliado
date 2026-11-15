@@ -3,7 +3,7 @@ import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './l
 import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
-import {fetchMercadoLivrePrice} from './mercado-livre-price.js';
+import {fetchMercadoLivrePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
@@ -845,8 +845,14 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
    return {product:null,kind:'temporary',reason:'O site está indisponível temporariamente ('+res.status+')'};
   if(res.status===200){
    if(social){
+    const copy=res.clone();
     const featured=await featuredProductFromShowcasePage(res,u.href);
-    if(featured)return {product:featured,kind:'featured_product',reason:null};
+    if(featured){
+     // O preço pertence exclusivamente ao cartão principal confirmado.
+     let featured_price=null;
+     try{featured_price=extractFeaturedShowcasePrice((await copy.text()).slice(0,5500000),featured.product_id);}catch{}
+     return {product:featured,kind:'featured_product',social_url:u.href,featured_price,reason:null};
+    }
     return {product:null,kind:'showcase',social_url:u.href,reason:'Vitrine encontrada, mas o botão do produto principal não pôde ser identificado no HTML público'};
    }
    const candidate=await productFromShortPage(res);
