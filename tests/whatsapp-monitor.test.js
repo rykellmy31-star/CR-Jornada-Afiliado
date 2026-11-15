@@ -470,3 +470,41 @@ test('descartes mostram razões sem registrar contatos, textos ou IDs de grupos 
   assert.match(CLIENT_JS,/Mensagens descartadas antes da leitura/);
  }finally{DB.close();}
 });
+
+test('webhook recebe foto com legenda e base64 grande e reconhece melila.me',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'BRUXO DOS DESCONTOS',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const url='https://melila.me/xC4Lwektlctt';
+  const payload={event:'messages.upsert',instance:INSTANCE,data:{
+   key:{remoteJid:GROUP,fromMe:false,id:'IMAGE-LARGE-001'},
+   message:{imageMessage:{caption:'Só hoje: Capa Chuva Sapato Tênis\\nPor R$ 34,97\\n'+url,
+    mimetype:'image/jpeg',base64:'A'.repeat(60_000)}},
+   messageType:'imageMessage'}};
+  const body=JSON.stringify(payload);
+  assert.ok(body.length>20_000);
+  const response=await worker.fetch(new Request('https://afiliados.example.test/hooks/wa-links/'+TOKEN,{
+   method:'POST',headers:{'content-type':'application/json'},body
+  }),env);
+  assert.equal(response.status,200,await response.text());
+  const state=await monitorState(env);
+  assert.equal(state.groups[0].delivery.received_messages,1);
+  assert.equal(state.groups[0].delivery.last_format,'imageMessage');
+  assert.equal(state.diagnostics.links_recognized,1);
+  assert.equal(state.shortlinks.find(x=>x.status==='pending')?.total,1);
+  assert.equal(state.counts.captured,0); // Só captura produto após resolver encurtador.
+ }finally{DB.close();}
+});
+
+test('webhook bloqueia corpo acima do limite de mídia sem registrar evento',async()=>{
+ const {env,DB}=setup();
+ try{
+  const response=await worker.fetch(new Request('https://afiliados.example.test/hooks/wa-links/'+TOKEN,{
+   method:'POST',headers:{'content-type':'application/json','content-length':String(8*1024*1024+1)},
+   body:'{}'
+  }),env);
+  assert.equal(response.status,413);
+  assert.equal((await monitorState(env)).diagnostics.events_received,0);
+ }finally{DB.close();}
+});
