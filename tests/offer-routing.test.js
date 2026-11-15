@@ -56,14 +56,16 @@ function mockNetwork(sent){
     if(u===BASE+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
       return Response.json([{id:GROUP,subject:'Grupo de Afiliados'},{id:GROUP_OTHER,subject:'Outro Grupo'}]);
     if(u.startsWith('https://meli.la/'))
-      return new Response('<html></html>',{headers:{'content-type':'text/html'}});
+      return new Response('<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_999-MLB123-P.webp">',{headers:{'content-type':'text/html'}});
+    if(u==='https://http2.mlstatic.com/D_NQ_NP_999-MLB123-F.jpg')
+      return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'140000'}});
     if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
       return Response.json({ok:true,result:{type:'channel'}});
-    if(u.includes('api.telegram.org')&&u.includes('/sendMessage')){
+    if(u.includes('api.telegram.org')&&(u.includes('/sendMessage')||u.includes('/sendPhoto'))){
       const body=JSON.parse(opts.body);sent.push({destination:'telegram',body});
       return Response.json({ok:true,result:{message_id:sent.length+100}});
     }
-    if(u===BASE+'/message/sendText/'+INSTANCE){
+    if(u===BASE+'/message/sendText/'+INSTANCE||u===BASE+'/message/sendMedia/'+INSTANCE){
       const body=JSON.parse(opts.body);sent.push({destination:'whatsapp',body});
       return Response.json({key:{id:'WA_'+sent.length}});
     }
@@ -109,7 +111,7 @@ test('somente WhatsApp publica sem Telegram, usando intervalo do grupo e sem dup
     assert.equal(sent.length,1);
     assert.equal(sent[0].destination,'whatsapp');
     assert.equal(sent[0].body.number,GROUP);
-    assert.match(sent[0].body.text,/https:\/\/meli\.la\/FAKE11/);
+    assert.match(sent[0].body.caption,/https:\/\/meli\.la\/FAKE11/);
     const state=await getWhatsAppState(env);
     assert.equal(state.direct_offers[0].status,'published');
     assert.equal(state.deliveries.length,0);
@@ -137,7 +139,7 @@ test('somente Telegram nunca é espelhado, mas "ambos" envia uma vez em cada',as
     assert.equal(wa.source,'mirrored');
     assert.equal(sent.length,3);
     assert.equal(sent[2].destination,'whatsapp');
-    assert.match(sent[2].body.text,/https:\/\/meli\.la\/FAKE22/);
+    assert.match(sent[2].body.caption,/https:\/\/meli\.la\/FAKE22/);
     assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'empty'});
     assert.equal((await getWhatsAppState(env)).deliveries.length,1);
   }finally{globalThis.fetch=ORIGINAL_FETCH;DB.close();}
