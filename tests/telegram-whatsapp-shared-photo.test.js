@@ -328,7 +328,6 @@ test('Cron publica com preço e foto do destaque oficial mesmo com anúncio bloq
  let telegramPhotos=0,whatsappPhotos=0;
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=5,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
-  await setupWhatsApp(env);
   const now=Math.floor(Date.now()/1000);
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
    .bind('Kit automotivo do anúncio principal',SHORT,'Geral',now).run();
@@ -373,6 +372,7 @@ test('Cron publica com preço e foto do destaque oficial mesmo com anúncio bloq
    if(u===EVOLUTION+'/message/sendText/'+INSTANCE)throw Error('Não enviar sem foto');
    throw Error('Requisição inesperada '+u);
   };
+  await setupWhatsApp(env);
   const result=await runScheduled(env);
   assert.equal(result.status,'published');
   assert.equal(result.format,'photo');
