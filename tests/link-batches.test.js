@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
-import {parseSelection,validateSourceUrl,validatePairs,createLinkBatch,importLinkBatch,readLinkBatch,listLinkBatches} from '../src/link-batches.js';
+import {parseSelection,validateSourceUrl,validatePairs,createLinkBatch,importLinkBatch,readLinkBatch,listLinkBatches,isIneligibleWarning} from '../src/link-batches.js';
+import {runInNewContext} from 'node:vm';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 
 const URL1='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
@@ -121,4 +122,80 @@ test('interface apresenta as quatro etapas sem misturar nomes nos links copiados
  assert.match(html,/Conversão de Link em Lote/);
  assert.match(CLIENT_JS,/selectedPage==='linkbatches'\)tasks.push\(refreshMLLinkBatches\(\)\)/);
  assert.doesNotMatch(CSS,/#dashboard:not\(\[data-view="mercadolivre-automation"\]\) > #ml-link-batches/);
+});
+
+
+test('a advertência oficial do Mercado Livre ocupa uma posição, sem consumir link',()=>{
+ assert.equal(isIneligibleWarning('⚠️ Este produto não cumpre com os requisitos do Programa.'),true);
+ assert.equal(isIneligibleWarning('Este produto não cumpre com os requisitos do Programa.'),true);
+ assert.equal(isIneligibleWarning('⚠️ Este produto não cumpre com os requisitos do Programa'),true);
+ assert.equal(isIneligibleWarning('Um produto diferente foi recusado'),false);
+});
+
+test('entrada idêntica à exportação: 29 posições, 27 links, avisos nas linhas 17 e 19',()=>{
+ const converted=Array.from({length:29},(_,i)=>
+  i===16||i===18?'⚠️ Este produto não cumpre com os requisitos do Programa.':
+  'https://meli.la/'+('000000'+(i+1)).slice(-6)+'AB');
+ const code=CLIENT_JS.slice(CLIENT_JS.indexOf('function mlBatchReadConverted('),
+  CLIENT_JS.indexOf('\nfunction mlBatchShow(',CLIENT_JS.indexOf('function mlBatchReadConverted(')));
+ const result=runInNewContext(code+';\nmlBatchReadConverted(input)',{input:converted.join('\n')});
+ assert.equal(result.length,29);
+ assert.equal(result.filter(x=>!x.ineligible).length,27);
+ assert.equal(result[16].ineligible,true);
+ assert.equal(result[18].ineligible,true);
+ assert.equal(result[17].affiliate_url,converted[17]);
+ assert.equal(result[19].affiliate_url,converted[19]);
+});
+
+test('importação de lote de 29 produtos mantém links certos e registra apenas 2 inelegíveis',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const urls=Array.from({length:29},(_,i)=>
+   'https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB'+String(12345000+i));
+  const text=urls.map((u,i)=>'Furadeira de impacto Bosch '+(i+1)+' | '+u+' | Ferramentas e Peças Automotivas').join('\n');
+  const batch=await createLinkBatch(env,{text});
+  assert.equal(batch.items.length,29);
+  const links=batch.items.map((item,i)=>i===16||i===18
+   ?{ineligible:true,reason:'program_ineligible'}
+   :{affiliate_url:'https://meli.la/CONVERT'+String(i+1).padStart(2,'0'),category:item.category});
+  const imported=await importLinkBatch(env,batch.batch.id,{
+   links,owner_confirmation:true,pairing_confirmation:true
+  });
+  assert.deepEqual({queued:imported.queued,ineligible:imported.ineligible},{queued:27,ineligible:2});
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE status='ready'").first().n,27);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM ml_link_batch_ineligible WHERE batch_id=?").bind(batch.batch.id).first().n,2);
+  const saved=await readLinkBatch(env,batch.batch.id);
+  assert.equal(saved.batch.status,'imported');
+  assert.equal(saved.items[16].position,17);
+  assert.equal(saved.items[16].status,'ineligible');
+  assert.equal(saved.items[18].position,19);
+  assert.equal(saved.items[18].status,'ineligible');
+  assert.equal(saved.items[17].affiliate_url,'https://meli.la/CONVERT18');
+  assert.equal(saved.items[19].affiliate_url,'https://meli.la/CONVERT20');
+  assert.equal(saved.items[16].affiliate_url,null);
+  assert.equal(saved.items[18].affiliate_url,null);
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE affiliate_url='https://meli.la/CONVERT20'").first().n,1);
+  assert.equal((await listLinkBatches(env)).current,null);
+ }finally{DB.close();}
+});
+
+test('ignorar duas posições não autoriza apagar essas linhas ou duplicar links',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const batch=await createLinkBatch(env,{text:demo});
+  await assert.rejects(importLinkBatch(env,batch.batch.id,{
+   links:[{ineligible:true,reason:'program_ineligible'},{affiliate_url:'https://meli.la/ABCDEF12'}],
+   owner_confirmation:true,pairing_confirmation:false
+  }),/Confirme/);
+  await assert.rejects(importLinkBatch(env,batch.batch.id,{
+   links:[{affiliate_url:'https://meli.la/ABCDEF12'}],
+   owner_confirmation:true,pairing_confirmation:true
+  }),/uma linha para CADA produto/);
+  await assert.rejects(importLinkBatch(env,batch.batch.id,{
+   links:[{ineligible:true,reason:'ineligible'},{affiliate_url:'https://meli.la/ABCDEF12'}],
+   owner_confirmation:true,pairing_confirmation:true
+  }),/justificativa/);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+  assert.equal((await readLinkBatch(env,batch.batch.id)).batch.status,'awaiting_links');
+ }finally{DB.close();}
 });
