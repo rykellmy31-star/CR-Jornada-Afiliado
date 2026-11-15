@@ -258,6 +258,40 @@ async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manua
 }
 // Trava entre Crons concorrentes + intervalo/dias/horários/limite diário do
 // Telegram. Não chamar um segundo publicador nem alterar os intervalos salvos.
+// Tenta recuperar ofertas RECENTES presas em revisão somente por falta de foto.
+// A cada falha espera 30 minutos; nunca remove um erro de envio ambíguo nem
+// publica oferta diretamente. O próprio agendador mantém os intervalos.
+async function recoverReviewedPhoto(env,now){
+ await ensureTelegramPhotoRetries(env);
+ const item=await env.DB.prepare(
+  "SELECT o.id,o.affiliate_url FROM offers o "+
+  "JOIN telegram_photo_retries r ON r.offer_id=o.id "+
+  "WHERE o.status='needs_review' AND o.created_at>=? "+
+  "AND o.last_error LIKE 'Foto real indisponível%' "+
+  "AND r.next_retry_at<=? ORDER BY o.created_at,o.id LIMIT 1"
+ ).bind(now-48*3600,now).first();
+ if(!item)return false;
+ let photo=null;
+ try{
+  photo=await resolveProductImageWithRetry(env,item.affiliate_url,findProductImage,
+   {retryOnMiss:true,sourceLookup:resolveOfferSource});
+ }catch(error){console.warn('Rechecagem de foto em revisão:',String(error?.message||error).slice(0,90));}
+ if(!photo){
+  await env.DB.prepare(
+   "UPDATE telegram_photo_retries SET next_retry_at=?,updated_at=? "+
+   "WHERE offer_id=?"
+  ).bind(now+1800,now,item.id).run();
+  return false;
+ }
+ const changed=await env.DB.prepare(
+  "UPDATE offers SET status='ready',last_error=NULL "+
+  "WHERE id=? AND status='needs_review' AND last_error LIKE 'Foto real indisponível%'"
+ ).bind(item.id).run();
+ if(changed.meta?.changes!==1)return false;
+ await env.DB.prepare("DELETE FROM telegram_photo_retries WHERE offer_id=?").bind(item.id).run();
+ await log(env,'photo_recovered','Foto do produto confirmada; devolvido à fila automática.',item.id);
+ return true;
+}
 async function runScheduled(env){
  if(!env.DB||env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
  const settings=await readSettings(env);
@@ -289,6 +323,7 @@ async function runScheduled(env){
   // Retentativas de foto têm espera própria; um item sem imagem nunca bloqueia
   // as demais ofertas da fila. No máximo uma publicação por ciclo/intervalo.
   await ensureTelegramPhotoRetries(env);
+  await recoverReviewedPhoto(env,Math.floor(Date.now()/1000));
   // Reparar filas antigas reenfileiradas com contador >=6. Sem isto o SQL
   // deixa a oferta 'Na fila' mas jamais tenta enviá-la automaticamente.
   await env.DB.prepare(
