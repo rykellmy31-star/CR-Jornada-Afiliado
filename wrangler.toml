@@ -6,6 +6,10 @@ workers_dev = true
 [vars]
 EVOLUTION_API_URL = "https://evolution.crjornada.com"
 
+# Navegador renderizado somente em falhas de vitrines JS; limite de uso controlado no D1.
+[browser]
+binding = "BROWSER"
+
 [triggers]
 crons = ["* * * * *"]
 
