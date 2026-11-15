@@ -415,3 +415,58 @@ test('mensagem do grupo sem URLs produz diagnóstico sem guardar mensagens pesso
   assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
  }finally{DB.close();}
 });
+
+
+test('identifica quais grupos cadastrados realmente entregaram mensagens, mesmo sem links',async()=>{
+ const {env,DB}=setup();
+ try{
+  const third='120363111222333444@g.us';
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'BRUXO DOS DESCONTOS',permission_confirmed:true});
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:OTHER,group_name:'ACHADINHOS DA INTERNET',permission_confirmed:true});
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:third,group_name:'Clube de ferramentas',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta em outro site https://magazineluiza.me/abcde1234'));
+  await ingestMonitorEvent(env,event(OTHER,'Mensagem comum sem link'));
+  let state=await monitorState(env);
+  const bruxo=state.groups.find(g=>g.group_jid===GROUP);
+  const achadinhos=state.groups.find(g=>g.group_jid===OTHER);
+  const ferramentas=state.groups.find(g=>g.group_jid===third);
+  assert.equal(bruxo.delivery.received_messages,1);
+  assert.equal(bruxo.delivery.with_urls,1);
+  assert.ok(bruxo.delivery.last_received_at>0);
+  assert.equal(achadinhos.delivery.received_messages,1);
+  assert.equal(achadinhos.delivery.with_urls,0);
+  assert.equal(achadinhos.delivery.last_format,'extendedTextMessage');
+  assert.equal(ferramentas.delivery.received_messages,0);
+  assert.equal(ferramentas.delivery.last_received_at,null);
+  assert.equal(state.diagnostics.authorized_messages,2);
+  assert.equal(state.diagnostics.links_recognized,0);
+  assert.equal(state.counts.captured,0);
+  const page=renderPage();
+  assert.match(CLIENT_JS,/Mensagens recebidas:/);
+  assert.match(CLIENT_JS,/Último evento:/);
+ }finally{DB.close();}
+});
+
+test('descartes mostram razões sem registrar contatos, textos ou IDs de grupos não autorizados',async()=>{
+ const {env,DB}=setup();
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'BRUXO',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const unknownGroup='120363999888777666@g.us';
+  await ingestMonitorEvent(env,event(unknownGroup,'Ofertão https://melila.me/ABC123456'));
+  await ingestMonitorEvent(env,event(GROUP,'O próprio robô https://melila.me/ABC123456',true));
+  await ingestMonitorEvent(env,event(GROUP,'Mesmo grupo mas instância diferente https://melila.me/ABC123456',false,'outra-instancia'));
+  const state=await monitorState(env);
+  assert.equal(state.diagnostics.events_received,3);
+  assert.equal(state.diagnostics.authorized_messages,0);
+  assert.equal(state.groups[0].delivery.received_messages,0);
+  const reasons=Object.fromEntries(state.rejected_events.map(r=>[r.reason,r.occurrences]));
+  assert.equal(reasons.grupo_nao_corresponde_aos_cadastrados,1);
+  assert.equal(reasons.fromMe_nao_foi_false,1);
+  assert.equal(reasons.instancia_diferente,1);
+  assert.ok(!JSON.stringify(state).includes(unknownGroup));
+  assert.ok(!JSON.stringify(state).includes('ABC123456'));
+  assert.match(CLIENT_JS,/Mensagens descartadas antes da leitura/);
+ }finally{DB.close();}
+});

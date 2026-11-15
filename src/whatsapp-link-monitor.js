@@ -13,7 +13,9 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_shortlinks(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',short_url TEXT NOT NULL UNIQUE,message_hint TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','review','resolved')),tries INTEGER NOT NULL DEFAULT 0,reason TEXT,created_at INTEGER NOT NULL)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),events_received INTEGER NOT NULL DEFAULT 0,events_while_off INTEGER NOT NULL DEFAULT 0,messages_with_links INTEGER NOT NULL DEFAULT 0,authorized_messages INTEGER NOT NULL DEFAULT 0,links_recognized INTEGER NOT NULL DEFAULT 0,last_event_at INTEGER,last_authorized_at INTEGER,last_link_at INTEGER)",
  "INSERT OR IGNORE INTO ml_monitor_diagnostics(id) VALUES(1)",
- "CREATE TABLE IF NOT EXISTS ml_monitor_url_observations(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),domain TEXT NOT NULL,reason TEXT NOT NULL,message_format TEXT NOT NULL,created_at INTEGER NOT NULL)"
+ "CREATE TABLE IF NOT EXISTS ml_monitor_url_observations(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),domain TEXT NOT NULL,reason TEXT NOT NULL,message_format TEXT NOT NULL,created_at INTEGER NOT NULL)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_group_delivery(group_id INTEGER PRIMARY KEY REFERENCES ml_monitor_groups(id),received_messages INTEGER NOT NULL DEFAULT 0,with_urls INTEGER NOT NULL DEFAULT 0,last_received_at INTEGER,last_format TEXT NOT NULL DEFAULT 'desconhecido')",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_discard_reasons(reason TEXT PRIMARY KEY,occurrences INTEGER NOT NULL DEFAULT 0,last_at INTEGER)"
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -99,7 +101,7 @@ function productTitle(url,hint,id){
 }
 export async function monitorState(env){
  await ensureMonitor(env);
- const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
@@ -109,7 +111,9 @@ export async function monitorState(env){
   env.DB.prepare("SELECT l.group_id,COUNT(*) AS captured,COALESCE(SUM(CASE WHEN l.status='available' THEN 1 ELSE 0 END),0) AS available,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='awaiting_links' THEN 1 ELSE 0 END),0) AS in_conversion,COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS queued FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id GROUP BY l.group_id").all(),
   env.DB.prepare("SELECT events_received,events_while_off,messages_with_links,authorized_messages,links_recognized,last_event_at,last_authorized_at,last_link_at FROM ml_monitor_diagnostics WHERE id=1").first(),
   env.DB.prepare("SELECT s.short_url,s.status,s.reason,s.tries,s.created_at,g.group_name FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id WHERE s.status IN ('pending','review') ORDER BY s.id DESC LIMIT 8").all(),
-  env.DB.prepare("SELECT o.domain,o.reason,o.message_format,o.created_at,g.group_name FROM ml_monitor_url_observations o JOIN ml_monitor_groups g ON g.id=o.group_id ORDER BY o.id DESC LIMIT 12").all()
+  env.DB.prepare("SELECT o.domain,o.reason,o.message_format,o.created_at,g.group_name FROM ml_monitor_url_observations o JOIN ml_monitor_groups g ON g.id=o.group_id ORDER BY o.id DESC LIMIT 12").all(),
+  env.DB.prepare("SELECT group_id,received_messages,with_urls,last_received_at,last_format FROM ml_monitor_group_delivery").all(),
+  env.DB.prepare("SELECT reason,occurrences,last_at FROM ml_monitor_discard_reasons ORDER BY occurrences DESC LIMIT 8").all()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -118,12 +122,15 @@ export async function monitorState(env){
   queued:Number(x?.queued||0)
  });
  const perGroupMap=new Map(perGroup.results.map(x=>[x.group_id,normalizedCounts(x)]));
+ const deliveryMap=new Map(delivery.results.map(x=>[x.group_id,x]));
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
    recent_shortlinks:latestShortlinks.results,
    recent_domains:observations.results,
-   groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||normalizedCounts(null)})),
+   rejected_events:rejected.results,
+   groups:groups.results.map(x=>({...x,counts:perGroupMap.get(x.id)||normalizedCounts(null),
+     delivery:deliveryMap.get(x.id)||{received_messages:0,with_urls:0,last_received_at:null,last_format:'—'}})),
    links:links.results.map(x=>({...x,promotion:promotionDescription(x.last_seen_deal_json)})),
    shortlinks:pending.results,categories:categories.results.map(x=>x.name)};
 }
@@ -197,16 +204,38 @@ export async function ingestMonitorEvent(env,payload){
    await env.DB.prepare("UPDATE ml_monitor_diagnostics SET events_while_off=events_while_off+1 WHERE id=1").run();
    return {ok:true,ignored:'monitor_off'};
  }
- const messages=parseMonitorEvent(payload,{includeNoLinks:true});
- if(!messages.length)return {ok:true,accepted:0};
  const groupList=(await env.DB.prepare('SELECT id,instance_name,group_jid FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').all()).results;
- let captured=0,pending=0,authorized=0,recognized=0,withLinks=0;
+ const messages=parseMonitorEvent(payload,{includeNoLinks:true});
+ // Diagnóstico agregado de descartes antes da classificação; não guarda
+ // JIDs desconhecidos, números, conteúdo de mensagens nem URLs privadas.
+ if(payload?.event==='messages.upsert'||payload?.event==='MESSAGES_UPSERT'||payload?.event==='messages-upsert'){
+   const source=Array.isArray(payload.data)?payload.data:Array.isArray(payload.data?.messages)?payload.data.messages:[payload.data];
+   const reasons=new Map();
+   for(const raw of source.slice(0,25)){
+     const jid=raw?.key?.remoteJid;
+     if(typeof jid!=='string'||!GROUP.test(jid))continue; // Ignora conversas privadas e canais.
+     let reason;
+     if(!groupList.some(g=>g.instance_name===payload.instance&&g.group_jid===jid)){
+       reason=groupList.some(g=>g.group_jid===jid)?'instancia_diferente':'grupo_nao_corresponde_aos_cadastrados';
+     }else if(raw.key?.fromMe!==false)reason='fromMe_nao_foi_false';
+     if(reason)reasons.set(reason,(reasons.get(reason)||0)+1);
+   }
+   if(reasons.size){
+     const ops=[...reasons].map(([reason,count])=>env.DB.prepare(
+       "INSERT INTO ml_monitor_discard_reasons(reason,occurrences,last_at) VALUES(?,?,?) ON CONFLICT(reason) DO UPDATE SET occurrences=occurrences+excluded.occurrences,last_at=excluded.last_at"
+     ).bind(reason,count,receivedAt));
+     await env.DB.batch(ops);
+   }
+ }
+ if(!messages.length)return {ok:true,accepted:0};
+ let captured=0,pending=0,authorized=0,recognized=0;
  const observations=[];
+ const delivery=[];
  for(const msg of messages){
    const group=groupList.find(x=>x.instance_name===msg.instance&&x.group_jid===msg.group_jid);
    if(!group)continue;
    authorized++;
-   if(msg.urls.length)withLinks++;
+   delivery.push([group.id,Number(msg.urls.length>0),receivedAt,msg.format]);
    if(!msg.urls.length)observations.push([group.id,'—','nenhum_link_na_legenda',msg.format,receivedAt]);
    const entry={...msg,group_id:group.id};
    for(const raw of msg.urls){
@@ -232,6 +261,11 @@ export async function ingestMonitorEvent(env,payload){
  }
  await env.DB.prepare("UPDATE ml_monitor_diagnostics SET messages_with_links=messages_with_links+?,authorized_messages=authorized_messages+?,links_recognized=links_recognized+?,last_authorized_at=CASE WHEN ?>0 THEN ? ELSE last_authorized_at END,last_link_at=CASE WHEN ?>0 THEN ? ELSE last_link_at END WHERE id=1")
    .bind(messages.filter(m=>m.urls.length>0).length,authorized,recognized,authorized,receivedAt,recognized,receivedAt).run();
+ if(delivery.length){
+   await env.DB.batch(delivery.slice(0,25).map(([groupId,hasUrls,stamp,format])=>env.DB.prepare(
+     "INSERT INTO ml_monitor_group_delivery(group_id,received_messages,with_urls,last_received_at,last_format) VALUES(?,1,?,?,?) ON CONFLICT(group_id) DO UPDATE SET received_messages=received_messages+1,with_urls=with_urls+excluded.with_urls,last_received_at=excluded.last_received_at,last_format=excluded.last_format"
+   ).bind(groupId,hasUrls,stamp,format)));
+ }
  if(observations.length){
    const inserts=observations.slice(0,40).map(row=>env.DB.prepare("INSERT INTO ml_monitor_url_observations(group_id,domain,reason,message_format,created_at) VALUES(?,?,?,?,?)").bind(...row));
    await env.DB.batch(inserts);
