@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 import {MONITOR_HTML,MONITOR_CLIENT_JS,MONITOR_CSS} from '../src/ui-whatsapp-monitor.js';
@@ -1292,4 +1292,73 @@ test('Revisão mostra o total verdadeiro mesmo quando só parte dos itens é exi
  assert.match(MONITOR_CLIENT_JS,/reviewTotal/);
  assert.match(MONITOR_CLIENT_JS,/reviews\.length<reviewTotal/);
  assert.match(MONITOR_CLIENT_JS,/Exibindo /);
+});
+
+test('grupo pausado bloqueia novas mensagens, mas revalida e aprova link que já entrou na fila',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ const short='https://meli.la/GRUPOPAUSADO7';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo já autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Promoção antiga: R$ 74 '+short));
+  const group=DB.prepare('SELECT id FROM ml_monitor_groups').first();
+  assert.equal((await monitorState(env)).shortlinks.find(x=>x.status==='pending')?.total,1);
+  await updateMonitorGroup(env,group.id,{enabled:false});
+  const ignored=await ingestMonitorEvent(env,event(GROUP,'Nova oferta '+PRODUCT));
+  assert.equal(ignored.accepted??0,0,'novas mensagens do grupo pausado não são captadas');
+  assert.equal((await monitorState(env)).links.length,0);
+  let requests=0;
+  globalThis.fetch=async url=>{
+   requests++;
+   assert.equal(String(url),short);
+   return new Response(null,{status:302,headers:{location:PRODUCT}});
+  };
+  const retry=await resolveMonitorShortlinks(env,{now:1700000000});
+  assert.equal(retry.resolved,1,'link recebido antes de pausar é aprovado sozinho');
+  assert.equal(requests,1);
+  const state=await monitorState(env);
+  assert.equal(state.links.length,1);
+  assert.equal(state.links[0].source_url,PRODUCT);
+  assert.equal(state.groups[0].enabled,0,'não reativar o grupo');
+  assert.equal(state.shortlinks.find(x=>x.status==='resolved')?.total,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0,'não publicar sem gerar seu próprio link');
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+test('pausar grupo também não bloqueia revalidação manual dos links recebidos anteriormente',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ const short='https://meli.la/REVISEPAUSADO';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta '+short));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Vitrine encontrada, mas botão ausente'").run();
+  const group=DB.prepare('SELECT id FROM ml_monitor_groups').first();
+  const link=DB.prepare('SELECT id FROM ml_monitor_shortlinks').first();
+  await updateMonitorGroup(env,group.id,{enabled:false});
+  globalThis.fetch=async url=>{
+   assert.equal(String(url),short);
+   return new Response(null,{status:302,headers:{location:PRODUCT}});
+  };
+  const result=await reviewMonitorShortlink(env,link.id,{action:'retry'});
+  assert.equal(result.resolved,true);
+  assert.equal(DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
+  assert.equal((await monitorState(env)).counts.captured,1);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+test('revogar autorização impede resolver link, mesmo que ele tenha sido recebido antes',async()=>{
+ const {env,DB}=setup(),oldFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta https://meli.la/REVOGADO123'));
+  const group=DB.prepare('SELECT id FROM ml_monitor_groups').first();
+  DB.prepare('UPDATE ml_monitor_groups SET enabled=0, authorized=0 WHERE id=?').bind(group.id).run();
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;throw Error('não deveria consultar');};
+  assert.deepEqual(await resolveMonitorShortlinks(env,{now:1700000000}),{resolved:0,reviewed:0});
+  assert.equal(calls,0);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review'").run();
+  const id=DB.prepare("SELECT id FROM ml_monitor_shortlinks").first().id;
+  await assert.rejects(reviewMonitorShortlink(env,id,{action:'retry'}),/sem autorização/);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
 });
