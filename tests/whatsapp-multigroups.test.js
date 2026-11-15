@@ -68,7 +68,7 @@ test('configurações existentes do grupo principal do WhatsApp são preservadas
    DB.prepare("UPDATE whatsapp_settings SET instance_name=?,group_jid=?,enabled=1,public_registered=1 WHERE id=1")
      .bind('cr-jornada-afiliados',GROUP_MOTO).run();
    DB.prepare('UPDATE whatsapp_schedule_custom SET interval_minutes=20 WHERE id=1').run();
-   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
      .bind('Produto existente','https://meli.la/AbCde9','Geral',100000,'published',1700000000).run();
    const results=await listManagedWhatsAppGroups(env);
    assert.equal(results[0].id,1);
@@ -216,7 +216,7 @@ test('categoria do Telegram principal e WhatsApp principal tem filtros próprios
    assert.equal((await getWhatsAppState(env)).category,'Peças');
    const now=Math.floor(Date.now()/1000);
    for(const [category,url] of [['Motos','https://meli.la/AbCde1'],['Peças','https://meli.la/AbCde2']])
-     DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+     DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
        .bind('Produto de categoria '+category,url,category,now,'published',now+2).run();
    const result=await runWhatsAppScheduled(env);
    assert.equal(result.status,'sent');
@@ -280,7 +280,7 @@ test('grupo principal e grupo extra no mesmo número não disparam simultaneamen
    DB.prepare('UPDATE whatsapp_settings SET instance_name=?,group_jid=?,enabled=1,public_registered=1,started_at=1 WHERE id=1')
      .bind('cr-jornada-afiliados',GROUP_MOTO).run();
    const now=Math.floor(Date.now()/1000);
-   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at) VALUES(?,?,?,?,?,?)")
+   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,price_cents) VALUES(?,?,?,?,?,?,7990)")
      .bind('Produto do canal principal','https://meli.la/AbCde9','Geral',now,'published',now+2).run();
    const id=await newGroup(env,'Promoções Femininas','Feminino');
    await activate(env,id,GROUP_FEM,'Promoções Femininas','Feminino');
