@@ -1,5 +1,6 @@
 // Mesmo resolvedor de fotos do botão manual, antes do disparo do Cron.
 import {findProductImage} from './images.js';
+import {resolveOfferSource} from './automatic-price.js';
 import {getPrimaryCategory} from './multichannel.js';
 import {cachedProductImage,resolveProductImageWithRetry} from './offer-images.js';
 const TABLE="CREATE TABLE IF NOT EXISTS affiliate_photo_preflight (affiliate_url TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0)";
@@ -26,7 +27,7 @@ export async function prewarmTelegramQueue(env){
    // deve consumir o orçamento de navegador em consultas duplicadas.
    const cached=await cachedProductImage(env,item.affiliate_url);
    const image=cached||await resolveProductImageWithRetry(
-     env,item.affiliate_url,findProductImage,{retryOnMiss:true});
+     env,item.affiliate_url,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});
    if(!image)continue;
    await env.DB.prepare('DELETE FROM affiliate_photo_preflight WHERE affiliate_url=?')
      .bind(item.affiliate_url).run();
