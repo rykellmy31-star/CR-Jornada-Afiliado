@@ -42,12 +42,14 @@ test('Visão Geral preserva navegação e mantém seções fechadas no início',
   assert.match(page,/data-platform="shopee"/);
   assert.match(page,/Telegram cadastrados/);
   assert.match(page,/id="overview-telegram-active"/);
+  assert.match(page,/Links em revisão/);
+  assert.match(page,/id="overview-review-publications"/);
 });
 
 test('Visão Geral vazia retorna zeros, sem escrever nem criar tabelas',async()=>{
   const DB=makeDB();
   const state=await overviewState({DB});
-  assert.deepEqual(state.counts,{captured:0,queued:0,published:0,review:0});
+  assert.deepEqual(state.counts,{captured:0,queued:0,published:0,review:0,review_publications:0,review_total:0});
   assert.equal(state.monitor.enabled,false);
   assert.equal(state.destinations.connection_verified,false);
   assert.equal(DB.writes,0);
@@ -77,7 +79,7 @@ test('Visão Geral soma dados das filas e distingue habilitação de conexão',a
     "FROM logs ORDER BY":[{event:'published',created_at:1730000040}]
   });
   const state=await overviewState({DB});
-  assert.deepEqual(state.counts,{captured:14,queued:6,published:9,review:4});
+  assert.deepEqual(state.counts,{captured:14,queued:6,published:9,review:2,review_publications:2,review_total:4});
   assert.equal(state.monitor.enabled,true);
   assert.equal(state.monitor.authorized_groups,3);
   assert.equal(state.destinations.telegram_configured,3);
@@ -107,6 +109,20 @@ test('Canal cadastrado mas pausado aparece sem alegar que está habilitado',asyn
   const state=await overviewState({DB});
   assert.equal(state.destinations.telegram_configured,1);
   assert.equal(state.destinations.telegram_active,0);
+  assert.equal(DB.writes,0);
+});
+
+
+test('Separar 25 links em revisão de 10 publicações: Visão Geral não soma indevidamente',async()=>{
+  const DB=makeDB(['offers','ml_monitor_shortlinks'],{
+    offers:[{status:'needs_review',total:10}]
+  },{
+    'FROM ml_monitor_shortlinks':{total:25}
+  });
+  const state=await overviewState({DB});
+  assert.equal(state.counts.review,25);
+  assert.equal(state.counts.review_publications,10);
+  assert.equal(state.counts.review_total,35);
   assert.equal(DB.writes,0);
 });
 
