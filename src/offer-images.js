@@ -186,39 +186,37 @@ export async function resolveProductImageWithRetry(env,affiliateUrl,lookup,{retr
  }
 }
 
-export async function resolveProductImage(env, affiliateUrl, lookup) {
-  let cached = null;
-  try { cached = await cachedProductImage(env, affiliateUrl); }
-  catch (error) { console.warn('Cache da foto indisponível:', String(error?.message || error).slice(0, 100)); }
-  if (cached) return cached;
-  let image=null,source=null;
-  try{image=await lookup(affiliateUrl);}
-  catch(error){console.warn('Foto do encurtador indisponível:',String(error?.message||error).slice(0,100));}
+export async function resolveProductImage(env,affiliateUrl,lookup){
+ let cached=null;
+ try{cached=await cachedProductImage(env,affiliateUrl);}catch(error){
+  console.warn('Cache da foto:',String(error?.message||error).slice(0,100));
+ }
+ if(cached)return cached;
+ let source=null,image=null;
+ try{source=await sourcePageForAffiliateImage(env,affiliateUrl);}catch{}
+ if(source){
+  // A imagem do produto original verificado prevalece sobre a vitrine social,
+  // que pode conter recomendações de produtos diferentes.
+  try{image=await cachedProductImage(env,source);}catch{}
   if(!trustedProductImage(image)){
-    source=await sourcePageForAffiliateImage(env,affiliateUrl);
-    if(source){
-      // Reaproveita também o cache da página original, quando existir.
-      try{image=await cachedProductImage(env,source);}
-      catch{}
-      if(!trustedProductImage(image)){
-        try{image=await lookup(source);}
-        catch(error){console.warn('Foto da página do produto indisponível:',String(error?.message||error).slice(0,100));}
-      }
-      if(trustedProductImage(image)){
-        try{await rememberProductImage(env,source,image);}
-        catch{}
-      }
-    }
+   try{image=await lookup(source);}catch(error){
+    console.warn('Foto do anúncio original:',String(error?.message||error).slice(0,100));
+   }
   }
-  if(!trustedProductImage(image)){
-    // Preferir o anúncio original confirmado no lote; caso não exista, a
-    // vitrine de afiliado pode conter a própria foto do produto nos metadados.
-    image=await photoFromRenderedPage(env,source||affiliateUrl);
+  if(!trustedProductImage(image))image=await photoFromRenderedPage(env,source);
+  if(trustedProductImage(image)){
+   try{await rememberProductImage(env,source,image);}catch{}
   }
-  if (image && trustedProductImage(image)) {
-    try { await rememberProductImage(env, affiliateUrl, image); }
-    catch (error) { console.warn('Não foi possível memorizar a foto:', String(error?.message || error).slice(0, 100)); }
-    return image;
+ }else{
+  // O manual sem origem confirmada usa a imagem do próprio link informado.
+  try{image=await lookup(affiliateUrl);}catch(error){
+   console.warn('Foto do link de afiliado:',String(error?.message||error).slice(0,100));
   }
-  return null;
+  if(!trustedProductImage(image))image=await photoFromRenderedPage(env,affiliateUrl);
+ }
+ if(trustedProductImage(image)){
+  try{await rememberProductImage(env,affiliateUrl,image);}catch{}
+  return image;
+ }
+ return null;
 }

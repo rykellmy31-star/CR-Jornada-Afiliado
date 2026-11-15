@@ -193,7 +193,8 @@ async function recordTelegramPhotoRetry(env,offer,error){
  return {status:'awaiting_photo',attempts,next_retry_at:nextAt};
 }
 async function sendOfferWithImage(env, chat, offer, {requirePhoto=false}={}) {
-  const payload = telegramPayload(offer, chat);
+  // Legenda com link e botão, tanto na rotina manual quanto no agendamento.
+  const payload = telegramPayload(offer, chat,Date.now(),{includeLink:true});
   let imageUrl = null;
   try {
     imageUrl = await resolveProductImageWithRetry(env, offer.affiliate_url, findProductImage,{retryOnMiss:requirePhoto});
@@ -206,7 +207,8 @@ async function sendOfferWithImage(env, chat, offer, {requirePhoto=false}={}) {
   if (imageUrl) {
     try {
       const message = await telegramSend(env, chat, {
-        photo: imageUrl, caption: payload.text, parse_mode:payload.parse_mode, reply_markup: payload.reply_markup
+        photo: imageUrl, caption: payload.text.length<=1024?payload.text:telegramPayload(offer,chat).text,
+        parse_mode:payload.parse_mode, reply_markup:payload.reply_markup
       }, 'sendPhoto');
       try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
       catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}

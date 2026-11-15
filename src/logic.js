@@ -107,6 +107,8 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
   const strike=value=>tg?'<s>'+clean(value)+'</s>':'~'+clean(value)+'~';
   const emphasis=value=>tg?'<i>'+clean(value)+'</i>':clean(value);
   const main=[
+    '📣 Publicidade •',
+    '',
     bold(OFFER_HEADLINE),
     '',
     '🛒 '+bold(offer.title)
@@ -127,9 +129,12 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
           ?'Preço público consultado no Mercado Livre'
           :'Preço anunciado em grupo de ofertas';
       }
-      const conditions=promotionDescription(terms).slice(validMoney(terms.price_cents)?1:0);
-      for(const condition of conditions)info.push(clean(condition));
-      if(published.length)info.push(emphasis(published[published.length-1]));
+      // Modelo fixo oficial: sem duplicar preço, pagamentos e observações.
+      if(terms.price_source!=='mercadolivre'){
+        const conditions=promotionDescription(terms).slice(validMoney(terms.price_cents)?1:0);
+        for(const condition of conditions)info.push(clean(condition));
+        if(published.length)info.push(emphasis(published[published.length-1]));
+      }
     }
   }else if(validMoney(offer.price_cents)&&Number.isFinite(Number(offer.created_at))&&
     Number(offer.created_at)>0&&now-Number(offer.created_at)*1000>=0&&
@@ -155,7 +160,8 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
         }
       }
     }
-    if(provenance)info.unshift(emphasis('ℹ️ '+provenance+'. Confira na loja.'));
+    if(provenance==='Preço anunciado em grupo de ofertas')
+      info.unshift(emphasis('ℹ️ '+provenance+'. Confira na loja.'));
   }else{
     main.push('',emphasis('💡 Consulte o preço atualizado na loja.'));
   }
@@ -170,7 +176,7 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
   if(includeLink)footer.push('', '🔗 '+bold('Comprar pelo meu link:'),tg?safeHtml(link):link);
   // Caption do Telegram: nunca cortar um HTML <b>/<s> ou uma entidade no meio.
   // WhatsApp: nunca cortar o link completo para caber numa legenda.
-  const limit=maxLength??(tg?(includeLink?4096:1000):1024);
+  const limit=maxLength??(tg?(includeLink?1024:1000):1024);
   const build=()=>[...main,...(info.length?['',...info]:[]),...footer].join('\n');
   let output=build();
   while(output.length>limit&&info.length) {
