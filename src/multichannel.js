@@ -1,7 +1,7 @@
 import { normalizeOffer, shouldSend, localTimeParts, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
 import { findProductImage } from './images.js';
-import { resolveProductImage,rememberTelegramSentPhoto } from './offer-images.js';
+import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 
@@ -341,7 +341,7 @@ export async function requeueChannelOffer(env,id,offerId){
 async function sendOfferWithImage(env,token,chat,offer,{requirePhoto=false}={}){
   const payload=telegramPayload(offer,chat);
   let photo=null;
-  try{photo=await resolveProductImage(env,offer.affiliate_url,findProductImage);}
+  try{photo=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,{retryOnMiss:requirePhoto});}
   catch(err){console.warn('Imagem indisponível para novo canal:',offer.id,String(err?.message||'').slice(0,80));}
   if(requirePhoto&&!photo)
     throw Object.assign(new Error('Foto real do produto indisponível'),{code:'PHOTO_NOT_READY'});
