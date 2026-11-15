@@ -822,7 +822,8 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  const oldCouponReviews=(await env.DB.prepare(
   "SELECT s.id,s.group_id,s.short_url,s.message_hint,s.reason FROM ml_monitor_shortlinks s "+
   "JOIN ml_monitor_groups g ON g.id=s.group_id WHERE g.authorized=1 "+
-  "AND s.status='review' AND s.reason LIKE 'Redirecionamento para domínio não verificado%' "+
+  "AND s.status='review' AND (s.reason LIKE 'Redirecionamento para domínio não verificado%' "+
+  "OR s.reason='Destino fora dos domínios permitidos do Mercado Livre') "+
   "AND s.message_hint LIKE '%cupom%' ORDER BY s.id LIMIT 80"
  ).all()).results;
  for(const item of oldCouponReviews){
