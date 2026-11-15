@@ -302,6 +302,7 @@ export async function monitorState(env){
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
    ignored_coupon_links:Number(ignoredCoupons?.total||0),
+   browser_binding_available:typeof env?.BROWSER?.quickAction==='function',
    worker_heartbeat:workerHeartbeat||{},
    browser_usage:{used:browserUsage?.day_key===new Date().toISOString().slice(0,10)
      ?Number(browserUsage.daily_count||0):0,
@@ -391,7 +392,7 @@ async function recoverCaptionFromEvolution(env,msg){
   const res=await fetch(url,{method:'POST',redirect:'manual',
    headers:{apikey:String(env.EVOLUTION_API_KEY).trim(),accept:'application/json','content-type':'application/json'},
    body:JSON.stringify({where:{key:{remoteJid:msg.group_jid,id:msg.message_id}},limit:5}),
-   signal:AbortSignal.timeout(4500)});
+   signal:AbortSignal.timeout(7000)});
   if(!res.ok||Number(res.headers.get('content-length')||0)>1048576)return null;
   const reader=res.body?.getReader();if(!reader)return null;const chunks=[];let bytes=0;
   try{
@@ -544,6 +545,8 @@ export async function reviewMonitorShortlink(env,id,body){
   "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=? WHERE id=? AND status='review'"
  ).bind(action==='approve'?'Produto associado por confirmação manual':null,n).run();
  if(result.meta?.changes!==1)throw fail('O link foi alterado durante a revisão. Atualize a lista.',409);
+ await env.DB.prepare('DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?').bind(n).run();
+ await env.DB.prepare('DELETE FROM ml_monitor_browser_attempts WHERE shortlink_id=?').bind(n).run();
  return {ok:true,resolved:true,manual:action==='approve',product_id:candidate.product_id};
 }
 export async function updateMonitorLinkCategory(env,id,body){
@@ -849,7 +852,9 @@ export async function redirectSource(value){
 // Falhas HTTP 403/429 usam backoff para não forçar o Mercado Livre.
 // O bloqueio em D1 evita consultas duplicadas por acionamentos simultâneos.
 export function monitorRetryDelaySeconds(attempts){
- return attempts<=8?30:attempts<=16?300:1800;
+ // Links que ainda podem revelar um produto voltam em até 60 segundos.
+ // Desacelerar 403/429 separadamente para respeitar o Mercado Livre.
+ return attempts<=8?30:60;
 }
 export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  await ensureMonitor(env);
@@ -863,13 +868,19 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  // Elas já podem ser tratadas pelo Browser Run atualizado. Antecipar a fila
  // antiga sem mudar status, sem apagar registros e sem habilitar grupos pausados.
  await env.DB.prepare(
-  "UPDATE ml_monitor_retry_schedule SET next_retry_at=? WHERE "+
-  "next_retry_at>? AND shortlink_id IN ("+
+  "UPDATE ml_monitor_retry_schedule SET next_retry_at=? "+
+  "WHERE next_retry_at>? AND last_attempt_at<=? AND shortlink_id IN ("+
   "SELECT s.id FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
-  "WHERE g.authorized=1 AND s.status='review' "+
-  "AND s.reason LIKE 'Vitrine encontrada, mas o botão do produto principal%'"+
-  ")"
- ).bind(at,at+120).run();
+  "WHERE g.authorized=1 AND s.status='review' AND ("+
+  "s.reason IS NULL OR ("+
+  "s.reason NOT LIKE 'Redirecionamento para domínio não verificado%' AND "+
+  "s.reason NOT LIKE 'Redirecionamento circular%' AND "+
+  "s.reason NOT LIKE 'Produto associado por confirmação manual%' AND "+
+  "s.reason NOT LIKE '%(429)%' AND s.reason NOT LIKE '%(403)%' AND "+
+  "s.reason NOT LIKE '%solicitou login%' "+
+  "))"
+  +")"
+ ).bind(at,at+60,at-60).run();
  let ignoredFromBacklog=0;
  // Recupera os cupons antigos parados em "revisão manual". Não exclui URL
  // externa genérica nem ofertas que apenas anunciam desconto com cupom.
@@ -966,8 +977,9 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
    // As demais falhas não viram produto; são reavaliadas com backoff.
    const retryable=!['external','loop'].includes(result.kind);
    const attempts=tries+1;
+   const throttled=result.kind==='temporary'&&/(?:403|429|limitou|negou)/i.test(result.reason||'');
    const delay=!retryable?86400:
-    (result.kind==='showcase'?30:result.kind==='auth'?300:monitorRetryDelaySeconds(attempts));
+    (throttled||result.kind==='auth'?300:monitorRetryDelaySeconds(attempts));
    await env.DB.prepare(
     "UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason=? "+
     "WHERE id=? AND status IN ('pending','review')"
