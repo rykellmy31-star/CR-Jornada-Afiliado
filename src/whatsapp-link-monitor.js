@@ -832,7 +832,11 @@ export async function browserFeaturedProduct(env,socialUrl){
   const identified=new Map();
   for(const section of sections){
    if(!['.rl-card-featured-wrapper a[href]','[class*="card-featured"] a[href]'].includes(section?.selector))continue;
-   for(const element of (section?.results||[]).slice(0,25)){
+   // Cloudflare /scrape retorna results como OBJETO por selector;
+   // alguns modos retornam array. Suportar ambos sem lançar TypeError.
+   const elements=Array.isArray(section?.results)?section.results:
+     (section?.results&&typeof section.results==='object'?[section.results]:[]);
+   for(const element of elements.slice(0,25)){
     if(!/ir\s+para\s+(?:o\s+)?produto/i.test(String(element?.text||'')))continue;
     const href=(element.attributes||[]).find(x=>x.name==='href')?.value;
     let absolute;try{absolute=new URL(href,u.href).href;}catch{continue;}
