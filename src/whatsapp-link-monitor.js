@@ -648,7 +648,7 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
  if(!state?.enabled)return {skipped:'disabled'};
  const at=Number.isSafeInteger(now)&&now>0?now:epoch();
  const query=
-  "SELECT s.*,g.instance_name,g.group_jid,rs.next_retry_at,rs.lease_until "+
+  "SELECT s.*,g.instance_name,g.group_jid,rs.next_retry_at,rs.lease_until,rs.auto_attempts "+
   "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
   "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
   "WHERE g.enabled=1 AND g.authorized=1 "+
