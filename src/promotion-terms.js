@@ -75,7 +75,8 @@ export function safePromotionTerms(value){
     !['unspecified','pix','pix_only','card'].includes(t.payment_mode)||
     typeof t.installments_no_interest!=='boolean'||
     (t.coupon_required!==undefined&&typeof t.coupon_required!=='boolean')||
-    (t.coupon_code!==undefined&&t.coupon_code!==null&&!/^[A-Za-z0-9][A-Za-z0-9_-]{3,31}$/.test(t.coupon_code)))return null;
+    (t.coupon_code!==undefined&&t.coupon_code!==null&&!/^[A-Za-z0-9][A-Za-z0-9_-]{3,31}$/.test(t.coupon_code))||
+    (t.price_source!==undefined&&t.price_source!=='mercadolivre'))return null;
  return t;
 }
 export function promotionDescription(value){
@@ -83,7 +84,8 @@ export function promotionDescription(value){
  if(!t)return [];
  const out=[];
  if(real(t.price_cents)){
-  if(real(t.old_price_cents)&&t.old_price_cents>t.price_cents)
+  if(t.price_source==='mercadolivre')out.push('🏬 Preço público consultado no Mercado Livre: '+brl(t.price_cents));
+  else if(real(t.old_price_cents)&&t.old_price_cents>t.price_cents)
    out.push('🏷️ Oferta anunciada no grupo: de '+brl(t.old_price_cents)+' por '+brl(t.price_cents));
   else out.push('💰 Preço anunciado no grupo: '+brl(t.price_cents));
  }
@@ -104,6 +106,10 @@ export function promotionDescription(value){
 export function publishedPromotionLines(offer,now=Date.now()){
  const captured=Number(offer?.promo_captured_at);
  if(!Number.isSafeInteger(captured)||captured<=0||now-captured*1000<0||now-captured*1000>MAX_AGE_MS)return null;
- const lines=promotionDescription(offer?.promo_terms_json);
- return lines.length?[...lines,'ℹ️ Condições informadas por terceiros. Confirme preço e disponibilidade na loja.']:null;
+ const terms=safePromotionTerms(offer?.promo_terms_json);
+ const lines=promotionDescription(terms);
+ const note=terms?.price_source==='mercadolivre'
+  ?'ℹ️ Valor público consultado no Mercado Livre; cupom, frete ou Pix podem mudar o preço. Confirme na loja.'
+  :'ℹ️ Condições informadas por terceiros. Confirme preço e disponibilidade na loja.';
+ return lines.length?[...lines,note]:null;
 }
