@@ -1,6 +1,6 @@
 import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch} from './link-batches.js';
-import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks} from './whatsapp-link-monitor.js';
+import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices} from './whatsapp-link-monitor.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
@@ -603,8 +603,10 @@ export default {
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     start(runShopeeScheduled,'Shopee e categorias',true);
-    if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24)
+    if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24){
       ctx.waitUntil(resolveMonitorShortlinks(env).catch(error=>console.error('Resolver links do monitor:',String(error?.message||error).slice(0,120))));
+      ctx.waitUntil(recoverMissingMonitorPrices(env,{allowEvolution:true}).catch(error=>console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
+    }
   }
 };
 export { runScheduled, router };
