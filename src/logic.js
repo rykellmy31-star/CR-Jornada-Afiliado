@@ -1,5 +1,5 @@
 import { couponDescription } from './coupons.js';
-import {publishedPromotionLines, safePromotionTerms, promotionDescription, MAX_AGE_MS} from './promotion-terms.js';
+import {publishedPromotionLines, safePromotionTerms, promotionDescription, moneyCents, MAX_AGE_MS} from './promotion-terms.js';
 export const BRAZIL_TIMEZONE = 'America/Bahia';
 
 export function validateAffiliateUrl(input) {
@@ -95,6 +95,17 @@ export function composeOfferMessage(offer, now = Date.now()) {
 // a URL de comissão nem o estado das filas. As chamadas são comerciais,
 // mas não inventam datas-limite ou disponibilidade.
 const OFFER_HEADLINE='✨ CONFIRA ESTA OFERTA!';
+// Alguns anúncios capturados trazem todo o texto "De / Por / Compre aqui"
+// dentro do TÍTULO. Separamos apenas um padrão estrito, sem alterar o link.
+export function cleanOfferTitleWithPrices(value){
+  const original=String(value??'').trim();
+  const match=original.match(/\s+De\s*:?\s*R\$\s*(\d{1,6}(?:\.\d{3})*(?:,\d{2})?)\s+Por\s*:?\s*R\$\s*(\d{1,6}(?:\.\d{3})*(?:,\d{2})?)(?:\s*\(\s*\d{1,2}%\s*OFF\s*\))?(?:\s*Compre\s+Aqui\s*:?)?\s*$/i);
+  if(!match)return {title:original,old:null,price:null};
+  const title=original.slice(0,match.index).trim();
+  const old=moneyCents(match[1]),price=moneyCents(match[2]);
+  if(title.length<5||!old||!price||old<=price)return {title:original,old:null,price:null};
+  return {title,old,price};
+}
 const safeHtml=value=>String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const safeWa=value=>String(value??'').replace(/[*_~\x60]/g,'').replace(/[\u0000-\u001f]/g,' ').trim();
 export function escapeTelegramHtml(value){return safeHtml(value);}
@@ -106,12 +117,13 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
   const bold=value=>tg?'<b>'+clean(value)+'</b>':'*'+clean(value)+'*';
   const strike=value=>tg?'<s>'+clean(value)+'</s>':'~'+clean(value)+'~';
   const emphasis=value=>tg?'<i>'+clean(value)+'</i>':clean(value);
+  const embedded=cleanOfferTitleWithPrices(offer.title);
   const main=[
     '📣 Publicidade •',
     '',
     bold(OFFER_HEADLINE),
     '',
-    '🛒 '+bold(offer.title)
+    '🛒 '+bold(embedded.title)
   ];
   const info=[];
   let old=null,price=null,provenance=null;
@@ -143,6 +155,14 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
     if(validMoney(offer.old_price_cents)&&offer.old_price_cents>price)old=offer.old_price_cents;
     provenance='Preço informado no cadastro da oferta';
   }
+  if(price===null&&!offer.promo_terms_json&&platform==='mercadolivre'&&
+     embedded.price&&embedded.old&&Number.isSafeInteger(Number(offer.created_at))&&
+     now-Number(offer.created_at)*1000>=0&&now-Number(offer.created_at)*1000<=MAX_AGE_MS){
+    // Valor explícito na mensagem original do grupo. Não afirmar verificação
+    // oficial do site, nem mostrar números retirados de anúncio antigo.
+    price=embedded.price;old=embedded.old;
+    provenance='Preço anunciado no texto original';
+  }
   if(price!==null){
     main.push('');
     main.push('❌ De: '+(old!==null?strike(formatBRL(old)):'não informado no anúncio'));
@@ -163,7 +183,7 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
         }
       }
     }
-    if(provenance==='Preço anunciado em grupo de ofertas')
+    if(provenance==='Preço anunciado em grupo de ofertas'||provenance==='Preço anunciado no texto original')
       info.unshift(emphasis('ℹ️ '+provenance+'. Confira na loja.'));
   }else{
     main.push('',emphasis('💡 Consulte o preço atualizado na loja.'));
