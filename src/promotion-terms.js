@@ -22,7 +22,7 @@ const real=cents=>Number.isSafeInteger(cents)&&cents>0&&cents<=99999999;
 const brl=value=>(value/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}).replace(/\u00a0/g,' ');
 export function extractPromotionTerms(input){
  if(typeof input!=='string')return null;
- const text=input.replace(/https:\/\/[^\s<>"']+/gi,' ').replace(/\s+/g,' ').slice(0,600);
+ const text=input.replace(/https:\/\/[^\s<>"']+/gi,' ').replace(/\s+/g,' ').slice(0,800);
  if(!text.trim())return null;
  const pair=text.match(rDePor),by=text.match(rPor),pixPrice=text.match(rPix);
  const couponMatch=text.match(rWithCoupon)||text.match(rCouponAfter);
