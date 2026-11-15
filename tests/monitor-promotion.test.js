@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {extractPromotionTerms,promotionDescription,publishedPromotionLines,safePromotionTerms} from '../src/promotion-terms.js';
 import {composeOfferMessage} from '../src/logic.js';
-import {addMonitorGroup,saveMonitorSettings,ingestMonitorEvent,monitorState,prepareMonitorBatch,resolveMonitorShortlinks} from '../src/whatsapp-link-monitor.js';
+import {addMonitorGroup,saveMonitorSettings,ingestMonitorEvent,monitorState,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices} from '../src/whatsapp-link-monitor.js';
 import {importLinkBatch} from '../src/link-batches.js';
 const PRODUCT_URL='https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678';
 function fixture(){
@@ -153,5 +153,74 @@ test('link encurtado em foto longa mantém preço e cupom até resolver produto'
   assert.equal(state.links[0].last_seen_price_cents,19999);
   assert.match(state.links[0].promotion.join(' '),/SEMPREOFERTAS/);
   assert.equal(JSON.parse(DB.prepare('SELECT last_seen_deal_json FROM ml_monitor_product_meta').first().last_seen_deal_json).coupon_required,true);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+test('Polly Pocket da captura: reconhece De: e Por: com emojis e preço antigo',()=>{
+ const caption='🧸 Polly Pocket Conjunto Compacto Ursinhos | 🧸 MUNDO DE BOLSO | Mattel 💥'+
+  '\n💰 De: R$ 149,99\n🔥 Por: R$ 91,10\n🛒 Link para Comprar: https://melila.me/AAJLUPqiqmsu'+
+  '\n🚀 Participe do grupo: https://chat.whatsapp.com/DUTTeYM7qcvHatrqFklI4m';
+ const offer=extractPromotionTerms(caption);
+ assert.equal(offer.price_cents,9110);
+ assert.equal(offer.old_price_cents,14999);
+ assert.equal(offer.coupon_required,false);
+ assert.match(promotionDescription(offer).join(' '),/de R\$ 149,99 por R\$ 91,10/);
+});
+test('corrige automaticamente preço faltando de produto já captado sem recadastrar',async()=>{
+ const {env,DB}=fixture(),originalFetch=globalThis.fetch;
+ const short='https://melila.me/AAJLUPqiqmsu',priceCaption='🧸 Polly Pocket\n💰 De: R$ 149,99\n🔥 Por: R$ 91,10\n'+short;
+ try{
+  await addMonitorGroup(env,{instance_name:'cr-jornada-afiliados',group_jid:'120363000111222333@g.us',group_name:'ACHADINHOS DA INTERNET',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,{event:'messages.upsert',instance:'cr-jornada-afiliados',data:{
+   key:{remoteJid:'120363000111222333@g.us',fromMe:false,id:'POLLY-PHOTO-01'},
+   message:{imageMessage:{caption:priceCaption}}}});
+  globalThis.fetch=async url=>{
+   assert.equal(String(url),short);
+   return new Response('',{status:302,headers:{location:PRODUCT_URL}});
+  };
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  const before=await monitorState(env);
+  assert.equal(before.links[0].last_seen_price_cents,9110);
+  DB.prepare('UPDATE ml_monitor_product_meta SET last_seen_price_cents=NULL,last_seen_deal_json=NULL').run();
+  const restored=await monitorState(env);
+  assert.equal(restored.links[0].last_seen_price_cents,9110);
+  assert.match(restored.links[0].promotion.join(' '),/de R\$ 149,99 por R\$ 91,10/);
+  assert.equal(restored.links.length,1);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('preço ausente sem legenda salva: recupera somente mensagem original na Evolution',async()=>{
+ const {env,DB}=fixture(),oldFetch=globalThis.fetch;
+ const short='https://melila.me/AAJLUPqiqmsu',caption='Polly Pocket\nDe: R$149,99 🔥 Por: R$91,10\n'+short;
+ env.EVOLUTION_API_URL='https://evolution.crjornada.com';
+ env.EVOLUTION_API_KEY='test-key-example';
+ try{
+  await addMonitorGroup(env,{instance_name:'cr-jornada-afiliados',group_jid:'120363000111222333@g.us',group_name:'ACHADINHOS DA INTERNET',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,{event:'messages.upsert',instance:'cr-jornada-afiliados',data:{
+   key:{remoteJid:'120363000111222333@g.us',fromMe:false,id:'POLLY-RECOVER-01'},
+   message:{imageMessage:{caption}}}});
+  globalThis.fetch=async url=>new Response('',{status:302,headers:{location:PRODUCT_URL}});
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  DB.prepare("UPDATE ml_monitor_shortlinks SET message_hint='Polly Pocket'").run();
+  DB.prepare("UPDATE ml_monitor_product_meta SET last_seen_price_cents=NULL,last_seen_deal_json=NULL").run();
+  let calls=0;
+  globalThis.fetch=async (url,options)=>{
+   calls++;
+   assert.match(String(url),/\/chat\/findMessages\/cr-jornada-afiliados$/);
+   assert.equal(JSON.parse(options.body).where.key.id,'POLLY-RECOVER-01');
+   return new Response(JSON.stringify({messages:{records:[{
+    key:{remoteJid:'120363000111222333@g.us',id:'POLLY-RECOVER-01',fromMe:false},
+    message:{imageMessage:{caption}}
+   }]}}),{status:200,headers:{'content-type':'application/json'}});
+  };
+  const result=await recoverMissingMonitorPrices(env,{allowEvolution:true});
+  assert.equal(result.recovered,1);
+  assert.equal(calls,1);
+  const state=await monitorState(env);
+  assert.equal(state.links[0].last_seen_price_cents,9110);
+  assert.match(state.links[0].promotion.join(' '),/de R\$ 149,99 por R\$ 91,10/);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
 });
