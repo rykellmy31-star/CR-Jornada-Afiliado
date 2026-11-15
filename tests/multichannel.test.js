@@ -34,14 +34,17 @@ const config={telegram_chat_id:'@eletronicoscr',name:'Achados Tech',category:'El
   interval_minutes:20,max_daily:10,start_hour:0,end_hour:24};
 const newOffer=(url,category='Eletrônicos')=>({title:'Fone Bluetooth Promoção',affiliate_url:url,category,owner_confirmation:true,price:'69.90'});
 const realFetch=globalThis.fetch;
-function fakeTelegram(sent){
+function fakeTelegram(sent,{photoReady=false}={}){
   globalThis.fetch=async(url,init={})=>{
     const u=String(url);
     if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
     if(u.includes('/getMe'))return Response.json({ok:true,result:{id:987654321,is_bot:true,username:'testbot'}});
     if(u.includes('/getChatMember?'))return Response.json({ok:true,result:{status:'administrator',can_post_messages:true}});
-    if(u.startsWith('https://meli.la/'))return new Response('<html></html>',{headers:{'content-type':'text/html'}});
-    if(u.includes('/sendMessage')){
+    if(u.startsWith('https://meli.la/'))return new Response(photoReady?
+      '<meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_99999-MLB-P.webp">':'<html></html>',{headers:{'content-type':'text/html'}});
+    if(u==='https://http2.mlstatic.com/D_NQ_NP_99999-MLB-F.jpg'&&init.method==='HEAD')
+      return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'650000'}});
+    if(u.includes('/sendMessage')||u.includes('/sendPhoto')){
       sent.push({url:u,body:JSON.parse(init.body)});
       return Response.json({ok:true,result:{message_id:200+sent.length}});
     }
@@ -110,7 +113,7 @@ test('token exclusivo é validado, criptografado no D1 e nunca exposto no estado
 test('scheduler publica ofertas distintas em canais distintos com bots e intervalos independentes',async()=>{
   const DB=dbMock(),env=envFor(DB),sent=[];
   try{
-    fakeTelegram(sent);
+    fakeTelegram(sent,{photoReady:true});
     const [tech,moda]=await channels(env);
     await updateTelegramChannel(env,tech,config);
     await updateTelegramChannel(env,moda,{...config,name:'Achados Moda',category:'Moda',telegram_chat_id:'@modacr',interval_minutes:45});
