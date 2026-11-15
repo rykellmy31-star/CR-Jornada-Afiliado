@@ -3,7 +3,7 @@ const MAX_HTML_BYTES = 1_000_000;
 const MAX_PHOTO_BYTES = 5_000_000;
 // Redirecionamentos oficiais do meli.la podem atravessar /sec/ e a página do anúncio.
 const ALLOWED_PAGES = new Set([
-  'meli.la', 'mercadolivre.com', 'www.mercadolivre.com',
+  'meli.la', 'meli.promo', 'mercadolivre.com', 'www.mercadolivre.com',
   'mercadolivre.com.br', 'www.mercadolivre.com.br',
   'produto.mercadolivre.com.br', 'm.mercadolivre.com.br'
 ]);
@@ -139,7 +139,11 @@ async function candidateExists(url, fetcher) {
     // Alguns servidores de mídia não implementam HEAD. Verificamos MIME e tamanho
     // com GET parcial, sem baixar o arquivo inteiro no Worker.
     // Algumas CDNs negam HEAD (403) embora aceitem GET com Range.
-    if (![400, 403, 405, 501].includes(head.status) && !(head.ok && !head.headers.get('content-type'))) return false;
+    // A CDN pode bloquear HEAD mesmo quando GET parcial serve um JPEG válido.
+    // Consulta o conteúdo apenas nas respostas ambíguas, sempre limitando bytes e MIME.
+    if (![400, 403, 404, 405, 406, 501].includes(head.status) &&
+        !(head.ok && !(head.headers.get('content-type')||'').startsWith('image/jpeg')) &&
+        !(head.ok && !head.headers.get('content-type'))) return false;
     const probe = await fetcher(url, {
       method: 'GET', headers: { range: 'bytes=0-1023' },
       redirect: 'manual', signal: AbortSignal.timeout(4500)
@@ -150,6 +154,9 @@ async function candidateExists(url, fetcher) {
   } catch { return false; }
 }
 
+export async function validatedProductPhoto(url,fetcher=fetch){
+  return acceptedPhoto(url,fetcher);
+}
 async function acceptedPhoto(url, fetcher) {
   for (const candidate of highQualityPhotoCandidates(url)) {
     if (await candidateExists(candidate, fetcher)) return candidate;
