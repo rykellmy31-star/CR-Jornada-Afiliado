@@ -3,7 +3,7 @@ import {readTelegramForecast} from './publication-forecast.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
-import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,resolveOfferSource} from './automatic-price.js';
 
 // Tabelas ADITIVAS: o canal 1 continua usando settings/offers/offer_coupons/logs.
 // Canais adicionais nunca recebem automaticamente ofertas do canal principal.
@@ -341,7 +341,7 @@ export async function requeueChannelOffer(env,id,offerId){
 async function sendOfferWithImage(env,token,chat,offer,{requirePhoto=false}={}){
   const payload=telegramPayload(offer,chat);
   let photo=null;
-  try{photo=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,{retryOnMiss:requirePhoto});}
+  try{photo=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,{retryOnMiss:requirePhoto,sourceLookup:requirePhoto?resolveOfferSource:null});}
   catch(err){console.warn('Imagem indisponível para novo canal:',offer.id,String(err?.message||'').slice(0,80));}
   if(requirePhoto&&!photo)
     throw Object.assign(new Error('Foto real do produto indisponível'),{code:'PHOTO_NOT_READY'});

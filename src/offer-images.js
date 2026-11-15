@@ -57,7 +57,7 @@ export async function telegramSentPhoto(env,affiliateUrl){
  ).bind(affiliateUrl,Math.floor(Date.now()/1000)-CACHE_LIFETIME).first();
  return trustedProductImage(data?.image_url)?data.image_url:null;
 }
-export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup,{retryOnMiss=false}={}){
+export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup,{retryOnMiss=false,sourceLookup=null}={}){
  // O mesmo produto enviado COM FOTO pelo Telegram deve ir COM A MESMA FOTO
  // no WhatsApp, sem nova consulta ao meli.la. Para ofertas somente WhatsApp,
  // continuam as fontes de foto do Mercado Livre e o cache original.
@@ -68,7 +68,7 @@ export async function sharedWhatsAppProductPhoto(env,affiliateUrl,lookup,{retryO
   console.warn('Foto enviada no Telegram indisponível:',String(error?.message||error).slice(0,95));
  }
  return retryOnMiss
-  ?await resolveProductImageWithRetry(env,affiliateUrl,lookup,{retryOnMiss:true})
+  ?await resolveProductImageWithRetry(env,affiliateUrl,lookup,{retryOnMiss:true,sourceLookup})
   :await resolveProductImage(env,affiliateUrl,lookup);
 }
 
@@ -164,13 +164,24 @@ async function photoFromRenderedPage(env,url){
 // O automático usa as mesmas fontes do botão Publicar, mas uma falha
 // transitória na primeira leitura não deve adiar um produto que já tem foto.
 // Não relaxa a validação da CDN nem altera a URL do produto.
-export async function resolveProductImageWithRetry(env,affiliateUrl,lookup,{retryOnMiss=false}={}){
+export async function resolveProductImageWithRetry(env,affiliateUrl,lookup,{retryOnMiss=false,sourceLookup=null}={}){
  const first=await resolveProductImage(env,affiliateUrl,lookup);
  if(first||!retryOnMiss)return first;
  // Reconsulta a página original do anúncio primeiro, caso a vitrine tenha
  // retornado HTML incompleto na primeira solicitação.
  let original=null;
  try{original=await sourcePageForAffiliateImage(env,affiliateUrl);}catch{}
+ // O meli.la pode abrir uma vitrine sem imagem. Quando isso acontece,
+ // localiza o produto oficial e guarda a origem vinculada à comissão,
+ // para buscar a foto certa antes de adiar a publicação.
+ if(!original&&typeof sourceLookup==='function'){
+  try{
+   await sourceLookup(env,affiliateUrl);
+   original=await sourcePageForAffiliateImage(env,affiliateUrl);
+  }catch(error){
+   console.warn('Origem da foto automática não confirmada:',String(error?.message||error).slice(0,100));
+  }
+ }
  if(original){
   try{
    const recovered=await lookup(original);

@@ -353,3 +353,63 @@ test('agendador reutiliza o preço e a foto do botão manual mesmo com site bloq
   assert.equal(DB.prepare('SELECT status FROM whatsapp_deliveries').first().status,'sent');
  }finally{globalThis.fetch=native;DB.close();}
 });
+
+
+test('Cron recupera imagem do produto oficial sem lote e publica no Telegram e no WhatsApp',async()=>{
+ const {DB,env}=setup(),old=globalThis.fetch;
+ let telegram=0,whatsapp=0,whatsappText=0;
+ try{
+  // Oferta capturada de forma automática: não há associação prévia do lote.
+  DB.prepare('DELETE FROM ml_link_batch_items').run();
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===EVOLUTION+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
+    return Response.json([{id:GROUP,subject:'Achadinhos'}]);
+   if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
+    return Response.json({ok:true,result:{type:'channel'}});
+   if(u===SHORT)
+    return new Response('<html><a href="'+SOURCE+'">Ver produto original</a></html>',
+     {headers:{'content-type':'text/html'}});
+   if(u===SOURCE)
+    return new Response('<html><meta property="og:image" content="'+PHOTO_PREVIEW+'"></html>',
+     {headers:{'content-type':'text/html'}});
+   if(u===PHOTO_LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'240000'}});
+   if(u==='https://api.telegram.org/botSIMULATED_TELEGRAM_TOKEN/sendPhoto'){
+    const payload=JSON.parse(opts.body);
+    assert.equal(payload.photo,PHOTO_LARGE);
+    assert.match(payload.caption,/https:\/\/meli\.la\/2ESKGQw/);
+    telegram++;
+    return Response.json({ok:true,result:{message_id:9901}});
+   }
+   if(u===EVOLUTION+'/message/sendMedia/'+INSTANCE){
+    const payload=JSON.parse(opts.body);
+    assert.equal(payload.media,PHOTO_LARGE);
+    assert.equal(payload.number,GROUP);
+    whatsapp++;
+    return Response.json({key:{id:'PHOTO_RECOVERED_AUTO'}});
+   }
+   if(u===EVOLUTION+'/message/sendText/'+INSTANCE){
+    whatsappText++;throw Error('Não enviar texto no automático');
+   }
+   throw Error('Endpoint inesperado: '+u);
+  };
+  await setupWhatsApp(env);
+  DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=1,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents) VALUES(?,?,?,'ready',?,7990)")
+   .bind('Kit 3 Perfumes Cebolinha Jequiti',SHORT,'Geral',Math.floor(Date.now()/1000)).run();
+  const sent=await runScheduled(env);
+  assert.equal(sent.status,'published');
+  assert.equal(sent.format,'photo');
+  assert.equal(telegram,1);
+  assert.equal(whatsapp,1);
+  assert.equal(whatsappText,0);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
+  const verified=DB.prepare('SELECT source_url FROM affiliate_verified_sources WHERE affiliate_url=?')
+   .bind(SHORT).first();
+  assert.equal(verified?.source_url,SOURCE);
+  assert.equal(await cachedProductImage(env,SHORT),PHOTO_LARGE);
+  assert.equal(DB.prepare('SELECT status FROM whatsapp_deliveries').first().status,'sent');
+  assert.deepEqual(await runWhatsAppScheduled(env),{skipped:'empty'});
+ }finally{globalThis.fetch=old;DB.close();}
+});

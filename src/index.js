@@ -5,6 +5,7 @@ import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
+import { resolveOfferSource } from './automatic-price.js';
 import {prewarmTelegramQueue} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
@@ -195,7 +196,7 @@ async function sendOfferWithImage(env, chat, offer, {requirePhoto=false}={}) {
   const payload = telegramPayload(offer, chat,Date.now(),{includeLink:true});
   let imageUrl = null;
   try {
-    imageUrl = await resolveProductImageWithRetry(env, offer.affiliate_url, findProductImage,{retryOnMiss:requirePhoto});
+    imageUrl = await resolveProductImageWithRetry(env, offer.affiliate_url, findProductImage,{retryOnMiss:requirePhoto,sourceLookup:requirePhoto?resolveOfferSource:null});
   } catch (error) {
     // Metadados indisponíveis não devem impedir a publicação do link validado.
     console.warn('Imagem indisponível para a oferta:', offer.id, String(error?.message || error).slice(0, 100));

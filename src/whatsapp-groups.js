@@ -2,7 +2,7 @@ import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
-import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,resolveOfferSource} from './automatic-price.js';
 import { categoryMatches,normalizeChannelCategory } from './multichannel.js';
 import { listWhatsAppGroups,connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,evolutionOrigin,ensureWhatsAppTables } from './whatsapp.js';
 
@@ -357,7 +357,7 @@ export async function runManagedWhatsAppScheduled(env){
    }
    // Só consome intervalo e compartilha o número quando a imagem estiver pronta.
    let image=null;
-   try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true});}
+   try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});}
    catch(err){console.warn('Foto automática do grupo:',String(err?.message||err).slice(0,90));}
    if(!image){
      await env.DB.prepare(
