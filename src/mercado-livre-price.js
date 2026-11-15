@@ -49,16 +49,53 @@ function typedProduct(item){
  const types=Array.isArray(item?.['@type'])?item['@type']:[item?.['@type']];
  return types.some(x=>typeof x==='string'&&/(?:^|\/)Product$/.test(x));
 }
+function detailsFromOffer(offer,product){
+ if(!offer||typeof offer!=='object'||(offer.priceCurrency||'').toUpperCase()!=='BRL')return null;
+ const current=parseSiteMoney(offer.price);
+ if(!current)return null;
+ // Só exibe "De" quando é explicitamente um preço antigo DO MESMO anúncio.
+ const specs=[...(Array.isArray(offer.priceSpecification)?offer.priceSpecification:[offer.priceSpecification])]
+  .filter(s=>s&&typeof s==='object');
+ const oldCandidates=[];
+ for(const spec of specs){
+  if(spec.priceCurrency&&String(spec.priceCurrency).toUpperCase()!=='BRL')continue;
+  if(!/^(?:https?:\\/\\/schema\\.org\\/)?(?:strikethroughprice|listprice|regularprice|originalprice|wasprice)$/i
+   .test(String(spec.priceType||'')))continue;
+  const previous=parseSiteMoney(spec.price);
+  if(previous&&previous>current)oldCandidates.push(previous);
+ }
+ for(const candidate of [offer.originalPrice,offer.oldPrice,offer.listPrice,product?.originalPrice,product?.oldPrice]){
+  const previous=parseSiteMoney(candidate);
+  if(previous&&previous>current)oldCandidates.push(previous);
+ }
+ const old=oldCandidates.length&&new Set(oldCandidates).size===1?oldCandidates[0]:null;
+ // Só imprime formas de pagamento anunciadas no Offer do produto correto.
+ const methods=Array.isArray(offer.paymentMethod)?offer.paymentMethod:[offer.paymentMethod];
+ const normalized=methods.filter(x=>typeof x==='string').map(x=>x.toLowerCase());
+ const pix=normalized.some(x=>/\\bpix\\b/.test(x));
+ const card=normalized.some(x=>/creditcard|cart[aã]o|cr[eé]dito/.test(x));
+ const payment_mode=pix&&!card?'pix':card&&!pix?'card':'unspecified';
+ const plan=offer.installmentPlan||offer.installments||null;
+ const installments=Number(typeof plan==='object'&&plan!==null?(plan.numberOfPayments??plan.installments):plan);
+ const count=Number.isInteger(installments)&&installments>=2&&installments<=24?installments:null;
+ const installment_cents=count&&plan&&typeof plan==='object'
+  ?parseSiteMoney(plan.paymentAmount??plan.installmentAmount):null;
+ const installments_no_interest=!!(count&&plan&&typeof plan==='object'&&plan.interestFree===true);
+ return {price_cents:current,old_price_cents:old,payment_mode,installments:count,
+  installment_cents,installments_no_interest};
+}
 function priceFromOffers(product){
  const offers=Array.isArray(product.offers)?product.offers:[product.offers];
- const values=[];
- for(const offer of offers.slice(0,12)){
-  if(!offer||typeof offer!=='object')continue;
-  if((offer.priceCurrency||'').toUpperCase()!=='BRL')continue;
-  const price=parseSiteMoney(offer.price);
-  if(price)values.push(price);
- }
- return new Set(values).size===1?values[0]:null;
+ const found=offers.slice(0,12).map(o=>detailsFromOffer(o,product)).filter(Boolean);
+ if(!found.length||new Set(found.map(x=>x.price_cents)).size!==1)return null;
+ const old=[...new Set(found.map(x=>x.old_price_cents).filter(Boolean))];
+ const payments=[...new Set(found.map(x=>x.payment_mode).filter(x=>x!=='unspecified'))];
+ const base=found[0];
+ return {...base,old_price_cents:old.length===1?old[0]:null,
+  payment_mode:payments.length===1?payments[0]:'unspecified',
+  installments:found.length===1?base.installments:null,
+  installment_cents:found.length===1?base.installment_cents:null,
+  installments_no_interest:found.length===1?base.installments_no_interest:false};
 }
 export function extractMercadoLivrePagePrice(html,sourceUrl){
  const expectedId=productId(new URL(sourceUrl).pathname);
@@ -83,19 +120,27 @@ export function extractMercadoLivrePagePrice(html,sourceUrl){
  });
  // Sem URL no Product, usa o único Product da página com canonical comprovado.
  const candidates=matched.length?matched:canonical&&officialUrl(canonical,expectedId)&&products.length===1?products:[];
- const values=candidates.map(priceFromOffers).filter(x=>Number.isSafeInteger(x));
- if(new Set(values).size===1&&values.length)return {price_cents:values[0],source:'schema.org/Product'};
+ const values=candidates.map(priceFromOffers).filter(Boolean);
+ if(values.length&&new Set(values.map(x=>x.price_cents)).size===1){
+  const old=[...new Set(values.map(x=>x.old_price_cents).filter(Boolean))];
+  return {...values[0],old_price_cents:old.length===1?old[0]:null,source:'schema.org/Product'};
+ }
  if(values.length>1)return null;
  // Metadados globais só são aceitos com URL canônica validada.
  if(!canonical||!officialUrl(canonical,expectedId))return null;
  const metas={};
  for(const tag of html.match(/<meta\b[^>]{0,2000}>/gi)||[]){
   const name=(attr(tag,'property')||attr(tag,'name')||'').toLowerCase();
-  if(['product:price:amount','product:price:currency'].includes(name))metas[name]=attr(tag,'content');
+  if(['product:price:amount','product:price:currency','product:original_price:amount','product:original_price:currency'].includes(name))
+   metas[name]=attr(tag,'content');
  }
  if((metas['product:price:currency']||'').toUpperCase()!=='BRL')return null;
  const cents=parseSiteMoney(metas['product:price:amount']);
- return cents?{price_cents:cents,source:'meta:product:price'}:null;
+ const prior=(metas['product:original_price:currency']||'').toUpperCase()==='BRL'
+  ?parseSiteMoney(metas['product:original_price:amount']):null;
+ return cents?{price_cents:cents,old_price_cents:prior&&prior>cents?prior:null,
+  payment_mode:'unspecified',installments:null,installment_cents:null,installments_no_interest:false,
+  source:'meta:product:price'}:null;
 }
 async function readLimited(response){
  if(!response.body?.getReader)return (await response.text()).slice(0,MAX_HTML_BYTES);

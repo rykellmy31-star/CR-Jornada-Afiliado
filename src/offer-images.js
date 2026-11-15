@@ -97,19 +97,29 @@ export async function rememberProductImage(env, affiliateUrl, imageUrl) {
 export async function sourcePageForAffiliateImage(env, affiliateUrl) {
  if (!env?.DB || !trustedProductPage(affiliateUrl)) return null;
  try {
-  const row=await env.DB.prepare(
-   "SELECT source_url FROM ml_link_batch_items "+
-   "WHERE affiliate_url=? AND status='queued' ORDER BY id DESC LIMIT 1"
-  ).bind(affiliateUrl).first();
-  const source=row?.source_url;
+  let source=null;
+  try{
+   const row=await env.DB.prepare(
+     "SELECT source_url FROM ml_link_batch_items WHERE affiliate_url=? AND status='queued' ORDER BY id DESC LIMIT 1"
+   ).bind(affiliateUrl).first();
+   source=row?.source_url;
+  }catch{}
+  if(!trustedProductPage(source)){
+   // Links criados diretamente em "Adicionar oferta" têm origem descoberta
+   // pelo publicador automático (sem lote). Reutilizar a origem para buscar FOTO.
+   try{
+    const row=await env.DB.prepare(
+     'SELECT source_url FROM affiliate_verified_sources WHERE affiliate_url=?'
+    ).bind(affiliateUrl).first();
+    source=row?.source_url;
+   }catch{}
+  }
   if(!trustedProductPage(source)||source===affiliateUrl)return null;
   const url=new URL(source);
-  // A fonte precisa ser anúncio oficial, nunca outra vitrine ou encurtador.
-  if(!/^(?:www\.|produto\.|m\.)?mercadolivre\.com\.br$/i.test(url.hostname))return null;
-  if(!/\/(?:p|up)\/MLBU?\d{6,}|(?:^|\/)MLB-?\d{6,}/i.test(url.pathname))
-   return null;
+  if(!/^(?:www\\.|produto\\.|m\\.)?mercadolivre\\.com\\.br$/i.test(url.hostname))return null;
+  if(!/\\/(?:p|up)\\/MLBU?\\d{6,}|(?:^|\\/)MLB-?\\d{6,}/i.test(url.pathname))return null;
   return url.href;
- }catch{return null;} // Batches opcionais e bancos legados.
+ }catch{return null;}
 }
 
 // Última alternativa: uma vitrine React pode ocultar og:image numa consulta HTTP.

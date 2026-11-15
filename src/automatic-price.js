@@ -2,11 +2,16 @@
 // Uma falha temporária de preço nunca bloqueia os demais produtos.
 import {fetchMercadoLivrePrice,extractMercadoLivrePagePrice} from './mercado-livre-price.js';
 import {sourcePageForAffiliateImage} from './offer-images.js';
+import {inspectMonitorShortlink,browserFeaturedProduct} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
 import {safePromotionTerms,MAX_AGE_MS} from './promotion-terms.js';
 
 const VERIFY_CACHE=15*60;
 const LAST_CONFIRMED=60*60;
+const SOURCES="CREATE TABLE IF NOT EXISTS affiliate_verified_sources ("+
+ "affiliate_url TEXT PRIMARY KEY,source_url TEXT NOT NULL,checked_at INTEGER NOT NULL)";
+const DETAILS="CREATE TABLE IF NOT EXISTS affiliate_verified_offer_details ("+
+ "affiliate_url TEXT PRIMARY KEY,source_url TEXT NOT NULL,details_json TEXT NOT NULL,checked_at INTEGER NOT NULL)";
 const PRICE_CHECKS="CREATE TABLE IF NOT EXISTS affiliate_verified_prices("+
  "affiliate_url TEXT PRIMARY KEY,source_url TEXT NOT NULL,price_cents INTEGER NOT NULL,"+
  "checked_at INTEGER NOT NULL)";
@@ -23,6 +28,8 @@ const positive=v=>Number.isSafeInteger(v)&&v>0&&v<=99999999;
 export async function ensureAutomaticPrices(env){
  await env.DB.prepare(PRICE_CHECKS).run();
  await env.DB.prepare(RETRIES).run();
+ await env.DB.prepare(SOURCES).run();
+ await env.DB.prepare(DETAILS).run();
 }
 // Se o HTML comum vier incompleto, só o navegador renderizado do anúncio
 // original pode fornecer o preço. Nunca ler valor de páginas recomendadas.
@@ -49,7 +56,7 @@ async function renderedOfficialPrice(env,source,now){
   if(!response?.ok||typeof response.text!=='function')return null;
   const html=(await response.text()).slice(0,750000);
   const found=extractMercadoLivrePagePrice(html,source);
-  return positive(found?.price_cents)?found.price_cents:null;
+  return positive(found?.price_cents)?found:null;
  }catch(error){
   console.warn('Preço renderizado indisponível:',String(error?.message||error).slice(0,110));
   return null;
@@ -66,54 +73,82 @@ export function hasFreshOfferPrice(offer,now=Date.now()){
  return false;
 }
 export function officialPriceOverlay(offer,price,now=Math.floor(Date.now()/1000)){
- const terms={price_cents:price,old_price_cents:null,price_source:'mercadolivre',
-  coupon_required:false,coupon_code:null,payment_mode:'unspecified',
-  installments:null,installment_cents:null,installments_no_interest:false,card_price_cents:null};
- return {...offer,price_cents:price,old_price_cents:null,promo_terms_json:JSON.stringify(terms),promo_captured_at:now};
+ const d=typeof price==='number'?{price_cents:price}:price;
+ if(!positive(d?.price_cents))throw Error('Preço público inválido.');
+ const old=positive(d?.old_price_cents)&&d.old_price_cents>d.price_cents?d.old_price_cents:null;
+ const mode=['pix','pix_only','card'].includes(d.payment_mode)?d.payment_mode:'unspecified';
+ const count=Number.isInteger(d.installments)&&d.installments>=2&&d.installments<=24?d.installments:null;
+ const terms={price_cents:d.price_cents,old_price_cents:old,price_source:'mercadolivre',
+  coupon_required:false,coupon_code:null,payment_mode:mode,
+  installments:count,installment_cents:count&&positive(d.installment_cents)?d.installment_cents:null,
+  installments_no_interest:!!(count&&d.installments_no_interest),card_price_cents:null};
+ return {...offer,price_cents:d.price_cents,old_price_cents:old,
+  promo_terms_json:JSON.stringify(terms),promo_captured_at:now};
 }
-export async function prepareAutomaticOfferPrice(env,offer,{fetcher=fetch,now=Math.floor(Date.now()/1000)}={}){
+export async function resolveOfferSource(env,affiliateUrl,{fetcher=fetch}={}){
  await ensureAutomaticPrices(env);
  let source=null;
- try{source=await sourcePageForAffiliateImage(env,offer.affiliate_url);}catch{}
- if(!source&&official(offer.affiliate_url))source=offer.affiliate_url;
- let site=null;
- if(source){
-  const cache=await env.DB.prepare(
-    'SELECT source_url,price_cents,checked_at FROM affiliate_verified_prices WHERE affiliate_url=?'
-  ).bind(offer.affiliate_url).first();
-  if(cache?.source_url===source&&positive(cache.price_cents)&&
-   now-cache.checked_at>=0&&now-cache.checked_at<=VERIFY_CACHE){
-   site=Number(cache.price_cents);
-  }else{
-   try{
-    const live=await fetchMercadoLivrePrice(source,fetcher);
-    if(positive(live?.price_cents)){
-     site=live.price_cents;
-     await env.DB.prepare(
-       'INSERT INTO affiliate_verified_prices(affiliate_url,source_url,price_cents,checked_at) VALUES(?,?,?,?) '+
-       'ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,price_cents=excluded.price_cents,checked_at=excluded.checked_at'
-     ).bind(offer.affiliate_url,source,site,now).run();
-    }
-   }catch(error){console.warn('Consulta de preço no anúncio:',String(error?.message||error).slice(0,100));}
-   if(!site){
-    // Última alternativa: leitura renderizada, limitada no D1. Somente se
-    // preço e código do produto puderem ser confirmados na mesma página.
-    const rendered=await renderedOfficialPrice(env,source,now);
-    if(positive(rendered)){
-     site=rendered;
-     await env.DB.prepare(
-      'INSERT INTO affiliate_verified_prices(affiliate_url,source_url,price_cents,checked_at) VALUES(?,?,?,?) '+
-      'ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,price_cents=excluded.price_cents,checked_at=excluded.checked_at'
-     ).bind(offer.affiliate_url,source,site,now).run();
-    }
-   }
-   if(!site&&cache?.source_url===source&&positive(cache.price_cents)&&
-     now-cache.checked_at>=0&&now-cache.checked_at<=LAST_CONFIRMED)site=Number(cache.price_cents);
+ try{source=await sourcePageForAffiliateImage(env,affiliateUrl);}catch{}
+ if(!source&&official(affiliateUrl))source=affiliateUrl;
+ if(!source){
+  const cached=await env.DB.prepare('SELECT source_url FROM affiliate_verified_sources WHERE affiliate_url=?')
+    .bind(affiliateUrl).first();
+  if(official(cached?.source_url))source=cached.source_url;
+ }
+ if(!source){
+  try{
+   const result=await inspectMonitorShortlink(affiliateUrl,{fetcher});
+   const identified=result?.product||(result?.social_url&&['showcase','auth'].includes(result.kind)
+     ?await browserFeaturedProduct(env,result.social_url):null);
+   if(official(identified?.url))source=identified.url;
+  }catch(error){
+   console.warn('Origem do anúncio do afiliado:',String(error?.message||error).slice(0,100));
   }
  }
- if(site)return {ok:true,offer:officialPriceOverlay(offer,site,now),price_source:'mercadolivre'};
- if(hasFreshOfferPrice(offer,now*1000))return {ok:true,offer,price_source:'anuncio'};
- return {ok:false,reason:source?'Preço não verificável no anúncio original':'Anúncio original não identificado e preço não informado'};
+ if(!official(source))return null;
+ await env.DB.prepare("INSERT INTO affiliate_verified_sources(affiliate_url,source_url,checked_at) VALUES(?,?,?) "+
+  "ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,checked_at=excluded.checked_at")
+  .bind(affiliateUrl,source,Math.floor(Date.now()/1000)).run();
+ return source;
+}
+export async function prepareAutomaticOfferPrice(env,offer,
+ {fetcher=fetch,now=Math.floor(Date.now()/1000),requireSite=false}={}){
+ await ensureAutomaticPrices(env);
+ const source=await resolveOfferSource(env,offer.affiliate_url,{fetcher});
+ let details=null;
+ if(source){
+  const cached=await env.DB.prepare(
+   'SELECT source_url,details_json,checked_at FROM affiliate_verified_offer_details WHERE affiliate_url=?'
+  ).bind(offer.affiliate_url).first();
+  if(cached?.source_url===source&&now-cached.checked_at>=0&&now-cached.checked_at<=VERIFY_CACHE){
+   try{details=JSON.parse(cached.details_json);}catch{}
+  }
+  if(!positive(details?.price_cents)){
+   try{const live=await fetchMercadoLivrePrice(source,fetcher);
+    if(positive(live?.price_cents))details=live;
+   }catch(error){console.warn('Preço direto do Mercado Livre:',String(error?.message||error).slice(0,100));}
+   if(!positive(details?.price_cents)){
+    const rendered=await renderedOfficialPrice(env,source,now);
+    if(positive(rendered?.price_cents))details=rendered;
+   }
+   if(positive(details?.price_cents)){
+    await env.DB.prepare(
+      'INSERT INTO affiliate_verified_offer_details(affiliate_url,source_url,details_json,checked_at) VALUES(?,?,?,?) '+
+      'ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,details_json=excluded.details_json,checked_at=excluded.checked_at'
+    ).bind(offer.affiliate_url,source,JSON.stringify(details),now).run();
+    await env.DB.prepare(
+      'INSERT INTO affiliate_verified_prices(affiliate_url,source_url,price_cents,checked_at) VALUES(?,?,?,?) '+
+      'ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,price_cents=excluded.price_cents,checked_at=excluded.checked_at'
+    ).bind(offer.affiliate_url,source,details.price_cents,now).run();
+   }
+  }
+ }
+ if(positive(details?.price_cents))
+  return {ok:true,offer:officialPriceOverlay(offer,details,now),price_source:'mercadolivre'};
+ // Automatic strict mode never uses owner-entered or WhatsApp-group prices.
+ if(!requireSite&&hasFreshOfferPrice(offer,now*1000))
+  return {ok:true,offer,price_source:'anuncio'};
+ return {ok:false,reason:source?'Preço atual indisponível no anúncio original':'Não foi possível confirmar a página original do produto'};
 }
 export async function recordAutomaticPriceRetry(env,queueType,offerId,reason,now=Math.floor(Date.now()/1000)){
  await ensureAutomaticPrices(env);

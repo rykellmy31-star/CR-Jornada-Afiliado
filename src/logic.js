@@ -94,19 +94,9 @@ export function composeOfferMessage(offer, now = Date.now()) {
 // Modelos compartilhados entre WhatsApp e Telegram: não alteram o preço,
 // a URL de comissão nem o estado das filas. As chamadas são comerciais,
 // mas não inventam datas-limite ou disponibilidade.
-const OFFER_HEADLINES=[
-  '🔥 OFERTA EM DESTAQUE!',
-  '🛍️ ACHADINHO SELECIONADO!',
-  '✨ CONFIRA ESTA OFERTA!'
-];
+const OFFER_HEADLINE='✨ CONFIRA ESTA OFERTA!';
 const safeHtml=value=>String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const safeWa=value=>String(value??'').replace(/[*_~\x60]/g,'').replace(/[\u0000-\u001f]/g,' ').trim();
-const chooseHeadline=offer=>{
-  const seed=String(offer?.title||'')+'#'+String(offer?.affiliate_url||'');
-  let hash=0;
-  for(const char of seed)hash=(hash*31+char.codePointAt(0))>>>0;
-  return OFFER_HEADLINES[hash%OFFER_HEADLINES.length];
-};
 export function escapeTelegramHtml(value){return safeHtml(value);}
 export function formatOfferMessage(offer,{platform='mercadolivre',network='whatsapp',now=Date.now(),includeLink=false,maxLength}={}){
   if(!['mercadolivre','shopee'].includes(platform))throw new Error('Plataforma inválida.');
@@ -117,7 +107,7 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
   const strike=value=>tg?'<s>'+clean(value)+'</s>':'~'+clean(value)+'~';
   const emphasis=value=>tg?'<i>'+clean(value)+'</i>':clean(value);
   const main=[
-    bold(chooseHeadline(offer)),
+    bold(OFFER_HEADLINE),
     '',
     '🛒 '+bold(offer.title)
   ];
@@ -131,7 +121,7 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
     if(terms){
       if(validMoney(terms.price_cents)){
         price=terms.price_cents;
-        if(validMoney(terms.old_price_cents)&&terms.old_price_cents>price&&terms.price_source!=='mercadolivre')
+        if(validMoney(terms.old_price_cents)&&terms.old_price_cents>price)
           old=terms.old_price_cents;
         provenance=terms.price_source==='mercadolivre'
           ?'Preço público consultado no Mercado Livre'
@@ -150,8 +140,21 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
   }
   if(price!==null){
     main.push('');
-    if(old!==null)main.push('❌ De: '+strike(formatBRL(old)));
+    main.push('❌ De: '+(old!==null?strike(formatBRL(old)):'não informado no anúncio'));
     main.push('🔥 '+bold('Por '+formatBRL(price)));
+    if(offer.promo_terms_json){
+      const terms=safePromotionTerms(offer.promo_terms_json);
+      if(terms&&terms.price_source==='mercadolivre'){
+        if(terms.payment_mode==='pix_only')info.push('💠 Pagamento: somente Pix');
+        else if(terms.payment_mode==='pix')info.push('💠 Pagamento: Pix');
+        else if(terms.payment_mode==='card')info.push('💳 Pagamento: cartão');
+        if(terms.installments!==null&&Number.isInteger(terms.installments)){
+          info.push('💳 Parcelamento: '+terms.installments+'x'+
+            (validMoney(terms.installment_cents)?' de '+formatBRL(terms.installment_cents):'')+
+            (terms.installments_no_interest?' sem juros':''));
+        }
+      }
+    }
     if(provenance)info.unshift(emphasis('ℹ️ '+provenance+'. Confira na loja.'));
   }else{
     main.push('',emphasis('💡 Consulte o preço atualizado na loja.'));
