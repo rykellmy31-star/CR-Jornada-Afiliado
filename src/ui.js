@@ -602,7 +602,7 @@ export function renderPage() {
           <p id="coupon-feedback" class="feedback" role="status" aria-live="polite"></p>
         </form>
       </section>
-      <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
+      <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p><p class="hint">Horários previstos calculados pela ordem da fila, intervalo, limite diário e janela de publicação da Bahia. Uma pausa, publicação manual ou falha pode alterar a previsão.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Próxima publicação (previsão)</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="5">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
       <section id="activity-page" class="card history hidden"><div class="section-header"><div><h2>📋 Atividade recente</h2><p>Registros de tentativas, publicações e mudanças.</p></div><button id="activity-refresh" type="button" class="outline">Atualizar</button></div><div id="log-list" class="logs">Ainda não há eventos.</div></section>
       <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram, WhatsApp, Cupons e Automação • Geração automática de links depende de integração autorizada.</footer>
     </section>
@@ -674,6 +674,7 @@ export const CSS = `
 ${CATEGORY_CSS}.settings-subsection{margin:16px 0;padding:16px;border:1px solid #dce3ec;border-radius:12px;background:rgba(243,246,251,.5)}.settings-subsection h3{font-size:16px;margin:0 0 14px;color:#12233f}.settings-subsection.automation-section{background:rgba(234,242,255,.45)}.telegram-capacity{margin-top:16px;padding:15px 16px;border:1px solid #ccdedf;border-radius:14px;background:#fff;display:flex;flex-direction:column;gap:9px;min-width:0}.telegram-capacity-title{font-size:15px;color:#173447}.telegram-capacity-result{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;color:#245d61;font-weight:650}.telegram-capacity-result span:first-child{font-size:clamp(30px,6vw,42px);font-weight:850;line-height:1}.telegram-capacity-result span:last-child{font-size:14px}.telegram-capacity-detail{font-size:14px;color:#273b53;line-height:1.5}.telegram-capacity-note{font-size:12px;color:#5f6e80;line-height:1.5}
 ${OVERVIEW_CSS}
 ${LINK_BATCH_CSS}
+.queue-forecast-time{color:#0f6a70;font-weight:800;white-space:nowrap}.queue-forecast-muted{color:#637489}.queue-forecast-published{color:#526879}.list-panel table td:nth-child(3){min-width:190px}.list-panel table td:nth-child(3) small{margin-top:4px}
 `;
 export const CLIENT_JS = `
 'use strict';
@@ -847,6 +848,25 @@ function view(auth) {
   document.body.classList.toggle('app-has-sidebar',auth);
 }
 function statusLabel(s){return ({ready:'Na fila',sending:'Enviando',published:'Publicado',needs_review:'Revisar'})[s]||s;}
+function forecastOfferCell(offer,forecast,configured){
+ if(offer.status==='published')return offer.published_at
+   ?'<span class="queue-forecast-published">Publicado em '+escape(new Date(Number(offer.published_at)*1000).toLocaleString('pt-BR',{timeZone:'America/Bahia'}))+'</span>'
+   :'Já publicado';
+ if(offer.status==='sending')return 'Envio em andamento';
+ if(offer.status==='needs_review')return 'Aguardando revisão';
+ if(offer.status!=='ready')return '—';
+ if(!configured)return '<span class="queue-forecast-muted">Bot não configurado</span>';
+ if(forecast?.status==='paused')return '<span class="queue-forecast-muted">Automação pausada</span>';
+ const timestamp=Number(forecast?.by_id?.[String(offer.id)]);
+ if(Number.isSafeInteger(timestamp)&&timestamp>0){
+   return '<strong class="queue-forecast-time">'+escape(new Date(timestamp*1000).toLocaleString('pt-BR',{
+     timeZone:'America/Bahia',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'
+   }))+'</strong><small>Previsão sujeita a alterações</small>';
+ }
+ if(forecast?.status==='unavailable')return 'Previsão indisponível';
+ return '<span class="queue-forecast-muted">Aguardando vaga na programação</span>';
+}
+
 
 function updatePlatformIdentity(){
   const sh=selectedPlatform==='shopee';
@@ -1437,8 +1457,8 @@ async function refresh(){
     couponSelect.disabled=!readyOffers.length;
     $('offers-rows').innerHTML=data.offers.length?data.offers.map(o=>{
       const action=o.status==='ready'?'<button class="mini" data-action="publish" data-id="'+o.id+'">Publicar</button>':o.status==='needs_review'?'<button class="mini" data-action="requeue" data-id="'+o.id+'">Reenfileirar</button>':'—';
-      return '<tr><td><a rel="noopener noreferrer" target="_blank" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+(o.coupon_kind?'<small>🎟️ Cupom informado: '+escape(o.coupon_code||'ativação no app')+' • até '+escape(o.coupon_end_day)+' (sujeito às condições)</small>':'')+ (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td><span class="tag '+escape(o.status)+'">'+statusLabel(o.status)+'</span></td><td>'+toDate(o.created_at)+'</td><td>'+action+'</td></tr>';
-    }).join(''):'<tr><td colspan="4">Nenhuma oferta cadastrada.</td></tr>';
+      return '<tr><td><a rel="noopener noreferrer" target="_blank" href="'+escape(o.affiliate_url)+'">'+escape(o.title)+'</a><small>'+escape(o.category)+'</small>'+(o.coupon_kind?'<small>🎟️ Cupom informado: '+escape(o.coupon_code||'ativação no app')+' • até '+escape(o.coupon_end_day)+' (sujeito às condições)</small>':'')+ (o.last_error?'<small>Erro: '+escape(o.last_error)+'</small>':'')+'</td><td><span class="tag '+escape(o.status)+'">'+statusLabel(o.status)+'</span></td><td>'+forecastOfferCell(o,data.publication_forecast,data.telegram_token_configured)+'</td><td>'+toDate(o.created_at)+'</td><td>'+action+'</td></tr>';
+    }).join(''):'<tr><td colspan="5">Nenhuma oferta cadastrada.</td></tr>';
     $('log-list').innerHTML=data.logs.length?data.logs.map(l=>'<div><span><b>'+escape(l.event)+'</b> '+escape(l.detail||'')+'</span><time>'+toDate(l.created_at)+'</time></div>').join(''):'Ainda não há eventos.';
     // Exibe o painel e a aba salva assim que a sessão e os dados principais respondem.
     // Evolution, grupos e Shopee não podem bloquear o carregamento do F5.
