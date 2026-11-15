@@ -321,3 +321,64 @@ test('Crons simultâneos publicam somente uma oferta e respeitam o intervalo con
   assert.equal(sends,1,'nenhum segundo disparo antes dos 15 minutos');
  }finally{globalThis.fetch=old;DB.close();}
 });
+
+test('Cron publica com preço e foto do destaque oficial mesmo com anúncio bloqueado, e espelha no WhatsApp',async()=>{
+ const {DB,env}=setup(),native=globalThis.fetch;
+ const SOCIAL='https://www.mercadolivre.com.br/social/vitrine-principal';
+ let telegramPhotos=0,whatsappPhotos=0;
+ try{
+  DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=5,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
+  await setupWhatsApp(env);
+  const now=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
+   .bind('Kit automotivo do anúncio principal',SHORT,'Geral',now).run();
+  const featured='<div class="rl-card-featured-wrapper">'+
+   '<img class="poly-component__picture" src="'+PHOTO_PREVIEW+'">'+
+   '<a class="poly-component__title" href="'+SOURCE+'">Kit automotivo</a>'+
+   '<div class="poly-component__price">'+
+   '<s class="poly-price__previous"><span class="andes-money-amount__currency-symbol">R$</span>'+
+   '<span class="andes-money-amount__fraction">49</span><span class="andes-money-amount__cents">90</span></s>'+
+   '<div class="poly-price__current"><span class="andes-money-amount poly-price__amount">'+
+   '<span class="andes-money-amount__currency-symbol">R$</span>'+
+   '<span class="andes-money-amount__fraction">34</span><span class="andes-money-amount__cents">82</span></span></div>'+
+   '</div><a class="poly-action-links__action--link" href="'+SOURCE+'">Ir para produto</a></div>'+
+   '<div class="rl-card-recommendations"><a href="https://www.mercadolivre.com.br/errado/p/MLB99999999">Outro produto</a></div>';
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===SOURCE||u.startsWith('https://api.mercadolibre.com/'))
+    return new Response('Acesso temporariamente negado',{status:403});
+   if(u===SHORT)return new Response(null,{status:302,headers:{location:SOCIAL}});
+   if(u===SOCIAL)return new Response(featured,{headers:{'content-type':'text/html'}});
+   if(u===PHOTO_LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'300000'}});
+   if(u.includes('api.telegram.org')&&u.includes('/getChat?'))
+    return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){
+    const payload=JSON.parse(opts.body);
+    assert.equal(payload.photo,PHOTO_LARGE);
+    assert.match(payload.caption,/Por R\$\s*34,82/);
+    assert.match(payload.caption,/https:\/\/meli\.la\/2ESKGQw/);
+    telegramPhotos++;
+    return Response.json({ok:true,result:{message_id:4545}});
+   }
+   if(u===EVOLUTION+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
+    return Response.json([{id:GROUP,subject:'Achadinhos'}]);
+   if(u===EVOLUTION+'/message/sendMedia/'+INSTANCE){
+    const payload=JSON.parse(opts.body);
+    assert.equal(payload.media,PHOTO_LARGE);
+    assert.match(payload.caption,/Por R\$\s*34,82/);
+    whatsappPhotos++;
+    return Response.json({key:{id:'WA_4545'}});
+   }
+   if(u===EVOLUTION+'/message/sendText/'+INSTANCE)throw Error('Não enviar sem foto');
+   throw Error('Requisição inesperada '+u);
+  };
+  const result=await runScheduled(env);
+  assert.equal(result.status,'published');
+  assert.equal(result.format,'photo');
+  assert.equal(telegramPhotos,1);
+  assert.equal(whatsappPhotos,1);
+  assert.equal(DB.prepare('SELECT price_cents FROM offers WHERE id=1').first().price_cents,3482);
+  assert.equal(DB.prepare('SELECT status FROM whatsapp_deliveries').first().status,'sent');
+ }finally{globalThis.fetch=native;DB.close();}
+});
