@@ -10,7 +10,7 @@ import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './l
 import {readTelegramForecast} from './publication-forecast.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 import { masterState,setMasterState,listCategories,createGroupCategory,updateGroupCategory,listCategoryDestinations,saveCategoryRoutes,upsertProductCategory,runCategoryRoutingScheduled } from './automation-center.js';
-import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, updateWhatsAppAutomation, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer } from './whatsapp.js';
+import { getWhatsAppState, listWhatsAppGroups, updateWhatsAppSettings, updateWhatsAppAutomation, testWhatsApp, runWhatsAppScheduled, retryWhatsAppDelivery, getAffiliateWhatsAppConnection, connectAffiliateWhatsApp, ensureWhatsAppTables, setOfferDeliveryMode, addDirectWhatsAppOffer, retryDirectWhatsAppOffer, publishDirectWhatsAppOffer, dispatchPublishedOfferToWhatsApp } from './whatsapp.js';
 import { ensureMultiChannelTables, listTelegramChannels, createTelegramChannel, channelState, updateTelegramChannel, testTelegramChannel, addChannelOffer, saveChannelCoupon, publishChannelOffer, requeueChannelOffer, runMultiChannelScheduled, getPrimaryCategory, savePrimaryCategory,categoryMatches } from './multichannel.js';
 import {
  listManagedWhatsAppGroups,createManagedWhatsAppGroup,getManagedWhatsAppGroupState,
@@ -297,7 +297,7 @@ async function runScheduled(env) {
   return await sendOffer(env, offer, effective,{automatic:true});
 }
 
-async function router(request, env) {
+async function router(request, env, ctx=null) {
   const u = new URL(request.url);
   const method = request.method;
   if (method === 'GET' && u.pathname === '/') return html(renderPage());
@@ -654,14 +654,28 @@ async function router(request, env) {
     if (!offer) return fail('Oferta não encontrada.', 404);
     if (offer.status !== 'ready') return fail('Oferta já enviada ou em revisão.', 409);
     const result = await sendOffer(env, offer, settings);
+    if(result.status==='published'){
+      const dispatch=async()=>{
+        const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
+        await log(env,'whatsapp_mirror','Espelhamento após publicação manual: '+
+          String(wa.status||wa.skipped||wa.error||'desconhecido').slice(0,140),offer.id);
+        return wa;
+      };
+      if(ctx?.waitUntil)ctx.waitUntil(dispatch().catch(error=>
+        console.error('Espelhamento manual WhatsApp:',String(error?.message||error).slice(0,140))));
+      else {
+        try{result.whatsapp=await dispatch();}
+        catch(error){result.whatsapp={skipped:'error',reason:String(error?.message||error).slice(0,140)};}
+      }
+    }
     return json(result, result.status === 'published' ? 200 : 409);
   }
   return fail('Rota inexistente.', 404);
 }
 
 export default {
-  async fetch(request, env) {
-    try { return await router(request, env); }
+  async fetch(request, env, ctx) {
+    try { return await router(request, env, ctx); }
     catch (error) { console.error('CR Jornada Afiliados:', error?.message); return fail(error?.message || 'Falha interna.', error?.status || (error instanceof SyntaxError ? 400 : 500)); }
   },
   async scheduled(_controller, env, ctx) {
