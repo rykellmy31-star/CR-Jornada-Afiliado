@@ -222,3 +222,48 @@ test('Browser Run tem limite diário, imagens externas e links inseguros não s�
   assert.equal(await claimAffiliateImageBrowserBudget(env,begin+86400),true);
  }finally{DB.close();}
 });
+
+
+test('WhatsApp automático recupera foto na segunda leitura sem fallback para texto',async()=>{
+ const {DB,env}=setup(),native=globalThis.fetch;
+ let reads=0,media=0,text=0;
+ try{
+  save(DB);
+  globalThis.fetch=async(url,options={})=>{
+   const u=String(url);
+   if(u===EVO+'/group/fetchAllGroups/'+INSTANCE+'?getParticipants=false')
+    return Response.json([{id:GROUP,subject:'Achadinhos'}]);
+   if(u===ORIGINAL){
+    reads++;
+    return new Response(reads===1?'<html>Carregando anúncio</html>':
+      '<meta property="og:image" content="'+PHOTO_SOURCE+'">',
+      {headers:{'content-type':'text/html'}});
+   }
+   if(u===SHORT)return new Response('<html>Vitrine sem foto</html>',{headers:{'content-type':'text/html'}});
+   if(u===PHOTO_LARGE&&options.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'230000'}});
+   if(u===EVO+'/message/sendMedia/'+INSTANCE){
+    const body=JSON.parse(options.body);
+    assert.equal(body.media,PHOTO_LARGE);
+    assert.equal(body.mediatype,'image');
+    assert.match(body.caption,/https:\/\/meli\.la\/1ZbJKkU/);
+    media++;return Response.json({key:{id:'PHOTO_AFTER_RETRY'}});
+   }
+   if(u===EVO+'/message/sendText/'+INSTANCE){text++;throw Error('Envio sem imagem proibido');}
+   throw Error('Unexpected '+u);
+  };
+  await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:false,enabled:false,interval_minutes:7});
+  await updateWhatsAppSettings(env,{instance_name:INSTANCE,group_jid:GROUP,public_registered:true,enabled:true,interval_minutes:7});
+  const stamp=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day,price_cents) VALUES(?,?,?,?,'published',?,?,7990)")
+   .bind('Azzaro The Most Wanted Intense',SHORT,'Geral',stamp,stamp,new Date().toISOString().slice(0,10)).run();
+  const result=await runWhatsAppScheduled(env);
+  assert.equal(result.status,'sent');
+  assert.equal(result.format,'photo');
+  assert.ok(reads>=2);
+  assert.equal(media,1);
+  assert.equal(text,0);
+  assert.equal(await cachedProductImage(env,SHORT),PHOTO_LARGE);
+  assert.equal((await runWhatsAppScheduled(env)).skipped,'empty');
+ }finally{globalThis.fetch=native;DB.close();}
+});

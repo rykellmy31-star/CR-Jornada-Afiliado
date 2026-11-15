@@ -410,7 +410,7 @@ async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,requirePhoto=false
 // não publica uma mensagem incompleta em nenhum grupo.
 async function preflightWhatsAppPhoto(env,offer,source,cfg){
   let image=null;
-  try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage);}
+  try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true});}
   catch(e){console.warn('Pré-verificação da foto WhatsApp:',String(e?.message||e).slice(0,110));}
   if(image)return {image};
   const now=nowSec();
