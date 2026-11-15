@@ -117,7 +117,7 @@ export function officialPriceOverlay(offer,price,now=Math.floor(Date.now()/1000)
  return {...offer,price_cents:d.price_cents,old_price_cents:old,
   promo_terms_json:JSON.stringify(terms),promo_captured_at:now};
 }
-export async function resolveOfferSource(env,affiliateUrl,{fetcher=fetch}={}){
+export async function resolveOfferSource(env,affiliateUrl,{fetcher=fetch,refreshFeaturedMedia=false}={}){
  await ensureAutomaticPrices(env);
  let source=null;
  try{source=await sourcePageForAffiliateImage(env,affiliateUrl);}catch{}
@@ -159,6 +159,27 @@ export async function resolveOfferSource(env,affiliateUrl,{fetcher=fetch}={}){
   }
  }
  if(!official(source))return null;
+ if(refreshFeaturedMedia && /^https:\/\/(?:meli\.la|meli\.promo|melila\.me)\//i.test(affiliateUrl)){
+  // A imagem pode estar no cartão principal da vitrine, mesmo que a página
+  // do MLB esteja bloqueada. Confirmar sempre o MESMO ID do produto original.
+  try{
+   const result=await inspectMonitorShortlink(affiliateUrl,{fetcher});
+   let matched=result?.product;
+   let details=result?.featured_price;
+   if((!matched||!details)&&result?.social_url&&['showcase','auth','featured_product'].includes(result.kind)&&
+      await claimSocialBrowserBudget(env)){
+    const rendered=await browserFeaturedProduct(env,result.social_url,{includeDetails:true});
+    if(official(rendered?.url)){matched=rendered;details=rendered.featured_price;}
+   }
+   if(matched?.product_id===productId(new URL(source).pathname)&&trustedProductImage(details?.image_url)){
+    const photo=await validatedProductPhoto(details.image_url,fetcher);
+    if(photo){
+     await rememberProductImage(env,affiliateUrl,photo);
+     await rememberProductImage(env,source,photo);
+    }
+   }
+  }catch(error){console.warn('Imagem da vitrine principal:',String(error?.message||error).slice(0,95));}
+ }
  await env.DB.prepare("INSERT INTO affiliate_verified_sources(affiliate_url,source_url,checked_at) VALUES(?,?,?) "+
   "ON CONFLICT(affiliate_url) DO UPDATE SET source_url=excluded.source_url,checked_at=excluded.checked_at")
   .bind(affiliateUrl,source,Math.floor(Date.now()/1000)).run();
