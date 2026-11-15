@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
-import {parseSelection,validateSourceUrl,validatePairs,createLinkBatch,importLinkBatch,readLinkBatch,listLinkBatches,isIneligibleWarning} from '../src/link-batches.js';
+import {parseSelection,validateSourceUrl,validatePairs,createLinkBatch,importLinkBatch,readLinkBatch,listLinkBatches,isIneligibleWarning,previewLinkBatchDuplicates} from '../src/link-batches.js';
 import {runInNewContext} from 'node:vm';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 
@@ -197,5 +197,114 @@ test('ignorar duas posições não autoriza apagar essas linhas ou duplicar link
   }),/justificativa/);
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
   assert.equal((await readLinkBatch(env,batch.batch.id)).batch.status,'awaiting_links');
+ }finally{DB.close();}
+});
+
+
+test('lote misto ignora links já registrados no Telegram, WhatsApp e multicanal',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const urls=[URL1,URL2,'https://www.mercadolivre.com.br/jogo-ferramentas/p/MLB78787878',
+   'https://www.mercadolivre.com.br/jogo-soquetes/p/MLB99990001',
+   'https://www.mercadolivre.com.br/maleta-ferramentas/p/MLB99990002'];
+  const prepared=await createLinkBatch(env,{text:urls.map((u,i)=>'Ferramenta especial '+(i+1)+' | '+u+' | Ferramentas e Peças Automotivas').join('\n')});
+  const aff=['https://meli.la/NEWLINK01','https://meli.la/ALREADYTG','https://meli.la/ALREADYWA',
+   'https://meli.la/ALREADYCHANNEL','https://meli.la/NEWLINK05'];
+  const t=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status) VALUES('Já no Telegram',?,'Geral',?,'ready')")
+   .bind(aff[1],t).run();
+  DB.prepare("INSERT INTO whatsapp_direct_offers(title,affiliate_url,category,group_jid,instance_name,created_at,status) VALUES('Já no WhatsApp',?,'Geral','12345678@g.us','principal',?,'ready')")
+   .bind(aff[2],t).run();
+  const channel=DB.prepare("INSERT INTO telegram_channels(name,telegram_chat_id,created_at,updated_at) VALUES('Ofertas teste','@afiliados_testes',?,?)")
+   .bind(t,t).run();
+  DB.prepare("INSERT INTO channel_offers(channel_id,title,affiliate_url,category,created_at,status) VALUES(?,'Já no canal',?,'Geral',?,'published')")
+   .bind(channel.meta.last_row_id,aff[3],t).run();
+  const links=aff.map(u=>({affiliate_url:u,category:'Ferramentas e Peças Automotivas'}));
+  const preview=await previewLinkBatchDuplicates(env,prepared.batch.id,{links});
+  assert.equal(preview.total,5);
+  assert.equal(preview.new_count,2);
+  assert.equal(preview.duplicate_count,3);
+  assert.deepEqual(preview.duplicates.map(x=>x.position),[2,3,4]);
+  assert.deepEqual(preview.duplicates.map(x=>x.queues[0]),['Telegram principal','WhatsApp','Telegram multicanal']);
+  const imported=await importLinkBatch(env,prepared.batch.id,{
+   links,owner_confirmation:true,pairing_confirmation:true
+  });
+  assert.deepEqual({queued:imported.queued,duplicates:imported.duplicates,ineligible:imported.ineligible},
+   {queued:2,duplicates:3,ineligible:0});
+  const stored=await readLinkBatch(env,prepared.batch.id);
+  assert.deepEqual(stored.items.map(x=>x.status),['queued','duplicate','duplicate','duplicate','queued']);
+  assert.equal(stored.items[1].duplicate_queues,'Telegram principal');
+  assert.equal(stored.items[2].duplicate_queues,'WhatsApp');
+  assert.equal(stored.items[3].duplicate_queues,'Telegram multicanal');
+  assert.equal(stored.items[4].affiliate_url,aff[4]);
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM offers WHERE affiliate_url=?").bind(aff[1]).first().n,1);
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM offers").first().n,3,'não deve duplicar oferta antiga');
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM ml_link_batch_duplicates").first().n,3);
+  assert.equal((await listLinkBatches(env)).current,null);
+ }finally{DB.close();}
+});
+
+test('lote inteiro previamente cadastrado é encerrado sem novos envios',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const batch=await createLinkBatch(env,{text:demo});
+  const links=[{affiliate_url:'https://meli.la/ALREADY01'}, {affiliate_url:'https://meli.la/ALREADY02'}];
+  for(let i=0;i<2;i++)
+   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status) VALUES(?,?,'Geral',?,'published')")
+    .bind('Link já postado '+(i+1),links[i].affiliate_url,Math.floor(Date.now()/1000)).run();
+  const imported=await importLinkBatch(env,batch.batch.id,{
+   links,owner_confirmation:true,pairing_confirmation:true
+  });
+  assert.equal(imported.queued,0);
+  assert.equal(imported.duplicates,2);
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM offers").first().n,2);
+  assert.equal((await readLinkBatch(env,batch.batch.id)).batch.status,'imported');
+ }finally{DB.close();}
+});
+
+test('erro de link repetido dentro do lote continua bloqueado para não misturar produtos',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const batch=await createLinkBatch(env,{text:demo});
+  await assert.rejects(importLinkBatch(env,batch.batch.id,{
+   links:[{affiliate_url:'https://meli.la/REPEAT01'},{affiliate_url:'https://meli.la/REPEAT01'}],
+   owner_confirmation:true,pairing_confirmation:true
+  }),/mesmo link/);
+  assert.equal((await readLinkBatch(env,batch.batch.id)).batch.status,'awaiting_links');
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM ml_link_batch_duplicates").first().n,0);
+ }finally{DB.close();}
+});
+
+test('lote com 29 posições, 2 inelegíveis e 1 duplicado importa só 26 ofertas',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const src=Array.from({length:29},(_,i)=>'https://www.mercadolivre.com.br/furadeira-especial/p/MLB'+String(20000000+i));
+  const batch=await createLinkBatch(env,{text:src.map((u,i)=>'Furadeira especial '+i+' | '+u+' | Ferramentas e Peças Automotivas').join('\n')});
+  const urls=Array.from({length:29},(_,i)=>'https://meli.la/AFFILIATED'+String(i+1).padStart(2,'0'));
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status) VALUES('Antigo',?,'Geral',?,'published')")
+   .bind(urls[4],Math.floor(Date.now()/1000)).run();
+  const links=urls.map((url,i)=>i===16||i===18?{ineligible:true,reason:'program_ineligible'}:
+   {affiliate_url:url,category:'Ferramentas e Peças Automotivas'});
+  const preview=await previewLinkBatchDuplicates(env,batch.batch.id,{links});
+  assert.equal(preview.new_count,26);assert.equal(preview.duplicate_count,1);assert.equal(preview.ineligible_count,2);
+  const result=await importLinkBatch(env,batch.batch.id,{links,owner_confirmation:true,pairing_confirmation:true});
+  assert.deepEqual({new:result.queued,existing:result.duplicates,rejected:result.ineligible},{new:26,existing:1,rejected:2});
+  const rows=(await readLinkBatch(env,batch.batch.id)).items;
+  assert.equal(rows[4].status,'duplicate');
+  assert.equal(rows[16].status,'ineligible');
+  assert.equal(rows[18].status,'ineligible');
+  assert.equal(rows[19].affiliate_url,urls[19]);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,27);
+ }finally{DB.close();}
+});
+
+test('prévia de links duplicados exige autenticação',async()=>{
+ const {DB,env}=fixture();
+ try{
+  const anonymous=await worker.fetch(new Request('https://afiliados.example.test/api/link-batches/1/check',{
+   method:'POST',headers:{'origin':'https://afiliados.example.test','content-type':'application/json'},
+   body:JSON.stringify({links:[{affiliate_url:'https://meli.la/ABC1234'}]})
+  }),env);
+  assert.equal(anonymous.status,401);
  }finally{DB.close();}
 });
