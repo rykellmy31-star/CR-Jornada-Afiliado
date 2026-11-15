@@ -1,4 +1,5 @@
 import { normalizeOffer, shouldSend, localTimeParts, telegramPayload } from './logic.js';
+import {readTelegramForecast} from './publication-forecast.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
@@ -236,8 +237,9 @@ export async function channelState(env,id){
     env.DB.prepare('SELECT status,COUNT(*) AS total FROM channel_offers WHERE channel_id=? GROUP BY status').bind(c.id).all(),
     env.DB.prepare('SELECT event,detail,created_at,offer_id FROM channel_logs WHERE channel_id=? ORDER BY id DESC LIMIT 20').bind(c.id).all()
   ]);
+  const publication_forecast=await readTelegramForecast(env,{settings:c,table:'channel_offers',channelId:c.id});
   return {settings:{...sanitized(c),telegram_chat_id:c.telegram_chat_id},channel:sanitized(c),
-    offers:offers.results,counts:counts.results,logs:logs.results,
+    offers:offers.results,counts:counts.results,logs:logs.results,publication_forecast,
     telegram_token_configured:c.bot_mode==='shared'?!!env.TELEGRAM_BOT_TOKEN:!!c.token_encrypted};
 }
 export async function updateTelegramChannel(env,id,body){
