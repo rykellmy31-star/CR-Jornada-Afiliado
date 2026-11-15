@@ -26,6 +26,26 @@ export async function rememberTelegramSentPhoto(env,affiliateUrl,imageUrl,messag
  ).bind(affiliateUrl,imageUrl,String(messageId),Math.floor(Date.now()/1000)).run();
  // Também abastece o cache que já é usado nos fluxos manual e automático.
  await rememberProductImage(env,affiliateUrl,imageUrl);
+ // Se o WhatsApp ficou aguardando SOMENTE a imagem, reabilitar essa entrega.
+ // Nunca reabrir um envio 'sent', 'sending' ou erro ambíguo da Evolution.
+ const actions=[
+  {sql:"DELETE FROM whatsapp_media_retries WHERE affiliate_url=?",args:[affiliateUrl]},
+  {sql:"DELETE FROM whatsapp_deliveries WHERE status='needs_review' AND "+
+    "last_error LIKE 'Foto indisponível após%' AND "+
+    "offer_id IN (SELECT id FROM offers WHERE affiliate_url=?)",args:[affiliateUrl]},
+  {sql:"UPDATE whatsapp_direct_offers SET status='ready',last_error=NULL "+
+    "WHERE affiliate_url=? AND status='needs_review' AND "+
+    "last_error LIKE 'Foto indisponível após%'",args:[affiliateUrl]},
+  {sql:"DELETE FROM whatsapp_group_media_retries WHERE offer_id IN "+
+    "(SELECT id FROM whatsapp_group_offers WHERE affiliate_url=?)",args:[affiliateUrl]},
+  {sql:"UPDATE whatsapp_group_offers SET status='ready',last_error=NULL "+
+    "WHERE affiliate_url=? AND status='needs_review' AND "+
+    "last_error LIKE 'Sem imagem após seis%'",args:[affiliateUrl]}
+ ];
+ for(const action of actions){
+  try{await env.DB.prepare(action.sql).bind(...action.args).run();}
+  catch{} // Nem toda instalação usa grupos adicionais ou tabelas de mídia.
+ }
  return true;
 }
 export async function telegramSentPhoto(env,affiliateUrl){
