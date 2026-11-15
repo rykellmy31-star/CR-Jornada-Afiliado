@@ -2138,7 +2138,22 @@ $('offers-rows').addEventListener('click',async e=>{
   const id=Number(btn.dataset.id);const type=btn.dataset.action;
   const msg=type==='publish'?'Publicar este link de afiliado AGORA no canal Telegram configurado?':'Revise no canal se a oferta não saiu antes de reenfileirá-la. Confirma?';
   if(!confirm(msg))return;
-  try{const endpoint=currentChannelId===1?'/api/offers/'+id+'/'+type:'/api/channels/'+currentChannelId+'/offers/'+id+'/'+type;const result=await call(endpoint,{method:'POST',body:'{}'});notice(type==='publish'?(result.format==='photo'?'Oferta publicada com FOTO no Telegram.':'Oferta publicada em texto: foto indisponível ou não aceita pelo Telegram.'):'Oferta reenfileirada.');await refresh();}
+  try{
+    const endpoint=currentChannelId===1?'/api/offers/'+id+'/'+type:'/api/channels/'+currentChannelId+'/offers/'+id+'/'+type;
+    const result=await call(endpoint,{method:'POST',body:'{}'});
+    const onTelegram=type==='publish'?(result.format==='photo'?'Oferta publicada com FOTO no Telegram.':'Oferta publicada em texto: foto indisponível ou não aceita pelo Telegram.'):'Oferta reenfileirada.';
+    let mirror='';
+    if(type==='publish'&&currentChannelId===1){
+      const wa=result.whatsapp;
+      if(wa?.status==='sent')mirror=' A mesma foto também foi enviada ao WhatsApp.';
+      else if(wa?.status==='awaiting_price')mirror=' WhatsApp aguardando confirmação de preço do anúncio.';
+      else if(wa?.skipped==='interval'||wa?.skipped==='instance_interval')mirror=' WhatsApp aguardando o intervalo configurado.';
+      else if(wa?.skipped==='disabled')mirror=' WhatsApp desativado nas configurações atuais.';
+      else mirror=' Espelhamento ao WhatsApp solicitado; se o grupo estiver ativo, acompanhe o resultado em Últimos envios.';
+    }
+    notice(onTelegram+mirror);
+    await refresh();
+  }
   catch(err){notice(err.message,true);await refresh();}
 });
 $('refresh').addEventListener('click',refresh);
