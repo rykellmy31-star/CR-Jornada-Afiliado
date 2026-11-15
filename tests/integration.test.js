@@ -96,7 +96,7 @@ test('agendador envia somente uma oferta e respeita limite diário',async()=>{
   };
   try{
     DB.prepare("UPDATE settings SET automation_enabled=1, telegram_enabled=1, channel_registered=1, max_daily=1, interval_minutes=15, start_hour=0, end_hour=24 WHERE id=1").run();
-    for(let i=0;i<2;i++) DB.prepare("INSERT INTO offers (title, affiliate_url, category,created_at) VALUES(?,?,?,?)")
+    for(let i=0;i<2;i++) DB.prepare("INSERT INTO offers (title, affiliate_url, category,created_at,price_cents) VALUES(?,?,?,?,7990)")
       .bind('Oferta simulada '+i,'https://meli.la/TESTE'+i,'Geral',Math.floor(Date.now()/1000)).run();
     const env={DB,TELEGRAM_BOT_TOKEN:'TOKEN_SIMULADO'};
     let pending=[];
