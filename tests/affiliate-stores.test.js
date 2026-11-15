@@ -40,7 +40,7 @@ test('cadastro grava identificação no banco, oferece prévia e cria link curto
   assert.equal(new URL(preview.target_url).searchParams.get('matt_word'),'rykellmy_007');
   assert.equal(new URL(preview.target_url).searchParams.get('matt_tool'),'33321398');
   const result=await createAffiliateShortlink(app,{product_url:product},'https://bot.crjornada.com');
-  assert.match(result.short_url,/^https:\/\/bot\.crjornada\.com\/l\/[a-zA-Z0-9_-]{12}$/);
+  assert.match(result.short_url,/^https:\/\/promoml\.app\/[a-zA-Z0-9_-]{12}$/);
   const code=result.short_url.split('/').at(-1);
   const redirect=await followAffiliateShortlink(app,code);
   assert.equal(redirect.status,302);
@@ -50,7 +50,7 @@ test('cadastro grava identificação no banco, oferece prévia e cria link curto
   assert.throws(()=>parseMercadoLivreProduct('https://www.mercadolivre.com.br/gz/account-verification?go=https://evil.test'),/endereço completo/);
   const unauthorized=await worker.fetch(new Request('https://bot.crjornada.com/api/stores/mercadolivre'),{...app,ADMIN_PASSWORD:'local test password',SESSION_SECRET:'test-secret'});
   assert.equal(unauthorized.status,401);
-  const publicResult=await worker.fetch(new Request(result.short_url),app);
+  const publicResult=await worker.fetch(new Request('https://bot.crjornada.com/l/'+code),app);
   assert.equal(publicResult.status,302);
  }finally{close();}
 });
