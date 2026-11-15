@@ -101,8 +101,8 @@ test('captura condições no monitor e mantém preço antigo mesmo se chegar out
 });
 
 test('colchão do print: preço efetivo R$ 199,99 com cupom e não R$ 260,00',()=>{
- const text='COLCHÃO SOLTEIRO CONFORT MAX 188X88 CM LIBÉLULA MÓVEIS 🛏️\\n'+
-  'de R$260 por R$260\\nCOM CUPOM 💥R$199,99💥\\n🏷️ cupom: SEMPREOFERTAS\\n'+
+ const text='COLCHÃO SOLTEIRO CONFORT MAX 188X88 CM LIBÉLULA MÓVEIS 🛏️\n'+
+  'de R$260 por R$260\nCOM CUPOM 💥R$199,99💥\n🏷️ cupom: SEMPREOFERTAS\n'+
   '🏡 https://melila.me/MpuhFvqiqmsu • parceria';
  const terms=extractPromotionTerms(text);
  assert.equal(terms.price_cents,19999);
