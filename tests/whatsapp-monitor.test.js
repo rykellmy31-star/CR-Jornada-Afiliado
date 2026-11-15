@@ -1225,22 +1225,21 @@ test('renderização JS reconhece botão do destaque após primeiro HTML não tr
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{globalThis.fetch=originalFetch;DB.close();}
 });
-test('orçamento de Browser Run distribui até 120 consultas por dia com cooldown de 5 segundos',async()=>{
+test('Browser Run permite mais de 120 verificações no dia e preserva 30 segundos entre consultas',async()=>{
  const {env,DB}=setup();
  try{
-  let used=0;
   env.BROWSER={quickAction:async()=>new Response('')};
   const start=1700000000;
-  assert.equal(await claimSocialBrowserBudget(env,start),true);used++;
+  assert.equal(await claimSocialBrowserBudget(env,start),true);
   assert.equal(await claimSocialBrowserBudget(env,start+4),false);
-  for(let k=1;k<120;k++){
-   assert.equal(await claimSocialBrowserBudget(env,start+k*6),true);
-   used++;
-  }
-  assert.equal(used,120);
-  assert.equal(await claimSocialBrowserBudget(env,start+120*6),false);
-  assert.equal((await DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first()).daily_count,120);
+  assert.equal(await claimSocialBrowserBudget(env,start+29),false);
+  for(let k=1;k<=125;k++)
+   assert.equal(await claimSocialBrowserBudget(env,start+k*31),true,
+    'a verificação '+k+' deve continuar disponível mesmo acima de 120 por dia');
+  assert.equal(DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first().daily_count,126);
+  assert.equal(await claimSocialBrowserBudget(env,start+125*31+1),false);
   assert.equal(await claimSocialBrowserBudget(env,start+86400),true);
+  assert.equal(DB.prepare('SELECT daily_count FROM ml_monitor_browser_budget').first().daily_count,1);
  }finally{DB.close();}
 });
 test('Browser Run não captura recomendações se a vitrine não entregar produto destacado',async()=>{
