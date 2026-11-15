@@ -858,17 +858,17 @@ function forecastOfferCell(offer,forecast,configured){
  if(offer.status==='needs_review')return 'Aguardando revisão';
  if(offer.status!=='ready')return '—';
  if(String(offer.last_error||'').startsWith('Aguardando foto'))return '<span class="queue-forecast-muted">Foto em preparação • horário ainda não confirmado</span>';
- if(String(offer.last_error||'').startsWith('Aguardando preço'))return '<span class="queue-forecast-muted">Preço do site pendente • horário ainda não confirmado</span>';
+ const pricePending=String(offer.last_error||'').startsWith('Aguardando preço');
  if(!configured)return '<span class="queue-forecast-muted">Bot não configurado</span>';
  if(forecast?.status==='paused')return '<span class="queue-forecast-muted">Automação pausada</span>';
  const timestamp=Number(forecast?.by_id?.[String(offer.id)]);
  if(Number.isSafeInteger(timestamp)&&timestamp>0){
    return '<strong class="queue-forecast-time">'+escape(new Date(timestamp*1000).toLocaleString('pt-BR',{
      timeZone:'America/Bahia',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'
-   }))+'</strong><small>Previsão sujeita a alterações</small>';
+   }))+'</strong><small>'+(pricePending?'Preço do anúncio em verificação • previsão sujeita a alterações':'Previsão sujeita a alterações')+'</small>';
  }
  if(forecast?.status==='unavailable')return 'Previsão indisponível';
- return '<span class="queue-forecast-muted">Aguardando vaga na programação</span>';
+ return '<span class="queue-forecast-muted">'+(pricePending?'Preço do anúncio em verificação • ':'')+'Aguardando vaga na programação</span>';
 }
 
 
