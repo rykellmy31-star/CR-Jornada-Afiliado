@@ -93,7 +93,7 @@ test('publicação AUTOMÁTICA realista do WhatsApp usa sendMedia quando meli.la
   });
   const now=Math.floor(Date.now()/1000);
   DB.prepare("INSERT INTO offers(title,affiliate_url,category,created_at,status,published_at,published_day) VALUES(?,?,?,?,'published',?,?)")
-   .bind('Perfume masculino eau de parfum Azzaro the most wanted intense 100 ml',SHORT,'Geral',now-100,now-60,
+   .bind('Perfume masculino eau de parfum Azzaro the most wanted intense 100 ml',SHORT,'Geral',now-100,now,
    new Date().toISOString().slice(0,10)).run();
   const result=await runWhatsAppScheduled(env);
   assert.equal(result.status,'sent');
