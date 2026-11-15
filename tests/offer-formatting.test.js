@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {formatOfferMessage,telegramPayload,escapeTelegramHtml} from '../src/logic.js';
+import {officialPriceOverlay} from '../src/automatic-price.js';
 
 const NOW=Date.parse('2026-11-15T13:00:00Z');
 const offer={
@@ -78,4 +79,27 @@ test('Legendas longas descartam detalhes opcionais sem quebrar markup obrigatór
  assert.match(text,/Publicidade/);
  const withUrl=formatOfferMessage(item,{network:'whatsapp',now:NOW,includeLink:true,maxLength:300});
  assert.ok(withUrl.endsWith(item.affiliate_url));
+});
+
+test('mensagem padrão única usa preços do anúncio, parcelamento confirmado e link em ambas as redes',()=>{
+ const item=officialPriceOverlay({...offer,title:'Tapete antiderrapante para banheiro'},
+  {price_cents:3482,old_price_cents:4990,payment_mode:'card',
+   installments:3,installment_cents:1161,installments_no_interest:true},NOW/1000);
+ const wa=formatOfferMessage(item,{network:'whatsapp',includeLink:true,now:NOW});
+ const tg=telegramPayload(item,'@canal',NOW,{includeLink:true});
+ assert.ok(wa.startsWith('📣 Publicidade •\n\n*✨ CONFIRA ESTA OFERTA!*'));
+ assert.ok(tg.text.startsWith('📣 Publicidade •\n\n<b>✨ CONFIRA ESTA OFERTA!</b>'));
+ for(const text of [wa,tg.text]){
+  assert.match(text,/Tapete antiderrapante para banheiro/);
+  assert.match(text,/De: .*R\$\s*49,90/);
+  assert.match(text,/Por R\$\s*34,82/);
+  assert.match(text,/Parcelamento: 3x de R\$\s*11,61 sem juros/);
+  assert.match(text,/✅ Confira preço, disponibilidade e condições antes de comprar/);
+  assert.match(text,/Publicidade • link de afiliado/);
+  assert.match(text,/Comprar pelo meu link:/);
+  assert.match(text,/https:\/\/meli\.la\/Afiliado123/);
+  assert.doesNotMatch(text,/Preço público consultado no Mercado Livre/);
+ }
+ assert.equal(tg.reply_markup.inline_keyboard[0][0].url,item.affiliate_url);
+ assert.ok(tg.text.length<=1024);
 });
