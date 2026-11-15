@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import worker,{runScheduled} from '../src/index.js';
 import {runWhatsAppScheduled,updateWhatsAppSettings} from '../src/whatsapp.js';
-import {telegramSentPhoto,rememberTelegramSentPhoto,cachedProductImage} from '../src/offer-images.js';
+import {telegramSentPhoto,rememberTelegramSentPhoto,rememberProductImage,cachedProductImage} from '../src/offer-images.js';
 
 const SHORT='https://meli.la/2ESKGQw';
 const PHOTO_PREVIEW='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-P.webp';
@@ -299,14 +299,14 @@ test('Crons simultâneos publicam somente uma oferta e respeitam o intervalo con
  }finally{globalThis.fetch=old;DB.close();}
 });
 
-test('Cron publica com preço e foto do destaque oficial mesmo com anúncio bloqueado, e espelha no WhatsApp',async()=>{
+test('agendador reutiliza o preço e a foto do botão manual mesmo com site bloqueado',async()=>{
  const {DB,env}=setup(),native=globalThis.fetch;
  const SOCIAL='https://www.mercadolivre.com.br/social/vitrine-principal';
  let telegramPhotos=0,whatsappPhotos=0;
  try{
   DB.prepare("UPDATE settings SET telegram_chat_id='@achadinhosmlcr',telegram_enabled=1,channel_registered=1,automation_enabled=1,interval_minutes=5,max_daily=48,start_hour=0,end_hour=24 WHERE id=1").run();
   const now=Math.floor(Date.now()/1000);
-  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at) VALUES(?,?,?,'ready',?)")
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,created_at,price_cents,old_price_cents) VALUES(?,?,?,'ready',?,3482,4990)")
    .bind('Kit automotivo do anúncio principal',SHORT,'Geral',now).run();
   const featured='<div class="rl-card-featured-wrapper">'+
    '<img class="poly-component__picture" src="'+PHOTO_PREVIEW+'">'+
@@ -350,9 +350,11 @@ test('Cron publica com preço e foto do destaque oficial mesmo com anúncio bloq
    throw Error('Requisição inesperada '+u);
   };
   await setupWhatsApp(env);
+  await rememberProductImage(env,SHORT,PHOTO_LARGE);
   const result=await runScheduled(env);
   assert.equal(result.status,'published');
   assert.equal(result.format,'photo');
+  assert.equal(result.whatsapp.status,'sent');
   assert.equal(telegramPhotos,1);
   assert.equal(whatsappPhotos,1);
   assert.equal(DB.prepare('SELECT price_cents FROM offers WHERE id=1').first().price_cents,3482);
