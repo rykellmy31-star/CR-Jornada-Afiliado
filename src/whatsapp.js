@@ -1,4 +1,4 @@
-import { composeOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
+import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
 import { ensureCouponTable } from './coupons.js';
@@ -385,10 +385,7 @@ export async function testWhatsApp(env) {
   return {ok:true,message_id:data.key.id};
 }
 function textForWhatsApp(offer){
-  const link=offer.affiliate_url;
-  const message=composeOfferMessage(offer).replace(/🔗 Link de afiliado:$/,'🔗 Comprar aqui:');
-  // Preserva o link completo mesmo ao montar legendas curtas.
-  return (message.length+link.length+1>1024?message.slice(0,1023-link.length):message)+'\n'+link;
+  return formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
 }
 async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,requirePhoto=false}={}){
   const text=textForWhatsApp(offer);

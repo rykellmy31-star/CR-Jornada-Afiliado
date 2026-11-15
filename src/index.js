@@ -169,7 +169,7 @@ async function sendOfferWithImage(env, chat, offer) {
   if (imageUrl) {
     try {
       const message = await telegramSend(env, chat, {
-        photo: imageUrl, caption: payload.text.slice(0, 1024), reply_markup: payload.reply_markup
+        photo: imageUrl, caption: payload.text, parse_mode:payload.parse_mode, reply_markup: payload.reply_markup
       }, 'sendPhoto');
       return { message, format: 'photo' };
     } catch (error) {
@@ -180,7 +180,7 @@ async function sendOfferWithImage(env, chat, offer) {
   }
   // Quando não há foto, URL visível permite que o Telegram gere uma prévia quando disponível.
   const message = await telegramSend(env, chat, {
-    ...payload, text: payload.text + '\n' + offer.affiliate_url
+    ...telegramPayload(offer, chat, Date.now(), {includeLink:true})
   });
   return { message, format: imageUrl ? 'text_photo_rejected' : 'text_no_image' };
 }

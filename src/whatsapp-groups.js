@@ -1,4 +1,4 @@
-import { normalizeOffer,localTimeParts,composeOfferMessage } from './logic.js';
+import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
 import { resolveProductImage } from './offer-images.js';
@@ -266,8 +266,7 @@ export async function listManagedWhatsAppGroupOptions(env,id){
 }
 async function sendWhatsApp(env,g,offer,{photoUrl=null,requirePhoto=false}={}){
  const link=offer.affiliate_url;
- const description=composeOfferMessage(offer);
- const text=(description.length+link.length+1>1024?description.slice(0,1023-link.length):description)+'\n'+link;
+ const text=formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
  let photo=photoUrl;
  if(!photo)try{photo=await resolveProductImage(env,link,findProductImage);}catch(err){console.warn('Foto grupo WA indisponível:',String(err?.message||err).slice(0,90));}
  if(requirePhoto&&!photo)throw fail('Imagem não confirmada. Nenhuma mensagem sem foto foi enviada.');
