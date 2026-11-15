@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
  saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
- resolveMonitorShortlinks,reviewMonitorShortlink} from '../src/whatsapp-link-monitor.js';
+ resolveMonitorShortlinks,reviewMonitorShortlink,inspectMonitorShortlink} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {renderPage,CSS,CLIENT_JS} from '../src/ui.js';
 const TOKEN='monitor-test-webhook-token-strong-123456';
@@ -711,4 +711,93 @@ test('API de revisão requer login',async()=>{
   }),env);
   assert.equal(response.status,401);
  }finally{DB.close();}
+});
+
+test('meli.la de vitrine /social não é produto, diagnóstico identifica vitrine',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ const social='https://www.mercadolivre.com.br/social/fabriciotechcombr?matt_word=s01setup&matt_tool=26256765';
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo vitrine',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Veja aqui https://meli.la/1nATbu7'));
+  const calls=[];
+  globalThis.fetch=async url=>{
+   calls.push(String(url));
+   return new Response(null,{status:302,headers:{location:social}});
+  };
+  assert.deepEqual(await resolveMonitorShortlinks(env),{resolved:0,reviewed:1});
+  assert.deepEqual(calls,['https://meli.la/1nATbu7']);
+  const short=DB.prepare('SELECT status,reason FROM ml_monitor_shortlinks').first();
+  assert.equal(short.status,'review');
+  assert.match(short.reason,/vitrine com vários produtos/);
+  assert.equal((await monitorState(env)).counts.captured,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('meli.la com redirecionamento por .com e depois .com.br confirma produto único',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'Oferta por R$ 99 https://meli.la/MULTIHOP7'));
+  const calls=[];
+  globalThis.fetch=async url=>{
+   const u=String(url);calls.push(u);
+   if(u==='https://meli.la/MULTIHOP7')return new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com/sec/1234'}});
+   if(u==='https://www.mercadolivre.com/sec/1234')return new Response(null,{status:301,headers:{location:PRODUCT}});
+   throw new Error('URL inesperada: '+u);
+  };
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  assert.deepEqual(calls,['https://meli.la/MULTIHOP7','https://www.mercadolivre.com/sec/1234']);
+  const product=(await monitorState(env)).links[0];
+  assert.equal(product.source_url,PRODUCT);
+  assert.equal(product.last_seen_price_cents,9900);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('meli.la temporariamente bloqueado recebe novas tentativas antes da revisão',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.la/BLOCK4037'));
+  globalThis.fetch=async()=>new Response('denied',{status:403});
+  for(let i=0;i<2;i++){
+   assert.equal((await resolveMonitorShortlinks(env)).resolved,0);
+   const short=DB.prepare('SELECT status,reason,tries FROM ml_monitor_shortlinks').first();
+   assert.equal(short.status,'pending');
+   assert.match(short.reason,/negou a consulta automática \(403\)/);
+   assert.equal(short.tries,i+1);
+  }
+  await resolveMonitorShortlinks(env);
+  assert.equal(DB.prepare('SELECT status FROM ml_monitor_shortlinks').first().status,'review');
+  assert.equal((await monitorState(env)).counts.captured,0);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('revisa automaticamente erros genéricos antigos de meli.la uma vez sem aprovar vitrine',async()=>{
+ const {env,DB}=setup(),originalFetch=globalThis.fetch;
+ try{
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,group_name:'Grupo',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,event(GROUP,'https://meli.la/OLDREVIEW9'));
+  DB.prepare("UPDATE ml_monitor_shortlinks SET status='review',reason='Sem destino seguro de produto',tries=1").run();
+  let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(null,{status:302,headers:{location:PRODUCT}});};
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  assert.equal(DB.prepare('SELECT status FROM ml_monitor_shortlinks').first().status,'resolved');
+  assert.equal(calls,1);
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,0);
+  assert.equal(calls,1);
+ }finally{globalThis.fetch=originalFetch;DB.close();}
+});
+test('inspecionar erro de vitrine ou redirect externo retorna causa em vez de falso sucesso',async()=>{
+ const gallery=await inspectMonitorShortlink('https://meli.la/1nATbu7',{
+  fetcher:async()=>new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/social/lojavitrine'}})
+ });
+ assert.equal(gallery.kind,'showcase');
+ assert.equal(gallery.product,null);
+ const outside=await inspectMonitorShortlink('https://meli.la/OUTSIDE7',{
+  fetcher:async()=>new Response(null,{status:302,headers:{location:'https://shopee.com.br/produto'}})
+ });
+ assert.equal(outside.kind,'external');
+ assert.equal(outside.product,null);
 });
