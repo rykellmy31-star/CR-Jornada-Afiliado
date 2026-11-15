@@ -27,6 +27,7 @@ const SCHEMA=[
  // e a origem para auditoria, sem reprocessar o mesmo encurtador indefinidamente.
  "CREATE TABLE IF NOT EXISTS ml_monitor_ignored_links(short_url TEXT PRIMARY KEY,group_id INTEGER NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_worker_heartbeat(id INTEGER PRIMARY KEY CHECK(id=1),last_run_at INTEGER NOT NULL DEFAULT 0,last_reviewed INTEGER NOT NULL DEFAULT 0,last_resolved INTEGER NOT NULL DEFAULT 0,last_ignored INTEGER NOT NULL DEFAULT 0)",
+ "CREATE TABLE IF NOT EXISTS ml_monitor_browser_attempts(shortlink_id INTEGER PRIMARY KEY REFERENCES ml_monitor_shortlinks(id),last_attempt_at INTEGER NOT NULL DEFAULT 0)",
  "INSERT OR IGNORE INTO ml_monitor_worker_heartbeat(id) VALUES(1)"
 
 ];
@@ -65,6 +66,7 @@ async function ignoreMonitorCoupon(env,item,at,reason='Link de cupom, não é pr
  await env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_ignored_links(short_url,group_id,reason,created_at) VALUES(?,?,?,?)')
   .bind(item.short_url,item.group_id,reason,at).run();
  await env.DB.prepare('DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?').bind(item.id).run();
+ await env.DB.prepare('DELETE FROM ml_monitor_browser_attempts WHERE shortlink_id=?').bind(item.id).run();
  await env.DB.prepare("DELETE FROM ml_monitor_shortlinks WHERE id=? AND status IN ('pending','review')").bind(item.id).run();
 }
 
@@ -771,6 +773,8 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
 // Browser Run é usado APENAS quando HTML estático não contém o CTA.
 // Acesso com quota diária fixa em D1 impede consumo descontrolado mesmo
 // quando o cron revalida links a cada 30 segundos.
+const MONITOR_RENDER_DAILY_LIMIT=36;
+const MONITOR_RENDER_COOLDOWN=30;
 export async function claimSocialBrowserBudget(env,now=epoch()){
  if(typeof env?.BROWSER?.quickAction!=='function')return false;
  await ensureMonitor(env);
@@ -778,8 +782,16 @@ export async function claimSocialBrowserBudget(env,now=epoch()){
  const result=await env.DB.prepare(
   "UPDATE ml_monitor_browser_budget SET "+
   "daily_count=CASE WHEN day_key=? THEN daily_count+1 ELSE 1 END,day_key=?,last_at=? "+
-  "WHERE id=1 AND (day_key<>? OR daily_count<12) AND last_at<=?"
- ).bind(day,day,now,day,now-65).run();
+  "WHERE id=1 AND (day_key<>? OR daily_count<?) AND last_at<=?"
+ ).bind(day,day,now,day,MONITOR_RENDER_DAILY_LIMIT,now-MONITOR_RENDER_COOLDOWN).run();
+ return result.meta?.changes===1;
+}
+async function claimMonitorItemBrowserAttempt(env,shortlinkId,at){
+ const result=await env.DB.prepare(
+  "INSERT INTO ml_monitor_browser_attempts(shortlink_id,last_attempt_at) VALUES(?,?) "+
+  "ON CONFLICT(shortlink_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at "+
+  "WHERE last_attempt_at<=?"
+ ).bind(shortlinkId,at,at-600).run();
  return result.meta?.changes===1;
 }
 export async function browserFeaturedProduct(env,socialUrl){
@@ -791,19 +803,25 @@ export async function browserFeaturedProduct(env,socialUrl){
  try{
   const rendered=await env.BROWSER.quickAction('content',{
    url:u.href,
-   gotoOptions:{waitUntil:'networkidle2',timeout:14000},
+   gotoOptions:{waitUntil:'networkidle2',timeout:20000},
    rejectResourceTypes:['image','font','media']
   });
-  if(!rendered?.ok)return null;
+  if(!rendered?.ok){
+    console.warn('Browser Run vitrine: HTTP',rendered?.status||'sem resposta');
+    return null;
+  }
   return await featuredProductFromShowcasePage(rendered,u.href);
- }catch{return null;}
+ }catch(error){
+  console.warn('Browser Run vitrine:',String(error?.message||error).slice(0,140));
+  return null;
+ }
 }
 export async function redirectSource(value){
  return (await inspectMonitorShortlink(value)).product;
 }
-// Revalida automaticamente os links em revisão a cada ~30 s enquanto houver
-// novas tentativas. Depois de 8 falhas, reduz a frequência para evitar bloqueios.
-// Não depende de navegador aberto: acionado em dois pulsos do Cron da Cloudflare.
+// Cada tentativa é independente: HTML da vitrine pode mudar entre leituras.
+// Cron da Cloudflare é de 1 minuto; a segunda pulsação roda após 30 segundos.
+// Falhas HTTP 403/429 usam backoff para não forçar o Mercado Livre.
 // O bloqueio em D1 evita consultas duplicadas por acionamentos simultâneos.
 export function monitorRetryDelaySeconds(attempts){
  return attempts<=8?30:attempts<=16?300:1800;
@@ -870,13 +888,21 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
    catch{result={product:null,kind:'temporary',reason:'Erro temporário consultando anúncio'};}
    const tries=Number(item.auto_attempts||0);
    // No máximo um Browser Run por pulsação. A quota diária permanece em D1.
+   // Tentativas antigas não eliminam a renderização: links podem estar em
+   // revisão há dias sem ter recebido nenhuma consulta de navegador.
    const shouldBrowser=!result.product&&result.social_url&&
-    ['showcase','auth'].includes(result.kind)&&(tries===0||tries===8||tries===16);
+    ['showcase','auth'].includes(result.kind);
    if(shouldBrowser&&browserBudget>0){
-    browserBudget=0; // reservar antes do await, evitando concorrência
-    if(await claimSocialBrowserBudget(env,at)){
-     const rendered=await browserFeaturedProduct(env,result.social_url);
-     if(rendered)result={product:rendered,kind:'featured_product',reason:null};
+    const perItem=await env.DB.prepare(
+     'SELECT last_attempt_at FROM ml_monitor_browser_attempts WHERE shortlink_id=?'
+    ).bind(item.id).first();
+    if(!perItem||perItem.last_attempt_at<=at-600){
+     browserBudget=0; // reservar antes do await, evitando concorrência
+     if(await claimSocialBrowserBudget(env,at)){
+      await claimMonitorItemBrowserAttempt(env,item.id,at);
+      const rendered=await browserFeaturedProduct(env,result.social_url);
+      if(rendered)result={product:rendered,kind:'featured_product',reason:null};
+     }
     }
    }
    if(result.product){
@@ -887,6 +913,7 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
       "WHERE id=? AND status IN ('pending','review')"
      ).bind(item.id).run();
      await env.DB.prepare('DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?').bind(item.id).run();
+     await env.DB.prepare('DELETE FROM ml_monitor_browser_attempts WHERE shortlink_id=?').bind(item.id).run();
      return {resolved:updated.meta?.changes===1?1:0,reviewed:0,ignored:0};
     }catch{
      result={product:null,kind:'temporary',reason:'Erro temporário ao salvar o produto confirmado'};
@@ -903,7 +930,8 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
    // As demais falhas não viram produto; são reavaliadas com backoff.
    const retryable=!['external','loop'].includes(result.kind);
    const attempts=tries+1;
-   const delay=retryable?monitorRetryDelaySeconds(attempts):86400;
+   const delay=!retryable?86400:
+    (result.kind==='showcase'?60:result.kind==='auth'?300:monitorRetryDelaySeconds(attempts));
    await env.DB.prepare(
     "UPDATE ml_monitor_shortlinks SET status='review',tries=tries+1,reason=? "+
     "WHERE id=? AND status IN ('pending','review')"
