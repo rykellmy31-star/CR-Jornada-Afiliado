@@ -1,7 +1,7 @@
 import { normalizeOffer, shouldSend, localTimeParts, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
 import { findProductImage } from './images.js';
-import { resolveProductImage } from './offer-images.js';
+import { resolveProductImage,rememberTelegramSentPhoto } from './offer-images.js';
 import { normalizeCoupon } from './coupons.js';
 
 // Tabelas ADITIVAS: o canal 1 continua usando settings/offers/offer_coupons/logs.
@@ -338,6 +338,8 @@ async function sendOfferWithImage(env,token,chat,offer){
   if(photo){
     try{
       const msg=await api(token,'sendPhoto',{chat_id:chat,photo,caption:payload.text,parse_mode:payload.parse_mode,reply_markup:payload.reply_markup});
+      try{await rememberTelegramSentPhoto(env,offer.affiliate_url,photo,msg.message_id);}
+      catch(error){console.warn('Foto do canal Telegram não pôde ser registrada:',String(error?.message||error).slice(0,95));}
       return {message:msg,format:'photo'};
     }catch(error){
       if(error.telegramStatus!==400)throw error;
