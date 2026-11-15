@@ -615,6 +615,13 @@ function trustedHop(input){
 export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
  let current=value;const visited=new Set();
  for(let hop=0;hop<7;hop++){
+  let externalUrl;
+  try{externalUrl=new URL(current);}catch{}
+  const host=externalUrl?.hostname.toLowerCase();
+  const loginHost=['auth.mercadolivre.com.br','login.mercadolivre.com.br'].includes(host);
+  const loginPath=REDIRECT_HOSTS.has(host)&&/^\/jms\/mlb\/lgz\/login(?:\/|$)/i.test(externalUrl.pathname);
+  if(loginHost||loginPath)
+   return {product:null,kind:'auth',reason:'A vitrine do Mercado Livre solicitou login; não foi possível confirmar um produto público'};
   const u=trustedHop(current);
   if(!u){
    const embedded=trustedEmbeddedRedirect(current);
