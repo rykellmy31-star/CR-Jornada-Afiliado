@@ -181,6 +181,7 @@ export function renderPage() {
             </div>
             <div class="settings-subsection automation-section"><h3>⚙️ Automação</h3>
             <label class="check-row"><input type="checkbox" id="automation_enabled"><span><b>Publicações automáticas neste canal (ativar ou pausar)</b><small>O botão Ligar/Desligar Robô não cancela uma pausa feita aqui.</small></span></label>
+            <p class="hint" data-telegram-photo-guard="true">📷 No automático, o Telegram envia a foto real do anúncio como mídia, igual ao manual. Se não conseguir confirmar a foto, mantém a oferta na fila para nova tentativa; não publica somente prévia do link.</p>
             <div class="field-grid"><label>Intervalo entre publicações no Telegram (minutos)<input id="interval_minutes" type="number" inputmode="numeric" min="1" max="1440" step="1" placeholder="Ex.: 20" required></label><label>Máximo diário (1 a 48)<input type="number" min="1" max="48" id="max_daily"></label><label>Começar às (Bahia)<select id="start_hour"></select></label><label>Parar às (Bahia)<select id="end_hour"></select></label></div>
             <p class="hint">Digite qualquer intervalo inteiro entre 1 e 1440 minutos. Janela de publicação no horário da Bahia (UTC−3).</p>
             <div id="telegram-capacity" class="telegram-capacity" aria-live="polite" aria-atomic="true">
