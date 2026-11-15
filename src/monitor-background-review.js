@@ -104,10 +104,12 @@ export async function runBackgroundReview(env,{now=null}={}){
    await updateJob(env,{status:'waiting_monitor',next_run_at:at+60,last_run_at:at,updated_at:at,lease_until:0});
    return {skipped:'monitor_off'};
   }
-  const usage=state.browser_usage||{};
+  const usage=await env.DB.prepare(
+   'SELECT day_key,daily_count FROM ml_monitor_browser_budget WHERE id=1'
+  ).first();
   const utcDay=new Date(at*1000).toISOString().slice(0,10);
-  if(state.browser_binding_available!==false&&usage.day_key===utcDay&&
-     Number(usage.used||0)>=MONITOR_BROWSER_DAILY_LIMIT){
+  if(state.browser_binding_available!==false&&usage?.day_key===utcDay&&
+     Number(usage.daily_count||0)>=MONITOR_BROWSER_DAILY_LIMIT){
    const next=nextUtcDay(at);
    await updateJob(env,{status:'waiting_budget',next_run_at:next,last_run_at:at,updated_at:at,lease_until:0});
    return {skipped:'daily_browser_limit',next_run_at:next};
