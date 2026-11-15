@@ -212,6 +212,7 @@ export function renderPage() {
       <section class="card whatsapp-automation hidden" id="ml-wa-automation-panel">
         <div class="section-header"><div><h2>🟢 Automação do WhatsApp principal</h2>
           <p>Grupos e conexões ficam no WhatsApp. Configure aqui o intervalo e a ativação.</p></div></div>
+        <p class="hint" data-wa-photo-guard="v2">📷 Publicações automáticas só saem com fotografia confirmada do produto. Se a foto não estiver disponível, a oferta será reavaliada sem enviar uma mensagem apenas com texto.</p>
         <form id="auto-wa-form" class="whatsapp-form">
           <label>Intervalo entre publicações do WhatsApp (minutos)
             <input id="auto-wa-interval" type="number" min="1" max="1440" step="1" required>
