@@ -2,6 +2,7 @@ import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
+import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry} from './automatic-price.js';
 import { categoryMatches,normalizeChannelCategory } from './multichannel.js';
 import { listWhatsAppGroups,connectAffiliateWhatsApp,getAffiliateWhatsAppConnection,evolutionOrigin,ensureWhatsAppTables } from './whatsapp.js';
 
@@ -292,7 +293,7 @@ export async function testManagedWhatsAppGroup(env,id){
  await log(env,g.id,'test_sent','Teste solicitado pelo administrador.');
  return {ok:true,message_id:data.key.id};
 }
-export async function publishManagedWhatsAppOffer(env,id,offerId,{photoUrl=null,requirePhoto=false}={}){
+export async function publishManagedWhatsAppOffer(env,id,offerId,{photoUrl=null,requirePhoto=false,pricedOffer=null}={}){
  const g=await groupRow(env,id);
  if(!g.enabled||!g.public_registered||!g.group_jid)throw fail('Ative o grupo público antes de publicar.');
  const offer=await env.DB.prepare(OFFER_DETAILS+' WHERE o.group_id=? AND o.id=?').bind(g.id,Number(offerId)).first();
@@ -301,7 +302,7 @@ export async function publishManagedWhatsAppOffer(env,id,offerId,{photoUrl=null,
  const claim=await env.DB.prepare("UPDATE whatsapp_group_offers SET status='sending',last_error=NULL WHERE id=? AND group_id=? AND status='ready'").bind(offer.id,g.id).run();
  if(claim.meta?.changes!==1)throw fail('Oferta já enviada ou em revisão.',409);
  try{
-   const result=await sendWhatsApp(env,g,offer,{photoUrl,requirePhoto});
+   const result=await sendWhatsApp(env,g,pricedOffer||offer,{photoUrl,requirePhoto});
    const stamp=now(),day=localTimeParts(new Date()).day;
    await env.DB.prepare("UPDATE whatsapp_group_offers SET status='published',published_at=?,published_day=?,message_id=? WHERE id=? AND group_id=? AND status='sending'")
      .bind(stamp,day,result.message_id,offer.id,g.id).run();
@@ -322,6 +323,7 @@ export async function runManagedWhatsAppScheduled(env){
  if(!env?.DB)return {skipped:'db'};
   if(env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
  await ensureWhatsAppGroupTables(env);
+ await ensureAutomaticPrices(env);
  const rows=await env.DB.prepare('SELECT * FROM whatsapp_groups WHERE enabled=1 AND public_registered=1 AND group_jid<>? ORDER BY id LIMIT 40').bind('').all();
  const results=[];
  for(const g of rows.results){
@@ -330,14 +332,23 @@ export async function runManagedWhatsAppScheduled(env){
    const count=await env.DB.prepare("SELECT COUNT(*) AS total FROM whatsapp_group_offers WHERE group_id=? AND status='published' AND published_day=?").bind(g.id,clock.day).first();
    if((count?.total||0)>=g.max_daily)continue;
    if(g.last_attempt_at&&time-g.last_attempt_at<g.interval_minutes*60)continue;
-   const offer=await env.DB.prepare("SELECT o.id,o.affiliate_url FROM whatsapp_group_offers o "+
+   const offer=await env.DB.prepare("SELECT o.* FROM whatsapp_group_offers o "+
      "LEFT JOIN whatsapp_group_media_retries pr ON pr.offer_id=o.id "+
+     "LEFT JOIN affiliate_auto_price_retries apr ON apr.queue_type='wa-group' AND apr.offer_id=o.id "+
      "WHERE o.group_id=? AND o.status='ready' AND "+
      "(pr.offer_id IS NULL OR (pr.attempts<6 AND pr.next_attempt_at<=?)) AND "+
+     "(apr.offer_id IS NULL OR apr.next_retry_at<=?) AND "+
      "(lower(?)='geral' OR lower(o.category)=lower(?)) "+
      "ORDER BY o.created_at,o.id LIMIT 1")
-     .bind(g.id,time,g.category,g.category).first();
+     .bind(g.id,time,time,g.category,g.category).first();
    if(!offer)continue;
+   const price=await prepareAutomaticOfferPrice(env,offer);
+   if(!price.ok){
+     await recordAutomaticPriceRetry(env,'wa-group',offer.id,price.reason);
+     await log(env,g.id,'awaiting_price','Aguardando valor verificável: '+price.reason,offer.id);
+     continue;
+   }
+   await clearAutomaticPriceRetry(env,'wa-group',offer.id);
    // Só consome intervalo e compartilha o número quando a imagem estiver pronta.
    let image=null;
    try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage);}
@@ -373,7 +384,7 @@ export async function runManagedWhatsAppScheduled(env){
      await env.DB.prepare('UPDATE whatsapp_groups SET last_attempt_at=? WHERE id=? AND last_attempt_at=?').bind(g.last_attempt_at,g.id,time).run();
      continue;
    }
-   try{results.push({group_id:g.id,...await publishManagedWhatsAppOffer(env,g.id,offer.id,{photoUrl:image,requirePhoto:true})});}
+   try{results.push({group_id:g.id,...await publishManagedWhatsAppOffer(env,g.id,offer.id,{photoUrl:image,requirePhoto:true,pricedOffer:price.offer})});}
    catch(e){await log(env,g.id,'schedule_error',String(e?.message||e).slice(0,140));results.push({group_id:g.id,status:'error'});}
  }
  return {results};
