@@ -357,7 +357,7 @@ export async function runManagedWhatsAppScheduled(env){
    }
    // Só consome intervalo e compartilha o número quando a imagem estiver pronta.
    let image=null;
-   try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage);}
+   try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true});}
    catch(err){console.warn('Foto automática do grupo:',String(err?.message||err).slice(0,90));}
    if(!image){
      await env.DB.prepare(
