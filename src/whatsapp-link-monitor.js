@@ -22,7 +22,11 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_retry_schedule(shortlink_id INTEGER PRIMARY KEY REFERENCES ml_monitor_shortlinks(id),next_retry_at INTEGER NOT NULL DEFAULT 0,last_attempt_at INTEGER NOT NULL DEFAULT 0,auto_attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0)",
  "CREATE INDEX IF NOT EXISTS idx_ml_monitor_retry_due ON ml_monitor_retry_schedule(next_retry_at,lease_until)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_browser_budget(id INTEGER PRIMARY KEY CHECK(id=1),day_key TEXT NOT NULL DEFAULT '',daily_count INTEGER NOT NULL DEFAULT 0,last_at INTEGER NOT NULL DEFAULT 0)",
- "INSERT OR IGNORE INTO ml_monitor_browser_budget(id) VALUES(1)"
+ "INSERT OR IGNORE INTO ml_monitor_browser_budget(id) VALUES(1)",
+ // Cupons comprovados ficam fora da fila de produtos, mas preservamos o motivo
+ // e a origem para auditoria, sem reprocessar o mesmo encurtador indefinidamente.
+ "CREATE TABLE IF NOT EXISTS ml_monitor_ignored_links(short_url TEXT PRIMARY KEY,group_id INTEGER NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL)"
+
 ];
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const epoch=()=>Math.floor(Date.now()/1000);
@@ -33,6 +37,35 @@ const SHORT_HOSTS=new Set(['meli.la','melila.me','meli.promo']); // Domínios ap
 // Domínios usados como passagem em redirecionamentos do próprio Mercado Livre.
 // Apenas as URLs brasileiras oficiais com MLB/MLBU viram produto captado.
 const REDIRECT_HOSTS=new Set([...HOSTS,'m.mercadolivre.com.br','mercadolivre.com','www.mercadolivre.com']);
+
+function couponLandingUrl(value){
+ let u;try{u=new URL(value);}catch{return false;}
+ const host=u.hostname.toLowerCase(),path=decodeURIComponent(u.pathname).toLowerCase();
+ // Só páginas oficiais do Mercado Livre. Promoção de UM produto com cupom
+ // não é um catálogo de cupons e deve continuar na fila de produtos.
+ if(!REDIRECT_HOSTS.has(host))return false;
+ return /(?:^|\/)(?:cupons?|coupons?|coupon-center|central-de-cupons|cupons-de-desconto)(?:\/|$)/i.test(path);
+}
+function couponOnlyAnnouncement(message){
+ const value=String(message||'').replace(/[\u{1F300}-\u{1FAFF}]/gu,' ')
+  .replace(/\s+/g,' ').trim().toLocaleLowerCase('pt-BR');
+ if(value.length<8||value.length>220)return false;
+ // Não descartar uma oferta de produto apenas porque oferece cupom de desconto.
+ if(/(?:produto|kit |conjunto|perfume|celular|ferramenta|tênis|tenis|frete grátis|frete gratis|por r\$|de r\$|com cupom)/i.test(value))return false;
+ return /^(?:(?:atenção|atencao|urgente|imperdível|imperdivel)\s*[:! -]\s*)?(?:cup(?:om|ons)\s+(?:liberad[oa]s?|dispon[ií]ve(?:l|is)|de desconto|exclusiv[oa]s?|para compras)|resgate(?:m)?\s+(?:o\s+)?cupom|aproveite\s+(?:o\s+)?cupom|cupom\s+[a-z0-9]{4,}\s+(?:liberado|disponível))\b/i.test(value);
+}
+export function monitorCouponOnly(hint,destination){
+ return couponLandingUrl(destination)||couponOnlyAnnouncement(hint);
+}
+async function ignoreMonitorCoupon(env,item,at,reason='Link de cupom, não é produto individual'){
+ // A tabela existente mantém CHECK sem status ignored; não a alteramos.
+ // Registra o descarte e retira a pendência sem apagar ofertas ou grupos.
+ await env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_ignored_links(short_url,group_id,reason,created_at) VALUES(?,?,?,?)')
+  .bind(item.short_url,item.group_id,reason,at).run();
+ await env.DB.prepare('DELETE FROM ml_monitor_retry_schedule WHERE shortlink_id=?').bind(item.id).run();
+ await env.DB.prepare("DELETE FROM ml_monitor_shortlinks WHERE id=? AND status IN ('pending','review')").bind(item.id).run();
+}
+
 export async function ensureMonitor(env){for(const query of SCHEMA)await env.DB.prepare(query).run();await ensureLinkBatches(env);}
 export function extractUrls(text){
  if(typeof text!=='string')return [];
@@ -212,7 +245,7 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
 export async function monitorState(env){
  await ensureMonitor(env);
  await recoverMissingMonitorPrices(env);
- const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress]=await Promise.all([
+ const [settings,groups,links,pending,categories,counts,perGroup,diagnostics,latestShortlinks,observations,delivery,rejected,retryProgress,ignoredCoupons]=await Promise.all([
   env.DB.prepare('SELECT enabled,updated_at FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT id,instance_name,group_jid,group_name,enabled,created_at FROM ml_monitor_groups ORDER BY id DESC LIMIT 100').all(),
   env.DB.prepare("SELECT l.id,l.product_id,l.title,l.source_url,l.category,l.classification,l.status,l.created_at,g.group_name,m.last_seen_price_cents,m.last_seen_deal_json,m.last_queued_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id ORDER BY l.id DESC LIMIT 200").all(),
@@ -248,7 +281,8 @@ export async function monitorState(env){
    "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
    "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
    "WHERE s.status='review'"
-  ).first()
+  ).first(),
+  env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_ignored_links').first()
  ]);
  const normalizedCounts=x=>({
   captured:Number(x?.captured||0),
@@ -261,6 +295,7 @@ export async function monitorState(env){
  return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
+   ignored_coupon_links:Number(ignoredCoupons?.total||0),
    retry_progress:{
      total:Number(retryProgress?.total||0),automatic:Number(retryProgress?.automatic||0),
      manual:Number(retryProgress?.manual||0),
@@ -691,6 +726,7 @@ export async function inspectMonitorShortlink(value,{fetcher=fetch}={}){
   visited.add(u.href);
   const product=urlCandidate(u.href);
   if(product?.kind==='product')return {product,kind:'product',reason:null};
+  if(couponLandingUrl(u.href))return {product:null,kind:'coupon',reason:'Página oficial de cupons: não é um anúncio individual'};
   const social=/^\/social(?:\/|$)/i.test(u.pathname)&&REDIRECT_HOSTS.has(u.hostname.toLowerCase());
   if(social)previousSocial=u.href;
   let res;
