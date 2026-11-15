@@ -1286,3 +1286,10 @@ test('meli.promo vitrine com JS captura principal JBL após renderização e ign
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
 });
+
+
+test('Revisão mostra o total verdadeiro mesmo quando só parte dos itens é exibida',()=>{
+ assert.match(MONITOR_CLIENT_JS,/reviewTotal/);
+ assert.match(MONITOR_CLIENT_JS,/reviews\.length<reviewTotal/);
+ assert.match(MONITOR_CLIENT_JS,/Exibindo /);
+});

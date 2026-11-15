@@ -44,14 +44,16 @@ export async function overviewState(env) {
     exists('shopee_whatsapp_groups') ? total(env,'SELECT COUNT(*) AS total FROM shopee_whatsapp_groups WHERE enabled=1 AND public_registered=1') : 0,
     exists('logs') ? rows(env,'SELECT event,created_at FROM logs ORDER BY id DESC LIMIT 6') : []
   ]);
-  totals.review += shortReviews;
+  // Não somar tipos distintos em um cartão cujo objetivo é acompanhar links do monitor.
+  // Publicações com envio ambíguo exigem conferência própria antes de reenfileirar.
+  const publicationReviews = totals.review;
   // O canal cadastrado não desaparece da Visão Geral quando sua automação está pausada.
   const telegramConfigured = (String(telegramMain?.telegram_chat_id||'').trim() ? 1 : 0) + telegramConfiguredExtras + shopeeConfigured;
   // Para publicar, basta habilitação e autorização; a automação é um controle separado.
   const telegramActive = (telegramMain?.telegram_enabled && telegramMain?.channel_registered ? 1 : 0) + telegramExtras + shopeeTelegram;
   const whatsappActive = (whatsappMain?.enabled && whatsappMain?.public_registered ? 1 : 0) + whatsappExtras + shopeeWhatsapp;
   return {
-    counts:{captured:capture,queued:totals.queued,published:totals.published,review:totals.review},
+    counts:{captured:capture,queued:totals.queued,published:totals.published,review:shortReviews,review_publications:publicationReviews,review_total:shortReviews+publicationReviews},
     monitor:{enabled:!!monitor?.enabled,authorized_groups:groups,last_event_at:diagnostics?.last_event_at||null,last_link_at:diagnostics?.last_link_at||null},
     destinations:{telegram_configured:telegramConfigured,telegram_active:telegramActive,whatsapp_active:whatsappActive,connection_verified:false},
     events:events.map(x=>({event:String(x.event||'Evento').slice(0,80),created_at:count(x.created_at)}))
