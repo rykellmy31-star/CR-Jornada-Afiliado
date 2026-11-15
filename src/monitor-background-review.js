@@ -1,4 +1,4 @@
-import {monitorState,bulkValidateMonitorShortlinks,prepareMonitorBatch} from './whatsapp-link-monitor.js';
+import {ensureMonitor,monitorState,bulkValidateMonitorShortlinks,prepareMonitorBatch} from './whatsapp-link-monitor.js';
 
 // Controle persistente no D1. A interface apenas solicita o trabalho;
 // o Cron da Cloudflare avança um link por execução, sem navegador aberto.
@@ -70,6 +70,9 @@ async function prepareConfirmedForConversion(env){
 export async function backgroundReviewState(env){
  if(!env?.DB)return publicJob(null);
  await ensureJob(env);
+ // /api/monitor/state consulta em paralelo: as tabelas de conversão podem
+ // ainda não existir em uma instalação nova.
+ await ensureMonitor(env);
  return {...publicJob(await jobRow(env)),conversion:await currentConversion(env)};
 }
 export async function queueBackgroundReview(env){
