@@ -6,6 +6,7 @@ import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
+import {sendTelegramProductPhoto} from './telegram-photo.js';
 import {prewarmTelegramQueue} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
@@ -191,42 +192,19 @@ async function recordTelegramPhotoRetry(env,offer,error){
   .bind('Aguardando foto do produto. Próxima tentativa automática programada.',offer.id).run();
  return {status:'awaiting_photo',attempts,next_retry_at:nextAt};
 }
-async function sendOfferWithImage(env, chat, offer, {requirePhoto=false}={}) {
-  // Legenda com link e botão, tanto na rotina manual quanto no agendamento.
-  const payload = telegramPayload(offer, chat,Date.now(),{includeLink:true});
-  let imageUrl = null;
-  try {
-    imageUrl = await resolveProductImageWithRetry(env, offer.affiliate_url, findProductImage,{retryOnMiss:requirePhoto,sourceLookup:requirePhoto?resolveOfferSource:null});
-  } catch (error) {
-    // Metadados indisponíveis não devem impedir a publicação do link validado.
-    console.warn('Imagem indisponível para a oferta:', offer.id, String(error?.message || error).slice(0, 100));
-  }
-  if (requirePhoto && !imageUrl)
-    throw photoRequiredError('A foto real do produto não foi encontrada no anúncio.');
-  if (imageUrl) {
-    try {
-      const message = await telegramSend(env, chat, {
-        photo: imageUrl, caption: payload.text.length<=1024?payload.text:telegramPayload(offer,chat).text,
-        parse_mode:payload.parse_mode, reply_markup:payload.reply_markup
-      }, 'sendPhoto');
-      try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
-      catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
-      return { message, format: 'photo' };
-    } catch (error) {
-      // Só cai para texto após recusa EXPLÍCITA da foto (400); falha de rede é ambígua.
-      if (error.telegramStatus !== 400 || !/photo|image|file|http url|url content|wrong type|format/i.test(error.message)) throw error;
-      if(requirePhoto)throw photoRequiredError('Telegram recusou a foto do anúncio; nova tentativa necessária.');
-      console.warn('Telegram recusou a imagem; enviando oferta em texto:', offer.id);
-    }
-  }
-  // Quando não há foto, URL visível permite que o Telegram gere uma prévia quando disponível.
-  const message = await telegramSend(env, chat, {
-    ...telegramPayload(offer, chat, Date.now(), {includeLink:true})
-  });
-  return { message, format: imageUrl ? 'text_photo_rejected' : 'text_no_image' };
+async function sendOfferWithImage(env, chat, offer) {
+ // Ambos os modos usam exatamente a foto do anúncio original — sem texto ou prévia.
+ const imageUrl=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
+  {retryOnMiss:true,sourceLookup:resolveOfferSource});
+ if(!imageUrl)throw photoRequiredError('Foto real não encontrada no anúncio; não foi enviada publicação sem imagem.');
+ const payload=telegramPayload(offer,chat,Date.now(),{includeLink:true});
+ const caption=payload.text.length<=1024?payload.text:telegramPayload(offer,chat).text;
+ const message=await sendTelegramProductPhoto(env.TELEGRAM_BOT_TOKEN,chat,imageUrl,{...payload,text:caption});
+ try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
+ catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
+ return {message,format:'photo'};
 }
-
-async function sendOffer(env, offer, settings, {requirePhoto=false}={}) {
+async function sendOffer(env, offer, settings, {requirePhoto=true}={}) {
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
@@ -255,10 +233,10 @@ async function sendOffer(env, offer, settings, {requirePhoto=false}={}) {
     return { status: 'needs_review', error: String(error.message || error) };
   }
 }
-// Este é o MESMO caminho do botão Publicar: a imagem, a legenda, os botões,
+// Envio manual e agendado são idênticos: foto real, legenda e botões,
 // a confirmação do Telegram e o espelhamento WhatsApp são compartilhados.
 // O automático difere apenas pelo relógio; não cria outra exigência de preço/foto.
-async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manual',requirePhoto=false}={}){
+async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manual',requirePhoto=true}={}){
  const result=await sendOffer(env,offer,settings,{requirePhoto});
  if(result?.status!=='published')return result;
  const dispatch=async()=>{
