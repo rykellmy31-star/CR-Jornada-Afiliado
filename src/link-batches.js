@@ -7,7 +7,11 @@ import {safePromotionTerms} from './promotion-terms.js';
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_link_batches(id INTEGER PRIMARY KEY AUTOINCREMENT,status TEXT NOT NULL DEFAULT 'awaiting_links' CHECK(status IN ('awaiting_links','imported')),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,imported_at INTEGER)",
  "CREATE TABLE IF NOT EXISTS ml_link_batch_items(id INTEGER PRIMARY KEY AUTOINCREMENT,batch_id INTEGER NOT NULL REFERENCES ml_link_batches(id),position INTEGER NOT NULL,title TEXT NOT NULL,source_url TEXT NOT NULL,category TEXT NOT NULL,classification TEXT NOT NULL,affiliate_url TEXT,offer_id INTEGER,status TEXT NOT NULL DEFAULT 'awaiting_links' CHECK(status IN ('awaiting_links','queued')),UNIQUE(batch_id,position),UNIQUE(batch_id,source_url))",
- "CREATE INDEX IF NOT EXISTS idx_ml_link_batch_items ON ml_link_batch_items(batch_id,position)"
+ "CREATE INDEX IF NOT EXISTS idx_ml_link_batch_items ON ml_link_batch_items(batch_id,position)",
+ // Complementar e compatível com lotes existentes: o CHECK legado não
+ // permite adicionar 'ineligible' à coluna status de ml_link_batch_items.
+ "CREATE TABLE IF NOT EXISTS ml_link_batch_ineligible(item_id INTEGER PRIMARY KEY REFERENCES ml_link_batch_items(id),batch_id INTEGER NOT NULL REFERENCES ml_link_batches(id),reason TEXT NOT NULL,created_at INTEGER NOT NULL)",
+ "CREATE INDEX IF NOT EXISTS idx_ml_link_batch_ineligible_batch ON ml_link_batch_ineligible(batch_id)"
 ];
 const now=()=>Math.floor(Date.now()/1000);
 const bad=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -72,7 +76,13 @@ export async function readLinkBatch(env,id){
  if(!Number.isSafeInteger(n)||n<1)throw bad('Lote inválido.');
  const batch=await env.DB.prepare('SELECT * FROM ml_link_batches WHERE id=?').bind(n).first();
  if(!batch)throw bad('Lote não encontrado.',404);
- const result=await env.DB.prepare('SELECT id,position,title,source_url,category,classification,affiliate_url,offer_id,status FROM ml_link_batch_items WHERE batch_id=? ORDER BY position').bind(n).all();
+ const result=await env.DB.prepare(
+  "SELECT i.id,i.position,i.title,i.source_url,i.category,i.classification,i.affiliate_url,i.offer_id,"+
+  "CASE WHEN skipped.item_id IS NOT NULL THEN 'ineligible' ELSE i.status END AS status,"+
+  "skipped.reason AS ineligible_reason "+
+  "FROM ml_link_batch_items i LEFT JOIN ml_link_batch_ineligible skipped ON skipped.item_id=i.id "+
+  "WHERE i.batch_id=? ORDER BY i.position"
+ ).bind(n).all();
  return {batch,items:result.results};
 }
 export async function listLinkBatches(env){
@@ -82,11 +92,23 @@ export async function listLinkBatches(env){
  const awaiting=recent.find(x=>x.status==='awaiting_links');
  return {recent,current:awaiting?await readLinkBatch(env,awaiting.id):null};
 }
+// A exportação oficial devolve uma linha por produto: alguns são recusados
+// pelo Programa. Não eliminar linhas: isso deslocaria TODOS os links seguintes.
+export const INELIGIBLE_MARKER='Este produto não cumpre com os requisitos do Programa.';
+export function isIneligibleWarning(line){
+ return /^\s*(?:⚠️?\s*)?este produto não cumpre com os requisitos do programa\.?\s*$/iu
+   .test(String(line||''));
+}
 export function validatePairs(items,links){
  if(!Array.isArray(links)||items.length!==links.length||!items.length||items.length>50)
-   throw bad('Cole exatamente um link convertido por produto.');
+   throw bad('Cole uma linha para CADA produto, incluindo os avisos de não elegibilidade.');
  const seen=new Set();
- return links.map((v,i)=>{
+ const result=links.map((v,i)=>{
+   if(v?.ineligible===true){
+     if(v?.affiliate_url)throw bad('Linha '+(i+1)+': não misture aviso de produto inelegível com link.');
+     if(v?.reason!=='program_ineligible')throw bad('Linha '+(i+1)+': justificativa de não elegibilidade inválida.');
+     return {ineligible:true,reason:v.reason,source:items[i]};
+   }
    const affiliate_url=validateAffiliateUrl(v?.affiliate_url);
    if(seen.has(affiliate_url))throw bad('O mesmo link foi colado mais de uma vez.');
    seen.add(affiliate_url);
@@ -94,6 +116,9 @@ export function validatePairs(items,links){
    if(a&&b&&a!==b)throw bad('O link da linha '+(i+1)+' parece pertencer a outro produto.');
    return {affiliate_url,source:items[i]};
  });
+ if(!result.some(x=>!x.ineligible))
+   throw bad('Este lote não possui links convertidos válidos.');
+ return result;
 }
 export async function importLinkBatch(env,id,body){
  const data=await readLinkBatch(env,id);
@@ -103,7 +128,9 @@ export async function importLinkBatch(env,id,body){
  const pairs=validatePairs(data.items,body?.links);
  await ensureAutomationCenter(env);
  const cats=(await env.DB.prepare('SELECT name FROM affiliate_group_categories WHERE enabled=1').all()).results;
- const chosen=pairs.map((x,i)=>{
+ const skipped=pairs.filter(x=>x.ineligible);
+ const chosen=pairs.filter(x=>!x.ineligible).map(x=>{
+   const i=x.source.position-1;
    const c=String(body.links[i].category||x.source.category||'').trim();
    if(c!=='Geral'&&!cats.some(y=>y.name.toLocaleLowerCase('pt-BR')===c.toLocaleLowerCase('pt-BR')))
      throw bad('Categoria não cadastrada na linha '+(i+1)+'.');
@@ -122,12 +149,21 @@ export async function importLinkBatch(env,id,body){
  const duplicates=await Promise.all(queries.map(sql=>env.DB.prepare(sql).bind(...urls).all()));
  if(duplicates.some(r=>r.results.length))throw bad('Um dos links já está cadastrado em outra fila. Revise antes de continuar.',409);
  const t=now(),ops=[],sourceDeals=new Map();
+ // Registre os dois avisos em uma operação transacional, sem acrescentar
+ // ofertas e sem consumir um link convertido de outra posição.
+ for(const item of skipped){
+   ops.push(env.DB.prepare(
+     'INSERT INTO ml_link_batch_ineligible(item_id,batch_id,reason,created_at) VALUES(?,?,?,?)'
+   ).bind(item.source.id,Number(id),item.reason,t));
+ }
  // A janela de sete dias começa ao colocar o produto monitorado na fila.
  // O preço usado na comparação é o que foi registrado ao preparar este lote.
  const hasMonitor=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_monitor_links'").first();
  if(hasMonitor){
    const captured=(await env.DB.prepare("SELECT l.product_id,l.source_url,m.pending_deal_json,m.pending_captured_at,sp.price_cents AS site_price_cents,sp.status AS site_status,sp.checked_at AS site_checked_at FROM ml_monitor_links l JOIN ml_monitor_product_meta m ON m.product_id=l.product_id LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id WHERE l.batch_id=? AND l.status='batched'").bind(Number(id)).all()).results;
+   const chosenSources=new Set(chosen.map(x=>x.source.source_url));
    for(const item of captured){
+     if(!chosenSources.has(item.source_url))continue;
      sourceDeals.set(item.source_url,item);
      ops.push(env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) VALUES(?,0)").bind(item.product_id));
      ops.push(env.DB.prepare("UPDATE ml_monitor_product_meta SET last_queued_at=?,last_queued_price_cents=pending_price_cents,pending_batch_id=NULL,pending_price_cents=NULL,pending_deal_json=NULL,pending_captured_at=NULL WHERE product_id=? AND (pending_batch_id=? OR pending_batch_id IS NULL)")
@@ -170,5 +206,5 @@ export async function importLinkBatch(env,id,body){
  for(const x of chosen)try{
    await upsertProductCategory(env,'mercadolivre',{title:x.source.title,affiliate_url:x.affiliate_url,category:x.category});
  }catch(err){console.warn('Classificação pendente:',String(err.message||err).slice(0,100));}
- return {ok:true,batch_id:Number(id),queued:chosen.length};
+ return {ok:true,batch_id:Number(id),queued:chosen.length,ineligible:skipped.length};
 }
