@@ -444,3 +444,68 @@ test('manual e cron acionam a mesma operação, sem modificar intervalo',()=>{
  assert.doesNotMatch(cron,/tpr\.next_retry_at<=/);
  assert.doesNotMatch(cron,/UPDATE settings SET interval_minutes/);
 });
+
+
+test('Cron busca foto ANTES de marcar Envio em andamento, sem alterar relógio',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ let release,started,photos=0;
+ const gate=new Promise(resolve=>release=resolve);
+ const entered=new Promise(resolve=>started=resolve);
+ try{
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===SOURCE){
+    started();
+    await gate;
+    return new Response('<meta property="og:image" content="'+PREVIEW+'">',{
+     headers:{'content-type':'text/html'}});
+   }
+   if(u===SHORT)return new Response('<meta property="og:image" content="'+PREVIEW+'">',{
+    headers:{'content-type':'text/html'}});
+   if(u===LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'260000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){
+    assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'sending');
+    photos++;
+    return Response.json({ok:true,result:{message_id:88041}});
+   }
+   throw Error('URL inesperada '+u);
+  };
+  const task=runScheduled(env);
+  await Promise.race([entered,new Promise((_,reject)=>setTimeout(
+   ()=>reject(Error('Cron não iniciou a leitura da foto')),3000))]);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready',
+   'o Cron não pode marcar envio durante leitura lenta da foto');
+  release();
+  assert.equal((await task).status,'published');
+  assert.equal(photos,1);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
+  assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').first().interval_minutes,1);
+ }finally{release?.();globalThis.fetch=original;close();}
+});
+
+test('envio antigo preso é colocado em Revisar sem reenviar e sem bloquear novas ofertas',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ let sent=0;
+ try{
+  DB.prepare("UPDATE offers SET status='sending',telegram_message_id=NULL WHERE id=1").run();
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){sent++;throw Error('Não reenviar oferta ambígua');}
+   throw Error('Não deveria consultar '+u);
+  };
+  const first=await runScheduled(env);
+  assert.equal(first.skipped,'empty');
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'sending');
+  DB.prepare("UPDATE affiliate_sending_watch SET first_seen_at=? WHERE offer_id=1")
+   .bind(Math.floor(Date.now()/1000)-601).run();
+  const second=await runScheduled(env);
+  assert.equal(second.skipped,'empty');
+  const row=DB.prepare('SELECT status,last_error FROM offers WHERE id=1').first();
+  assert.equal(row.status,'needs_review');
+  assert.match(row.last_error,/Verifique Telegram e WhatsApp/);
+  assert.equal(sent,0);
+ }finally{globalThis.fetch=original;close();}
+});
