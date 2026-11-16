@@ -1,7 +1,7 @@
 // Fila persistente de consultas manuais na aba COPIAR DE GRUPOS.
 // O navegador apenas agenda e acompanha: as buscas externas rodam no Cron.
 // Isso impede que uma busca longa expire a requisição HTTP do painel.
-import {classifyMonitorMissingCategories} from './monitor-official-categories.js';
+import {classifyMonitorMissingCategories,officialCategoryStats} from './monitor-official-categories.js';
 import {refreshMonitorSitePrices} from './whatsapp-link-monitor.js';
 
 const CREATE="CREATE TABLE IF NOT EXISTS ml_group_manual_check_jobs ("+
@@ -57,15 +57,15 @@ export async function requestManualGroupCheck(env,kind){
  const current=await readManualGroupCheck(env,kind);
  if(current?.status==='pending'||current?.status==='running')
   return {ok:true,already_queued:true,...current};
- // Apenas um lote de diagnóstico por clique. O Cron regular continuará
+ // O clique agenda todos os produtos pendentes, mesmo com o painel fechado. O Cron regular continuará
  // procurando os demais produtos automaticamente com o painel fechado.
- const remaining=kind==='categories'?8:2;
+ const remaining=kind==='categories'?(await officialCategoryStats(env)).waiting:2;
  await env.DB.prepare(
-  "UPDATE ml_group_manual_check_jobs SET status='pending',remaining=?,attempts=0,"+
+  "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,attempts=0,"+
   "processed=0,classified=0,created=0,reused=0,failed=0,checked=0,found=0,"+
   "requested_at=?,updated_at=?,lease_until=0,last_error='' "+
   "WHERE kind=? AND status NOT IN ('pending','running')"
- ).bind(remaining,at,at,kind).run();
+ ).bind(remaining>0?'pending':'completed',remaining,at,at,kind).run();
  return {ok:true,already_queued:false,...await readManualGroupCheck(env,kind)};
 }
 export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={}){
@@ -79,10 +79,10 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
  if(claimed.meta?.changes!==1)return {skipped:'not_pending_or_busy',...await readManualGroupCheck(env,kind)};
  const row=await env.DB.prepare('SELECT * FROM ml_group_manual_check_jobs WHERE kind=?').bind(kind).first();
  try{
-  // Um ou dois itens por execução: o Cron suporta chamadas lentas à API,
+  // Até doze itens por execução: o Cron suporta chamadas lentas à API,
   // e a resposta do botão jamais fica aguardando consultas externas.
   const result=kind==='categories'
-   ?await classifyMonitorMissingCategories(env,{fetcher,limit:2,at:now})
+   ?await classifyMonitorMissingCategories(env,{fetcher,limit:12,at:now})
    :await refreshMonitorSitePrices(env,{fetcher,limit:1,forceRetry:true});
   if(result?.skipped){
    await env.DB.prepare("UPDATE ml_group_manual_check_jobs SET status='pending',lease_until=?,updated_at=? "+
