@@ -111,8 +111,9 @@ export async function groupCopyEligibility(env,{now=null}={}){
    if(examples.length<4)examples.push({product_id:item.product_id,title:String(item.title).slice(0,90),reason,description});
   }else ready++;
  }
- return {checked_with_price:items.length,ready,blocked,examples,primary_category:permitted,
-   sampled:items.length===40};
+ return {checked_with_price:items.length,with_group_price:items.filter(item=>
+   selectGroupCopyPrice(item,at)?.source==='grupo').length,ready,blocked,examples,
+   primary_category:permitted,sampled:items.length===120};
 }
 export async function groupCopyState(env){
  await ensureMonitor(env);await ensureGroupCopyAutomation(env);await ensureLinkBatches(env);
@@ -153,6 +154,8 @@ export async function groupCopyState(env){
     "WHERE g.enabled=1 AND g.authorized=1 AND l.status='batched' AND b.status='awaiting_links' "+
     "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL").first()
  ]);
+ const eligibility=await groupCopyEligibility(env,{now:at});
+ const groupPrices=Number(eligibility.with_group_price||0);
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
   last_run_at:Number(row?.last_run_at||0),last_error:String(row?.last_error||''),
   queued_count:Number(row?.queued_count||0),monitor_enabled:monitor?.enabled===1,
@@ -161,12 +164,13 @@ export async function groupCopyState(env){
   total_identified:Number(allCaptured?.total||0),
   awaiting_manual_batch:Number(manualPending?.total||0),
   readiness:{needs_category:Number(readiness?.needs_category||0),
-   needs_price:Number(readiness?.needs_price||0),
+   needs_price:Math.max(0,Number(readiness?.needs_price||0)-groupPrices),
    price_never_checked:Number(readiness?.price_never_checked||0),
    price_lookup_failed:Number(readiness?.price_lookup_failed||0),
-   with_price:Number(readiness?.with_price||0)},
+   with_price:Number(readiness?.with_price||0)+groupPrices,
+   with_group_price:groupPrices},
   official_categories:{...official_categories,waiting:Number(readiness?.needs_category||0)},
-  eligibility:await groupCopyEligibility(env,{now:at}),
+  eligibility,
   recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
