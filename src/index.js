@@ -15,6 +15,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
+import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto} from './group-original-photo.js';
 import {prewarmTelegramQueue,resolveScheduledShowcasePhoto} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
@@ -213,13 +214,16 @@ async function resolvePhotoForManualPublisher(env,offer){
 async function sendOfferWithImage(env, chat, offer, preparedPhoto=null) {
  // A foto de Cron já foi obtida ANTES de o status virar 'sending'.
  // O manual mantém a recuperação original dentro da requisição.
- const imageUrl=preparedPhoto||await resolvePhotoForManualPublisher(env,offer);
+ const original=await groupOriginalPhotoForOffer(env,offer.affiliate_url).catch(()=>null);
+ const imageUrl=original?null:(preparedPhoto||await resolvePhotoForManualPublisher(env,offer));
  const outputOffer=await withGroupCopyPublicLink(env,offer);
  const renderOffer=await withActiveMessageTemplate(env,outputOffer,'mercadolivre');
  const payload=telegramPayload(renderOffer,chat,Date.now(),{includeLink:true});
  const caption=payload.text.length<=1024?payload.text:telegramPayload(renderOffer,chat).text;
- const message=await sendTelegramProductPhoto(env.TELEGRAM_BOT_TOKEN,chat,imageUrl,{...payload,text:caption});
- try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
+ const message=original?
+  await sendTelegramOriginalPhoto(env.TELEGRAM_BOT_TOKEN,chat,original,{...payload,text:caption}):
+  await sendTelegramProductPhoto(env.TELEGRAM_BOT_TOKEN,chat,imageUrl,{...payload,text:caption});
+ try{if(imageUrl)await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
  catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
  return {message,format:'photo'};
 }
@@ -520,7 +524,12 @@ async function router(request, env, ctx=null) {
       !await secureEqual(receiver[1],env.MONITOR_WEBHOOK_TOKEN))return fail('Não encontrado.',404);
     if(!request.headers.get('content-type')?.startsWith('application/json'))return fail('Envie JSON.',415);
     const event=await getMonitorWebhookBody(request);
-    return json(await ingestMonitorEvent(env,event));
+    const result=await ingestMonitorEvent(env,event);
+    // Somente imagens anexadas à oferta do grupo autorizado. Falha de mídia
+    // não atrasa o recebimento dos links nem interrompe o webhook.
+    if(ctx?.waitUntil)ctx.waitUntil(captureGroupOriginalPhotos(env,event).catch(error=>
+     console.warn('Foto do grupo não recuperada:',String(error?.message||error).slice(0,100))));
+    return json(result);
   }
   if (!u.pathname.startsWith('/api/')) return fail('Não encontrado.', 404);
   requireConfigured(env);
