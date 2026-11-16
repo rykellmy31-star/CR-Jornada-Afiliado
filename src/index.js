@@ -1061,7 +1061,7 @@ export default {
         if(Number(result?.resolved||0)>0){
           try{
             await classifyMonitorMissingCategories(env,{limit:8,preferRecent:true});
-            await refreshMonitorSitePrices(env,{limit:3});
+            await recoverMissingMonitorPrices(env,{allowEvolution:false,limit:8});
             await runGroupCopyBatch(env,{limit:3,preferRecent:true});
           }catch(error){console.error('Preparação após revisão:',String(error?.message||error).slice(0,120));}
         }
@@ -1076,7 +1076,7 @@ export default {
           if(Number(result?.resolved||0)>0){
             try{
               await classifyMonitorMissingCategories(env,{limit:8,preferRecent:true});
-              await refreshMonitorSitePrices(env,{limit:3});
+              await recoverMissingMonitorPrices(env,{allowEvolution:false,limit:8});
               await runGroupCopyBatch(env,{limit:3,preferRecent:true});
             }catch(error){console.error('Preparação da segunda revisão:',String(error?.message||error).slice(0,120));}
           }
@@ -1084,19 +1084,10 @@ export default {
         })().catch(error=>console.error('Segunda revisão automática:',String(error?.message||error).slice(0,120))));
       }
       ctx.waitUntil((async()=>{
-        await manualPriceChecks;
-        // Investigar toda a fila histórica: API oficial, HTML, vitrine e
-        // navegador renderizado, com espera própria entre tentativas.
-        const result=await refreshMonitorSitePrices(env,{deepScan:true,limit:3});
-        if(result.found>0)await runGroupCopyBatch(env,{limit:3});
-        return result;
-      })().catch(error=>
-        console.error('Pesquisa profunda de preços:',String(error?.message||error).slice(0,120))));
-      ctx.waitUntil((async()=>{
-        await telegramPublished;
-        // Consultar novamente as mensagens antigas na Evolution, inclusive
-        // produtos com mais de 2 dias. Sem tocar no publicador Telegram/WA.
-        const result=await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:4});
+        await Promise.all([telegramPublished,manualPriceChecks]);
+        // Grupos pausados bloqueiam captura NOVA, nunca o backlog autorizado.
+        // Priorizar preço da mensagem de origem, sem consultas ao site do ML.
+        const result=await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:10});
         if(result.recovered>0)await runGroupCopyBatch(env,{limit:3});
         return result;
       })().catch(error=>
