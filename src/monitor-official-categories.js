@@ -78,7 +78,9 @@ export async function officialCategoryStats(env){
   env.DB.prepare('SELECT * FROM ml_monitor_official_category_state WHERE id=1').first(),
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
-   "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 "+
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+   "WHERE (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
+   "AND g.enabled=1 AND g.authorized=1 "+
    "AND (l.classification='needs_review' OR l.category='Geral')").first()
  ]);
  return {waiting:Number(pending?.total||0),last_run_at:Number(state?.last_run_at||0),
@@ -105,7 +107,9 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
    "LEFT JOIN ml_monitor_official_category_items oc ON oc.product_id=l.product_id "+
-   "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 "+
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+   "WHERE (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
+   "AND g.enabled=1 AND g.authorized=1 "+
    "AND l.classification<>'selected' AND oc.product_id IS NULL "+
    "AND COALESCE(r.next_retry_at,0)<=? "+
    "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id ASC LIMIT ?"
@@ -154,7 +158,10 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
     .bind(row.product_id,prediction.category_id,prediction.domain_id,prediction.official_label,cat.id,stamp).run();
    const updated=await env.DB.prepare(
     "UPDATE ml_monitor_links SET category=?,classification='mercadolivre' "+
-    "WHERE id=? AND status='available' AND classification<>'selected'"
+    "WHERE id=? AND (status='available' OR "+
+    "(status='batched' AND EXISTS(SELECT 1 FROM ml_link_batches b "+
+    "WHERE b.id=ml_monitor_links.batch_id AND b.status='awaiting_links'))) "+
+    "AND classification<>'selected'"
    ).bind(cat.name,row.id).run();
    classified+=Number(updated.meta?.changes||0);
    await env.DB.prepare('DELETE FROM ml_monitor_official_category_retry WHERE product_id=?').bind(row.product_id).run();
