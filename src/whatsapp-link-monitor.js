@@ -4,6 +4,7 @@ import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
 import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
+import {fetchRenderedMonitorPrice} from './monitor-rendered-price.js';
 import {monitorWebhookReady} from './monitor-webhook-setup.js';
 
 const SCHEMA=[
@@ -284,6 +285,11 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceR
         site={...featured,source:'vitrine oficial do produto principal confirmado'};
       }
     }catch{/* Vitrine pública indisponível: manter oferta pendente. */}
+  }
+  // Última alternativa: navegador da Cloudflare para páginas oficiais
+  // renderizadas por JavaScript. Mesmo ID, mesma URL, sem preço estimado.
+  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
+    site=await fetchRenderedMonitorPrice(env,item.source_url);
   }
   const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0;
   await env.DB.prepare(
