@@ -561,19 +561,22 @@ export async function reviewMonitorShortlink(env,id,body){
 }
 // Processa a revisão inteira em páginas pequenas, preservando limites do Worker.
 // Nunca converte link de terceiros em um link de afiliado nem publica a oferta.
-export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={}){
+export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3,now=null}={}){
  await ensureMonitor(env);
  const after=Number(after_id),batchSize=Number(limit);
  if(!Number.isSafeInteger(after)||after<0||!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>3)
   throw fail('Lote de revisão inválido.');
+ const t=Number.isSafeInteger(now)&&now>0?now:epoch();
  const candidates=(await env.DB.prepare(
-  "SELECT s.id,s.reason,g.authorized FROM ml_monitor_shortlinks s "+
-  "JOIN ml_monitor_groups g ON g.id=s.group_id "+
-  "WHERE s.status='review' AND s.id>? ORDER BY s.id LIMIT ?"
- ).bind(after,batchSize).all()).results;
+  "SELECT s.id,s.reason,g.authorized,COALESCE(rs.auto_attempts,0) AS auto_attempts "+
+  "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
+  "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
+  "WHERE s.status='review' AND s.id>? "+
+  "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? "+
+  "ORDER BY s.id LIMIT ?"
+ ).bind(after,t,t,batchSize).all()).results;
  const outcome={ok:true,processed:0,resolved:0,not_confirmed:0,requires_manual:0,
   busy:0,results:[],next_cursor:after,has_more:false};
- const t=epoch();
  for(const item of candidates){
   outcome.next_cursor=Number(item.id);
   if(!item.authorized){
@@ -613,7 +616,7 @@ export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={})
     const reason=String(result.reason||'Produto não confirmado').slice(0,220);
     await env.DB.prepare(
      'UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 WHERE shortlink_id=?'
-    ).bind(t,t+monitorRetryDelaySeconds(1),item.id).run();
+    ).bind(t,t+monitorRetryDelaySeconds(Number(item.auto_attempts||0)+1),item.id).run();
     outcome.results.push({id:item.id,status:'not_confirmed',reason});
    }
   }catch(error){
@@ -624,8 +627,11 @@ export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={})
   }
  }
  const next=await env.DB.prepare(
-  "SELECT 1 AS available FROM ml_monitor_shortlinks WHERE status='review' AND id>? LIMIT 1"
- ).bind(outcome.next_cursor).first();
+  "SELECT 1 AS available FROM ml_monitor_shortlinks s "+
+  "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
+  "WHERE s.status='review' AND s.id>? "+
+  "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? LIMIT 1"
+ ).bind(outcome.next_cursor,t,t).first();
  outcome.has_more=!!next;
  return outcome;
 }
@@ -640,6 +646,40 @@ export async function updateMonitorLinkCategory(env,id,body){
  if(row.meta?.changes!==1)throw fail('Produto não disponível para editar.',409);
  return {ok:true};
 }
+// A categoria "Geral" bloqueia o lote. Permita classificar TODOS os
+// produtos ainda não classificados explicitamente, mas SOMENTE após o dono
+// escolher uma categoria ativa. Não modifica itens de lotes anteriores.
+export async function bulkCategorizeMonitorLinks(env,body){
+ await ensureMonitor(env);
+ await ensureAutomationCenter(env);
+ const category=String(body?.category||'').trim();
+ if(body?.confirm_all_unclassified!==true)
+  throw fail('Confirme a classificação dos produtos disponíveis.');
+ if(!category||category==='Geral')
+  throw fail('Selecione uma categoria específica antes de continuar.');
+ const active=await env.DB.prepare(
+  'SELECT name FROM affiliate_group_categories WHERE enabled=1 AND name=?'
+ ).bind(category).first();
+ if(!active)throw fail('Categoria inválida ou desativada.');
+ const items=(await env.DB.prepare(
+  "SELECT id FROM ml_monitor_links WHERE status='available' "+
+  "AND (category='Geral' OR trim(category)='') ORDER BY id LIMIT 100"
+ ).all()).results;
+ if(!items.length)return {ok:true,classified:0,remaining:0,category};
+ const operations=items.map(x=>env.DB.prepare(
+  "UPDATE ml_monitor_links SET category=?,classification='selected' "+
+  "WHERE id=? AND status='available' AND (category='Geral' OR trim(category)='')"
+ ).bind(active.name,x.id));
+ if(typeof env.DB.batch!=='function')throw fail('Banco transacional indisponível.',503);
+ await env.DB.batch(operations);
+ const remaining=await env.DB.prepare(
+  "SELECT count(*) AS total FROM ml_monitor_links WHERE status='available' "+
+  "AND (category='Geral' OR trim(category)='')"
+ ).first();
+ // Na etapa seguinte, a validação em segundo plano já prepara até 50
+ // desses produtos. Não cria nem publica nada aqui, sem uma conferência.
+ return {ok:true,classified:items.length,remaining:Number(remaining?.total||0),category:active.name};
+}
 export async function prepareMonitorBatch(env,body){
  await ensureMonitor(env);
  const ids=body?.automatic===true
@@ -652,6 +692,12 @@ export async function prepareMonitorBatch(env,body){
  if(rows.length!==ids.length)throw fail('Um produto já foi utilizado em lote. Atualize a lista.',409);
  if(rows.some(x=>x.category==='Geral'))throw fail('Defina a categoria dos produtos não reconhecidos antes de montar o lote.');
  const text=rows.map(x=>x.title.replace(/\|/g,' ')+' | '+x.source_url+' | '+x.category).join('\n');
+ // Migra registros antigos sem metadados; um item disponível sem esta
+ // linha causava rollback de TODO lote na criação automática.
+ await env.DB.prepare(
+  'INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) '+
+  'SELECT product_id,0 FROM ml_monitor_links WHERE id IN ('+ids.map(()=>'?').join(',')+')'
+ ).bind(...ids).run();
  const batch=await createLinkBatch(env,{text});
  const ops=[];
  for(const x of rows){
@@ -978,29 +1024,50 @@ export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false
   }else console.warn('Browser Run vitrine HTML:',rendered?.status||'sem resposta');
  }catch(error){console.warn('Browser Run vitrine HTML:',String(error?.message||error).slice(0,130));}
  try{
+  // Cloudflare /scrape retorna o primeiro elemento de cada seletor.
+  // O primeiro <a> costuma ser o título da oferta, NÃO o botão "Ir para
+  // produto". Aceitar também o título, sempre dentro do cartão destacado.
+  const selectors=[
+   '.rl-card-featured-wrapper',
+   '.rl-card-featured-wrapper a.poly-component__title[href]',
+   '.rl-card-featured-wrapper a.poly-component__link--action-link[href]',
+   '[class*="card-featured"] a.poly-component__title[href]',
+   // Compatibilidade: instâncias antigas do navegador usam estes seletores.
+   '.rl-card-featured-wrapper a[href]',
+   '[class*="card-featured"] a[href]'
+  ];
   const scraped=await env.BROWSER.quickAction('scrape',{
-   ...opts,elements:[
-    {selector:'.rl-card-featured-wrapper a[href]'},
-    {selector:'[class*="card-featured"] a[href]'}
-   ]
+   ...opts,elements:selectors.map(selector=>({selector}))
   });
   if(!scraped?.ok||typeof scraped.json!=='function')return null;
   const payload=await scraped.json();
-  const sections=Array.isArray(payload)?payload:Array.isArray(payload?.result)?payload.result:[];
+  const sections=Array.isArray(payload)?payload:
+   Array.isArray(payload?.result)?payload.result:
+   Array.isArray(payload?.results)?payload.results:[];
   const identified=new Map();
   for(const section of sections){
-   if(!['.rl-card-featured-wrapper a[href]','[class*="card-featured"] a[href]'].includes(section?.selector))continue;
-   // Cloudflare /scrape retorna results como OBJETO por selector;
-   // alguns modos retornam array. Suportar ambos sem lançar TypeError.
-   const elements=Array.isArray(section?.results)?section.results:
-     (section?.results&&typeof section.results==='object'?[section.results]:[]);
-   for(const element of elements.slice(0,25)){
-    if(!/ir\s+para\s+(?:o\s+)?produto/i.test(String(element?.text||'')))continue;
+   if(!selectors.includes(section?.selector))continue;
+   const elements=Array.isArray(section.results)?section.results:
+    (section.results&&typeof section.results==='object'?[section.results]:[]);
+   for(const element of elements.slice(0,5)){
+    if(section.selector==='.rl-card-featured-wrapper'){
+     const html=String(element.html||'').slice(0,350000);
+     if(html){
+      const scoped=/<(?:section|div)\b[^>]*\brl-card-featured-wrapper\b/i.test(html)
+       ?html:'<div class="rl-card-featured-wrapper">'+html+'</div>';
+      const candidate=await featuredProductWithOfficialRedirect(scoped,u.href);
+      if(candidate?.kind==='product')identified.set(candidate.product_id,candidate);
+     }
+     continue;
+    }
+    // O link do título principal tem escopo de card e serve como destino
+    // seguro quando a vitrine não expõe o CTA nos resultados do scraper.
     const href=(element.attributes||[]).find(x=>x.name==='href')?.value;
     let absolute;try{absolute=new URL(href,u.href).href;}catch{continue;}
     const candidate=await resolveFeaturedActionLink(absolute);
     if(candidate?.kind==='product')identified.set(candidate.product_id,candidate);
    }
+   if(identified.size>1)return null; // nunca escolher entre produtos distintos
   }
   return identified.size===1?[...identified.values()][0]:null;
  }catch(error){console.warn('Browser Run vitrine scrape:',String(error?.message||error).slice(0,130));}

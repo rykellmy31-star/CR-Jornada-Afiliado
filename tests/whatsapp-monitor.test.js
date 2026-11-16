@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import worker from '../src/index.js';
 import {ensureMonitor,extractUrls,parseMonitorEvent,monitorState,addMonitorGroup,
- saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,
+ saveMonitorSettings,ingestMonitorEvent,prepareMonitorBatch,updateMonitorLinkCategory,bulkCategorizeMonitorLinks,
  resolveMonitorShortlinks,reviewMonitorShortlink,bulkValidateMonitorShortlinks,inspectMonitorShortlink,featuredProductFromHtml,trustedEmbeddedRedirect,claimSocialBrowserBudget,browserFeaturedProduct,updateMonitorGroup,monitorCouponOnly} from '../src/whatsapp-link-monitor.js';
 import {readLinkBatch,importLinkBatch} from '../src/link-batches.js';
 import {resolveOfferSource} from '../src/automatic-price.js';
@@ -1759,4 +1759,85 @@ test('vitrine não usa recomendação quando ação principal é externa',async(
  assert.equal(result.product,null);
  assert.equal(result.kind,'showcase');
  assert.deepEqual(seen,[short,social]);
+});
+
+
+test('Browser Run identifica o produto principal pelo PRIMEIRO link de título, sem exigir texto Ir para produto',async()=>{
+ const {env,DB}=setup();
+ try{
+  const social='https://www.mercadolivre.com.br/social/gear';
+  let scrapeCalls=0;
+  env.BROWSER={async quickAction(action,options){
+   if(action==='content')return new Response('<html><body>conteúdo ainda não hidratado</body></html>',
+    {headers:{'content-type':'text/html'}});
+   assert.equal(action,'scrape');
+   scrapeCalls++;
+   assert.ok(options.elements.some(x=>x.selector==='.rl-card-featured-wrapper a.poly-component__title[href]'));
+   return Response.json([{selector:'.rl-card-featured-wrapper a.poly-component__title[href]',
+    results:{text:'Furadeira de impacto Bosch',attributes:[{name:'href',value:PRODUCT}],
+     html:'<a href="'+PRODUCT+'">Furadeira de impacto Bosch</a>'}}]);
+  }};
+  const found=await browserFeaturedProduct(env,social);
+  assert.equal(found?.product_id,'MLB12345678');
+  assert.equal(found?.url,PRODUCT);
+  assert.equal(scrapeCalls,1);
+ }finally{DB.close();}
+});
+
+test('Browser Run lê HTML somente do cartão principal e ignora sugestões',async()=>{
+ const {env,DB}=setup();
+ try{
+  const social='https://www.mercadolivre.com.br/social/gear';
+  const suggestion='https://www.mercadolivre.com.br/outro/p/MLB99999999';
+  env.BROWSER={async quickAction(action){
+   if(action==='content')return new Response('<html>sem CTA</html>',{headers:{'content-type':'text/html'}});
+   return Response.json([{selector:'.rl-card-featured-wrapper',
+    results:{html:'<div class="rl-card-featured-wrapper"><a class="poly-component__link--action-link" href="'+PRODUCT+'">Ir para produto</a></div>',
+      text:'Furadeira Bosch'}},
+    {selector:'.rl-card-recommendations a[href]',
+     results:{attributes:[{name:'href',value:suggestion}],text:'Ir para produto'}}]);
+  }};
+  const found=await browserFeaturedProduct(env,social);
+  assert.equal(found?.product_id,'MLB12345678');
+ }finally{DB.close();}
+});
+
+test('88 itens antigos Geral são categorizados em massa SOMENTE com confirmação e categoria explícita',async()=>{
+ const {env,DB}=setup();
+ try{
+  await ensureMonitor(env);
+  await addMonitorGroup(env,{instance_name:INSTANCE,group_jid:GROUP,
+   group_name:'Produtos autorizados',permission_confirmed:true});
+  const groupId=DB.prepare('SELECT id FROM ml_monitor_groups LIMIT 1').first().id;
+  for(let i=0;i<88;i++){
+   DB.prepare("INSERT INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) "+
+    "VALUES(?,?,?,?,?,'Geral','needs_review','available',?)")
+    .bind(groupId,'msg'+i,'MLB'+(70000000+i),
+     'https://www.mercadolivre.com.br/item-'+i+'/p/MLB'+(70000000+i),
+     'Ferramenta sem categoria '+i,Math.floor(Date.now()/1000)).run();
+  }
+  await assert.rejects(bulkCategorizeMonitorLinks(env,{
+   category:'Ferramentas e Peças Automotivas',confirm_all_unclassified:false
+  }),/Confirme/);
+  await assert.rejects(bulkCategorizeMonitorLinks(env,{
+   category:'Geral',confirm_all_unclassified:true
+  }),/específica/);
+  const result=await bulkCategorizeMonitorLinks(env,{
+   category:'Ferramentas e Peças Automotivas',confirm_all_unclassified:true
+  });
+  assert.equal(result.classified,88);
+  assert.equal(result.remaining,0);
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM ml_monitor_links WHERE category='Geral'").first().n,0);
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM offers").first().n,0,
+   'classificação não envia publicação');
+  const batch=await prepareMonitorBatch(env,{automatic:true});
+  assert.equal(batch.items.length,50);
+  assert.equal(DB.prepare("SELECT count(*) AS n FROM ml_monitor_links WHERE status='available'").first().n,38);
+ }finally{DB.close();}
+});
+
+test('UI indica necessidade de classificação em massa e espera segura ao invés de progresso infinito',()=>{
+ assert.match(MONITOR_HTML,/ml-monitor-bulk-category-select/);
+ assert.match(MONITOR_CLIENT_JS,/\/api\/monitor\/categories\/bulk/);
+ assert.match(MONITOR_CLIENT_JS,/Aguardando nova tentativa automática/);
 });

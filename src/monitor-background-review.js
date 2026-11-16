@@ -133,7 +133,16 @@ export async function runBackgroundReview(env,{now=null}={}){
    await updateJob(env,{status:'waiting_monitor',next_run_at:at+60,last_run_at:at,updated_at:at,lease_until:0});
    return {skipped:'monitor_off'};
   }
-  const result=await bulkValidateMonitorShortlinks(env,{after_id:Number(row.cursor||0),limit:1});
+  // Não deixe links sem confirmação bloquearem o lote dos produtos prontos.
+  // Só antecipe um lote CHEIO. Se houver 1-49 produtos e a revisão ainda
+  // estiver processando mais itens, espere a passagem acabar para não
+  // abrir um lote pequeno que bloqueia o restante.
+  const readyForBatch=await currentConversion(env);
+  const earlyConversion=readyForBatch.eligible_waiting>=50
+   ?await prepareConfirmedForConversion(env):null;
+  const result=await bulkValidateMonitorShortlinks(env,{
+   after_id:Number(row.cursor||0),limit:1,now:at
+  });
   const advance=Number(result.next_cursor||row.cursor||0);
   if(result.has_more&&advance<=Number(row.cursor||0)){
    await updateJob(env,{status:'waiting_retry',cursor:0,next_run_at:at+180,
@@ -144,14 +153,16 @@ export async function runBackgroundReview(env,{now=null}={}){
   let status='running',cursor=advance,next=at+60;
   let conversion=null;
   if(!result.has_more){
-   conversion=await prepareConfirmedForConversion(env);
+   conversion=earlyConversion?.created?earlyConversion:
+    await prepareConfirmedForConversion(env);
    const latest=await monitorState(env);
    if(!Number(latest.retry_progress?.automatic||0)){
     status='completed';next=0;
    }else{
     // Os links não confirmados permanecem para novas rodadas, inclusive
     // depois que a página for fechada. O Cron comum também revalida.
-    status='waiting_retry';next=at+300;
+    const due=Number(latest.retry_progress?.next_retry_at||0);
+    status='waiting_retry';next=Math.max(at+60,due>0?due:at+180);
    }
    cursor=0;
   }
@@ -162,7 +173,9 @@ export async function runBackgroundReview(env,{now=null}={}){
    not_confirmed:Number(row.not_confirmed||0)+Number(result.not_confirmed||0),
    requires_manual:Number(row.requires_manual||0)+Number(result.requires_manual||0),
    busy:Number(row.busy||0)+Number(result.busy||0),
-   next_run_at:next,last_run_at:at,updated_at:at,lease_until:0,last_error:''
+   next_run_at:next,last_run_at:at,updated_at:at,lease_until:0,
+   last_error:status==='waiting_retry'&&checks===0
+    ?'Todos os links automáticos aguardam a próxima tentativa segura.':''
   });
   return {status,processed:checks,resolved:Number(result.resolved||0),conversion};
  }catch(error){
