@@ -24,6 +24,23 @@ const VALID=new Set(['categories','prices']);
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const stamp=()=>Math.floor(Date.now()/1000);
 const safeKind=kind=>VALID.has(kind)?kind:(()=>{throw fail('Tipo de verificação desconhecido.');})();
+
+async function countMissingPrices(env){
+ const row=await env.DB.prepare(
+  "SELECT COUNT(DISTINCT l.product_id) AS total FROM ml_monitor_links l "+
+  "JOIN ml_monitor_groups g ON g.id=l.group_id "+
+  "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
+  "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+  "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+  "WHERE g.authorized=1 AND l.message_id<>'' "+
+  "AND (l.status='available' OR "+
+  "(l.status='batched' AND b.status='awaiting_links' "+
+  "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
+  "AND COALESCE(m.last_seen_price_cents,0)<=0"
+ ).first();
+ return Number(row?.total||0);
+}
+
 export async function ensureManualGroupChecks(env){
  if(!env?.DB)throw fail('Banco de dados indisponível.',503);
  await env.DB.prepare(CREATE).run();
@@ -47,17 +64,7 @@ export async function readManualGroupCheck(env,kind){
  if(value.status==='running'&&Number(row.lease_until||0)<=stamp()){
   await env.DB.prepare("UPDATE ml_group_manual_check_jobs SET status='pending',lease_until=0 "+
    "WHERE kind=? AND status='running' AND lease_until<=?").bind(kind,stamp()).run();
-  return output(await env.DB.prepare('SELECT * FROM ml_group_manual_check_jobs WHERE kind=?').bind(kind).first());
- }
- return value;
-}
-export async function requestManualGroupCheck(env,kind){
- kind=safeKind(kind);await ensureManualGroupChecks(env);
- const at=stamp();
- const current=await readManualGroupCheck(env,kind);
- if(current?.status==='pending'||current?.status==='running')
-  return {ok:true,already_queued:true,...current};
- // O clique agenda todos os produtos pendentes, mesmo com o painel fechado. O Cron regular continuará
+  retur  remaining=await countMissingPrices(env);dos os produtos pendentes, mesmo com o painel fechado. O Cron regular continuará
  // procurando os demais produtos automaticamente com o painel fechado.
  let remaining;
  if(kind==='categories')remaining=(await officialCategoryStats(env)).waiting;
@@ -108,11 +115,16 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   // pendência REAL no banco: falha de API não equivale a classificado.
   const remaining=kind==='categories'?
    (await officialCategoryStats(env)).waiting:
-   Math.max(0,Number(row.remaining||0)-processed);
+   await countMissingPrices(env);
+  // A mensagem pode ter sido analisada SEM que o preço fosse recuperado.
+  // Nesse caso, ela continua pendente, e não diminui artificialmente o total.
   const final=remaining===0?'completed':'pending';
   const changed=kind==='categories'?Number(result?.classified||0):
    Number(result?.recovered??result?.found??0);
-  const reason=String(result?.error||(changed===0?row.last_error:'')||'').slice(0,180);
+  const reason=String(result?.error||
+   (changed===0&&remaining>0&&kind==='prices'?
+    'Ainda sem valor confirmado na mensagem original. Próximas tentativas respeitam o intervalo da Evolution.':
+    changed===0?row.last_error:'' )||'').slice(0,180);
   await env.DB.prepare(
    "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,processed=processed+?,"+
    "classified=classified+?,created=created+?,reused=reused+?,failed=failed+?,"+
