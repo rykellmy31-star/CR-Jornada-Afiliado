@@ -139,3 +139,25 @@ test('only authenticated admins can create or inspect jobs',async()=>{
   assert.equal(get.status,401);
  }finally{db.close();}
 });
+
+
+test('tarefa sem avanço por cooldown continua pendente em vez de anunciar conclusão falsa',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env,1);
+  const at=Math.floor(Date.now()/1000);
+  env.DB.prepare(
+   "INSERT INTO ml_monitor_official_category_retry(product_id,attempts,next_retry_at,last_error) VALUES('MLB12345678',7,?,'HTTP 429')"
+  ).bind(at+3600).run();
+  const first=await requestManualGroupCheck(env,'categories');
+  assert.equal(first.status,'pending');
+  const result=await executeManualGroupCheck(env,'categories',{at,fetcher:async()=>{
+   throw Error('API não deve ser consultada durante cooldown');
+  }});
+  assert.equal(result.status,'pending');
+  assert.equal(result.remaining,1);
+  assert.equal(result.classified,0);
+  const later=await readManualGroupCheck(env,'categories');
+  assert.equal(later.status,'pending','não encerrar enquanto houver Geral sem classificação');
+ }finally{db.close();}
+});
