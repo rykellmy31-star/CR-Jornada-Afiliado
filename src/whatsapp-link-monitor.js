@@ -197,7 +197,12 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={})
    JOIN ml_monitor_groups g ON g.id=l.group_id
    JOIN ml_monitor_product_meta m ON m.product_id=l.product_id
    LEFT JOIN ml_monitor_price_recovery r ON r.product_id=l.product_id
-   WHERE l.status='available' AND l.created_at>=?
+   LEFT JOIN ml_link_batches b ON b.id=l.batch_id
+   LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url
+   WHERE (l.status='available' OR
+     (l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links'
+      AND i.affiliate_url IS NULL AND i.offer_id IS NULL))
+     AND l.message_id<>'' AND l.created_at>=?
      AND g.enabled=1 AND g.authorized=1 AND m.last_seen_price_cents IS NULL
      AND m.last_seen_at<=l.created_at+5
      AND (r.product_id IS NULL OR (r.attempts<3 AND r.last_attempt_at<=?))
