@@ -17,26 +17,17 @@ jobs:
         with:
           node-version: '24'
       - run: npm install --no-audit --no-fund
-      - name: Query recent queue states and photo lookup budget (READ ONLY)
+      - name: Read-only Cloudflare production D1 status diagnostics
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler d1 execute cr-jornada-afiliados-db --remote --json --command "SELECT o.id AS offer_id,o.status,substr(coalesce(o.last_error,''),1,180) AS last_error, o.created_at, o.published_at, coalesce(r.attempts,0) AS photo_attempts,coalesce(r.next_retry_at,0) AS next_retry,CASE WHEN i.affiliate_url IS NULL THEN 0 ELSE 1 END AS cached_image,CASE WHEN s.affiliate_url IS NULL THEN 0 ELSE 1 END AS known_source FROM offers o LEFT JOIN telegram_photo_retries r ON r.offer_id=o.id LEFT JOIN affiliate_product_images i ON i.affiliate_url=o.affiliate_url LEFT JOIN affiliate_verified_sources s ON s.affiliate_url=o.affiliate_url ORDER BY o.id DESC LIMIT 14" > /tmp/queue.json
-          npx wrangler d1 execute cr-jornada-afiliados-db --remote --json --command "SELECT event,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 28" > /tmp/events.json
-          npx wrangler d1 execute cr-jornada-afiliados-db --remote --json --command "SELECT day_key,daily_count,last_at FROM affiliate_image_browser_budget WHERE id=1" > /tmp/browser.json || echo '[]' > /tmp/browser.json
-          npx wrangler d1 execute cr-jornada-afiliados-db --remote --json --command "SELECT day_key,daily_count,last_at FROM affiliate_scheduled_showcase_budget WHERE id=1" > /tmp/showcase.json || echo '[]' > /tmp/showcase.json
-          node --input-type=module <<'NODE'
-          import {readFileSync} from 'node:fs';
-          function load(file){
-            try{const v=JSON.parse(readFileSync('/tmp/'+file+'.json','utf8'));
-              return (Array.isArray(v)?v:[v]).flatMap(x=>x?.results||[]);}
-            catch{return [];}
-          }
-          const scrub=s=>String(s||'').replace(/https?:\/\/\S+/g,'[URL]').slice(0,105);
-          console.log('READ ONLY. Offer ids, queue state, retry count, photo cache flags (no product links):');
-          console.log(JSON.stringify(load('queue').map(x=>({...x,last_error:scrub(x.last_error)}))));
-          console.log('Recent event names + offer ids (no message content):');
-          console.log(JSON.stringify(load('events')));
-          console.log('Browser budgets:');
-          console.log(JSON.stringify({images:load('browser'),showcase:load('showcase')}));
-          NODE
+          echo 'Schema:'
+          npx wrangler d1 execute cr-jornada-afiliados-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('offers','logs','telegram_photo_retries','affiliate_product_images','affiliate_verified_sources','affiliate_image_browser_budget','affiliate_scheduled_showcase_budget')"
+          echo 'Recent queue status (no product links/titles):'
+          npx wrangler d1 execute cr-jornada-afiliados-db --remote --command "SELECT id,status,CASE WHEN last_error LIKE 'Aguardando foto%' THEN 'photo_missing' WHEN last_error IS NULL THEN 'none' ELSE substr(last_error,1,50) END AS reason,created_at,published_at FROM offers ORDER BY id DESC LIMIT 12"
+          echo 'Photo retry counters:'
+          npx wrangler d1 execute cr-jornada-afiliados-db --remote --command "SELECT offer_id,attempts,next_retry_at,updated_at FROM telegram_photo_retries ORDER BY updated_at DESC LIMIT 12"
+          echo 'Recent publication event types (no links):'
+          npx wrangler d1 execute cr-jornada-afiliados-db --remote --command "SELECT offer_id,event,created_at FROM logs ORDER BY id DESC LIMIT 16"
+          echo 'Image browser budget:'
+          npx wrangler d1 execute cr-jornada-afiliados-db --remote --command "SELECT day_key,daily_count,last_at FROM affiliate_image_browser_budget WHERE id=1" || true
