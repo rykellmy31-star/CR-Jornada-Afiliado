@@ -513,7 +513,7 @@ async function saveProduct(env,entry,source){
  const evidence=await env.DB.prepare(
   'SELECT deal_json FROM ml_monitor_message_prices WHERE group_id=? AND message_id=?'
  ).bind(entry.group_id,entry.message_id).first();
- const deal=safePromotionTerms(entry.deal)||safePromotionTerms(evidence?.deal_json)||extractPromotionTerms(entry.hint);
+ const deal=entry.ambiguous_price?null:(safePromotionTerms(entry.deal)||safePromotionTerms(evidence?.deal_json)||extractPromotionTerms(entry.hint));
  const price=deal?.price_cents??null;
  const title=productTitle(source.url,entry.hint,source.product_id);
  await ensureAutomationCenter(env);
@@ -533,7 +533,18 @@ async function saveProduct(env,entry,source){
      .bind(entry.group_id,entry.message_id,source.product_id,source.url,title,category,classification.classification,time).run();
    return inserted.meta?.changes===1;
  }
- if(prior.status==='available')return false; // Já está na etapa 1; não repita.
+ if(prior.status==='available'){
+  // Mesmo produto anunciado novamente COM preço: associar o registro à
+  // mensagem mais recente, para que sua foto e seu preço sejam do mesmo anúncio.
+  // Não alterar categoria ou reiniciar fila de produtos existentes.
+  if(price>=1000&&entry.message_id){
+   await env.DB.prepare(
+    "UPDATE ml_monitor_links SET group_id=?,message_id=?,source_url=?,title=?,created_at=? "+
+    "WHERE product_id=? AND status='available'"
+   ).bind(entry.group_id,entry.message_id,source.url,title,time,source.product_id).run();
+  }
+  return false;
+ }
  if(prior.batch_status!=='imported')return false; // Lote ainda está aguardando conversão.
  const lastQueued=prior.last_queued_at||prior.imported_at||0;
  if(!canRequeueProduct(lastQueued,prior.last_queued_price_cents,price,time))return false;
@@ -632,7 +643,7 @@ export async function ingestMonitorEvent(env,payload){
      'price_cents=excluded.price_cents,deal_json=excluded.deal_json,captured_at=excluded.captured_at'
     ).bind(group.id,msg.message_id,msg.deal.price_cents,JSON.stringify(msg.deal),receivedAt).run();
    }
-   if(unique.size!==1)entry.deal=null;
+   if(unique.size!==1){entry.deal=null;entry.ambiguous_price=true;}
    for(const raw of msg.urls){
      const candidate=urlCandidate(raw);
      let domain='inválido';
