@@ -382,16 +382,21 @@ export async function runGroupCopyBatch(env,{limit=4,now=null,preferRecent=false
  * classificações, conversões ou alterações de status. */
 export async function groupCopyLiveState(env){
  await ensureGroupCopyAutomation(env);
- const [settings,diagnostics,counts]=await Promise.all([
+ const [settings,diagnostics,counts,groups]=await Promise.all([
   env.DB.prepare('SELECT enabled,queued_count,last_run_at,last_error FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT last_event_at FROM ml_monitor_diagnostics WHERE id=1').first(),
   env.DB.prepare("SELECT COUNT(*) AS total,"+
    "COALESCE(SUM(CASE WHEN l.status='available' OR (l.status='batched' AND b.status='awaiting_links') THEN 1 ELSE 0 END),0) AS waiting,"+
    "COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS imported "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
-   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.authorized=1").first()
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.authorized=1").first(),
+  env.DB.prepare("SELECT COUNT(*) AS total,"+
+   "COALESCE(SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END),0) AS active "+
+   "FROM ml_monitor_groups WHERE authorized=1").first()
  ]);
  return {enabled:!!settings?.enabled,total_identified:Number(counts?.total||0),
+  saved_groups:Number(groups?.total||0),active_groups:Number(groups?.active||0),
+  paused_groups:Math.max(0,Number(groups?.total||0)-Number(groups?.active||0)),
   waiting:Number(counts?.waiting||0),imported:Number(counts?.imported||0),
   queued_count:Number(settings?.queued_count||0),last_run_at:Number(settings?.last_run_at||0),
   last_event_at:Number(diagnostics?.last_event_at||0),
