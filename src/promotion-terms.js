@@ -1,5 +1,5 @@
 // Extração conservadora de condições informadas por terceiros nos grupos de ofertas.
-const AMOUNT='\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?';
+const AMOUNT='(?:\\d{1,5}\\.\\d{2}(?![\\d,.])|\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?)';
 const rPrice=new RegExp('R\\$\\s*('+AMOUNT+')(?![\\d,.])','gi');
 const rDePor=new RegExp('\\bde\\s*[:=-]?\\s*[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')\\s*[~*_]*[^\\p{L}\\d]{0,28}\\bpor\\s*[:=-]?\\s*[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')','iu');
 const rPor=new RegExp('\\b(?:por|agora|apenas|s[oó]\\s+hoje)\\s*(?:[:=-]\\s*)?[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')','i');
@@ -11,20 +11,27 @@ const rPix=new RegExp('R\\$\\s*('+AMOUNT+')\\s*(?:somente|apenas|s[oó]|exclusiv
 const rCard=new RegExp('R\\$\\s*('+AMOUNT+')\\s*(?:no|pelo|via|em)\\s+(?:cart[aã]o|cr[eé]dito)','i');
 const rInstallment=new RegExp('\\b(\\d{1,2})\\s*x\\s*(?:de\\s*)?R\\$\\s*('+AMOUNT+')','i');
 const rOnlyInstallment=/\b(\d{1,2})\s*x\s*(?:sem\s+juros)?\b/i;
+const rDePorNoSymbol=/\bde\s*[:=-]?\s*[~*_]*\s*(\d{1,5},\d{2})\s*[~*_]*[^\p{L}\d]{0,28}\bpor\s*[:=-]?\s*[~*_]*\s*(\d{1,5},\d{2})/iu;
+const rByNoSymbol=/\b(?:pre[cç]o|valor|por|agora|apenas)\s*[:=]\s*[~*_]*\s*(\d{1,5},\d{2})(?![\d,.])/i;
 export const MAX_AGE_MS=6*60*60*1000;
 export function moneyCents(value){
  const str=String(value||'');
- if(!/^\d{1,6}(?:\.\d{3})*(?:,\d{2})?$/.test(str))return null;
- const n=Math.round(Number(str.replace(/\./g,'').replace(',','.'))*100);
+ if(!/^(?:\d{1,6}(?:\.\d{3})*(?:,\d{2})?|\d{1,5}\.\d{2})$/.test(str))return null;
+ const decimalDot=/^\d{1,5}\.\d{2}$/.test(str)&&!str.includes(',');
+ const n=Math.round(Number(decimalDot?str:str.replace(/\./g,'').replace(',','.'))*100);
  return Number.isSafeInteger(n)&&n>0&&n<=99999999?n:null;
 }
 const real=cents=>Number.isSafeInteger(cents)&&cents>0&&cents<=99999999;
 const brl=value=>(value/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}).replace(/\u00a0/g,' ');
 export function extractPromotionTerms(input){
  if(typeof input!=='string')return null;
- const text=input.replace(/https:\/\/[^\s<>"']+/gi,' ').replace(/\s+/g,' ').slice(0,800);
+ // A legenda pode ter preço ao final, depois de vários textos/links.
+ const text=input.replace(/[＄﹩]/g,'$')
+  .replace(/https:\/\/[^\s<>"']+/gi,' ').replace(/\s+/g,' ').slice(0,16000);
  if(!text.trim())return null;
- const pair=text.match(rDePor),by=text.match(rPor),pixPrice=text.match(rPix);
+ const pair=text.match(rDePor),pairNoSymbol=!pair?text.match(rDePorNoSymbol):null;
+ const by=text.match(rPor),byNoSymbol=!by&&!pair&&!pairNoSymbol?text.match(rByNoSymbol):null;
+ const pixPrice=text.match(rPix);
  const couponMatch=text.match(rWithCoupon)||text.match(rCouponAfter);
  const couponCents=couponMatch?moneyCents(couponMatch[1]):null;
  const couponCodeMatch=text.match(rCouponCode);
@@ -44,10 +51,15 @@ export function extractPromotionTerms(input){
    // O preço de referência só é seguro quando está explícito e é maior.
    const beforeCoupon=pair?moneyCents(pair[1]):null;
    if(real(beforeCoupon)&&beforeCoupon>price)old=beforeCoupon;
- }else if(pair){
-   old=moneyCents(pair[1]);price=moneyCents(pair[2]);
+ }else if(pair||pairNoSymbol){
+   const picked=pair||pairNoSymbol;
+   old=moneyCents(picked[1]);price=moneyCents(picked[2]);
    if(!real(old)||!real(price)||old<=price){old=null;price=null;}
  } else if(by){price=moneyCents(by[1]);}
+ else if(byNoSymbol){
+   const left=text.slice(Math.max(0,byNoSymbol.index-12),byNoSymbol.index);
+   if(!/\b\d{1,2}\s*x\s*$/i.test(left))price=moneyCents(byNoSymbol[1]);
+ }
  else if(pixPrice){price=moneyCents(pixPrice[1]);}
  else if(cardPrice){price=moneyCents(cardPrice[1]);}
  else if(offers.length===1){price=offers[0];}

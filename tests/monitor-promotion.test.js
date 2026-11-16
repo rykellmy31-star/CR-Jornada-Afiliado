@@ -217,10 +217,93 @@ test('preço ausente sem legenda salva: recupera somente mensagem original na Ev
   };
   const result=await recoverMissingMonitorPrices(env,{allowEvolution:true});
   assert.equal(result.recovered,1);
-  assert.equal(calls,1);
+  assert.equal(calls,0,'preço estruturado da mensagem já capturado evita uma nova chamada à Evolution');
   const state=await monitorState(env);
   assert.equal(state.links[0].last_seen_price_cents,9110);
   assert.match(state.links[0].promotion.join(' '),/de R\$ 149,99 por R\$ 91,10/);
   assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
  }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+
+test('preço após 800 caracteres em foto de grupo é preservado até resolver o encurtador',async()=>{
+ const {env,DB}=fixture(),oldFetch=globalThis.fetch;
+ const short='https://melila.me/AAAFullPrice123';
+ const intro='⭐ Oferta verificada pelo grupo. '+('descrição longa do produto '.repeat(53));
+ assert.ok(intro.length>800);
+ const caption=intro+short+'\nDE: R$ 149,90 🔥 POR: R$ 79,90\nCupom: OFERTA25';
+ try{
+  await addMonitorGroup(env,{instance_name:'cr-jornada-afiliados',
+   group_jid:'120363000111222333@g.us',group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const r=await ingestMonitorEvent(env,{event:'messages.upsert',instance:'cr-jornada-afiliados',
+   data:{key:{remoteJid:'120363000111222333@g.us',fromMe:false,id:'PRICE-IN-END-01'},
+    message:{imageMessage:{caption}}}});
+  assert.equal(r.pending,1);
+  const stored=DB.prepare('SELECT price_cents,deal_json FROM ml_monitor_message_prices').first();
+  assert.equal(stored.price_cents,7990);
+  assert.equal(JSON.parse(stored.deal_json).old_price_cents,14990);
+  assert.doesNotMatch(DB.prepare('SELECT message_hint FROM ml_monitor_shortlinks').first().message_hint,/79,90/,
+   'o resumo histórico continua limitado, mas não deve perder o preço estruturado');
+  globalThis.fetch=async url=>{
+   assert.equal(String(url),short);
+   return new Response(null,{status:302,headers:{location:PRODUCT_URL}});
+  };
+  assert.equal((await resolveMonitorShortlinks(env)).resolved,1);
+  const product=DB.prepare('SELECT last_seen_price_cents,last_seen_deal_json FROM ml_monitor_product_meta').first();
+  assert.equal(product.last_seen_price_cents,7990);
+  assert.equal(JSON.parse(product.last_seen_deal_json).old_price_cents,14990);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+test('busca em mensagem antiga da Evolution lê preço após o 800º caractere',async()=>{
+ const {env,DB}=fixture(),oldFetch=globalThis.fetch;
+ const longText='descrição muito extensa de oferta '.repeat(42);
+ try{
+  await addMonitorGroup(env,{instance_name:'cr-jornada-afiliados',
+   group_jid:'120363000111222333@g.us',group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  await ingestMonitorEvent(env,{event:'messages.upsert',instance:'cr-jornada-afiliados',
+   data:{key:{remoteJid:'120363000111222333@g.us',fromMe:false,id:'PRICE-HISTORY-99'},
+    message:{conversation:'Furadeira especial '+PRODUCT_URL}}});
+  env.EVOLUTION_API_URL='https://evo.example.com';
+  env.EVOLUTION_API_KEY='test-key';
+  globalThis.fetch=async(url,opts)=>{
+   assert.match(String(url),/\/chat\/findMessages\/cr-jornada-afiliados$/);
+   assert.equal(JSON.parse(opts.body).where.key.id,'PRICE-HISTORY-99');
+   return Response.json({messages:{records:[{
+    key:{remoteJid:'120363000111222333@g.us',id:'PRICE-HISTORY-99',fromMe:false},
+    message:{imageMessage:{caption:longText+PRODUCT_URL+'\nDe: R$ 159,90 🔥 Por: R$ 99,90'}}
+   }]}});
+  };
+  const r=await recoverMissingMonitorPrices(env,{allowEvolution:true});
+  assert.equal(r.recovered,1);
+  const row=DB.prepare('SELECT last_seen_price_cents,last_seen_deal_json FROM ml_monitor_product_meta').first();
+  assert.equal(row.last_seen_price_cents,9990);
+  assert.equal(JSON.parse(row.last_seen_deal_json).old_price_cents,15990);
+ }finally{globalThis.fetch=oldFetch;DB.close();}
+});
+
+test('mensagem com dois produtos não associa um preço a produto incorreto',async()=>{
+ const {env,DB}=fixture();
+ try{
+  await addMonitorGroup(env,{instance_name:'cr-jornada-afiliados',
+   group_jid:'120363000111222333@g.us',group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const another='https://www.mercadolivre.com.br/tenis-casual/p/MLB87654321';
+  const r=await ingestMonitorEvent(env,{event:'messages.upsert',instance:'cr-jornada-afiliados',
+   data:{key:{remoteJid:'120363000111222333@g.us',fromMe:false,id:'TWO-PRODUCT-PRICE'},
+    message:{conversation:'Por R$ 39,90 '+PRODUCT_URL+' ou '+another}}});
+  assert.equal(r.captured,2);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_message_prices').first().n,0);
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_product_meta WHERE last_seen_price_cents>0').first().n,0);
+ }finally{DB.close();}
+});
+
+test('interpreta preços em formato internacional e BRL sem símbolo somente com marcador claro',()=>{
+ assert.equal(extractPromotionTerms('Oferta do dia por R$ 49.90').price_cents,4990);
+ assert.equal(extractPromotionTerms('DE: 129,90 🔥 POR: 79,90').price_cents,7990);
+ assert.equal(extractPromotionTerms('Valor: 44,50').price_cents,4450);
+ assert.equal(extractPromotionTerms('4x por: 19,90').price_cents,null);
+ assert.equal(extractPromotionTerms('sem preço explícito, 3 produtos e 2 links'),null);
 });

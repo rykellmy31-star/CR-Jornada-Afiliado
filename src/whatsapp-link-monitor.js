@@ -2,7 +2,7 @@ import {classifyProduct,ensureAutomationCenter} from './automation-center.js';
 import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './link-batches.js';
 import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
-import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
+import {extractPromotionTerms,promotionDescription,safePromotionTerms} from './promotion-terms.js';
 import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 import {fetchRenderedMonitorPrice} from './monitor-rendered-price.js';
 import {browseFeaturedDestination} from './monitor-featured-click.js';
@@ -22,6 +22,8 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_group_delivery(group_id INTEGER PRIMARY KEY REFERENCES ml_monitor_groups(id),received_messages INTEGER NOT NULL DEFAULT 0,with_urls INTEGER NOT NULL DEFAULT 0,last_received_at INTEGER,last_format TEXT NOT NULL DEFAULT 'desconhecido')",
  "CREATE TABLE IF NOT EXISTS ml_monitor_discard_reasons(reason TEXT PRIMARY KEY,occurrences INTEGER NOT NULL DEFAULT 0,last_at INTEGER)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_price_recovery(product_id TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0)",
+ // Somente preço estruturado e ID de mensagem, sem texto completo ou remetente.
+ "CREATE TABLE IF NOT EXISTS ml_monitor_message_prices(group_id INTEGER NOT NULL,message_id TEXT NOT NULL,price_cents INTEGER NOT NULL,deal_json TEXT NOT NULL,captured_at INTEGER NOT NULL,PRIMARY KEY(group_id,message_id))",
  "CREATE TABLE IF NOT EXISTS ml_monitor_site_prices(product_id TEXT PRIMARY KEY,price_cents INTEGER,status TEXT NOT NULL DEFAULT 'unavailable' CHECK(status IN ('ok','unavailable')),checked_at INTEGER NOT NULL DEFAULT 0,tries INTEGER NOT NULL DEFAULT 0,method TEXT NOT NULL DEFAULT '')",
  "CREATE TABLE IF NOT EXISTS ml_monitor_retry_schedule(shortlink_id INTEGER PRIMARY KEY REFERENCES ml_monitor_shortlinks(id),next_retry_at INTEGER NOT NULL DEFAULT 0,last_attempt_at INTEGER NOT NULL DEFAULT 0,auto_attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0)",
  "CREATE INDEX IF NOT EXISTS idx_ml_monitor_retry_due ON ml_monitor_retry_schedule(next_retry_at,lease_until)",
@@ -148,7 +150,8 @@ export function parseMonitorEvent(event,{includeNoLinks=false}={}){
   const urls=extractUrls(text);
   if(!urls.length&&!includeNoLinks)continue;
   const hint=text.replace(/https?:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,800);
-  result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,urls,format});
+  const deal=extractPromotionTerms(text);
+  result.push({instance,group_jid:entry.key.remoteJid,message_id:String(entry.key.id||'').slice(0,150),hint,deal,urls,format});
  }
  return result;
 }
@@ -195,13 +198,14 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
  // de 3 tentativas deixavam históricos permanentemente sem pesquisa.
  // Aguardar mais entre falhas, sem requisitar mensagens continuamente.
  const query=`SELECT l.product_id,l.source_url,l.message_id,l.group_id,l.created_at,
-   g.instance_name,g.group_jid,m.last_seen_at,
+   g.instance_name,g.group_jid,m.last_seen_at,e.deal_json AS captured_deal_json,
    (SELECT s.message_hint FROM ml_monitor_shortlinks s
     WHERE s.group_id=l.group_id AND s.message_id=l.message_id AND s.status='resolved'
     ORDER BY s.created_at DESC LIMIT 1) AS saved_hint
    FROM ml_monitor_links l
    JOIN ml_monitor_groups g ON g.id=l.group_id
    JOIN ml_monitor_product_meta m ON m.product_id=l.product_id
+   LEFT JOIN ml_monitor_message_prices e ON e.group_id=l.group_id AND e.message_id=l.message_id
    LEFT JOIN ml_monitor_price_recovery r ON r.product_id=l.product_id
    LEFT JOIN ml_link_batches b ON b.id=l.batch_id
    LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url
@@ -218,7 +222,7 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
  let recovered=0,attempted=0,inspected=0;
  for(const row of records){
   inspected++;
-  let terms=extractPromotionTerms(row.saved_hint||'');
+  let terms=safePromotionTerms(row.captured_deal_json)||extractPromotionTerms(row.saved_hint||'');
   if(!(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0)&&allowEvolution){
    attempted++;
    const msg=await recoverCaptionFromEvolution(env,{instance:row.instance_name,
@@ -235,7 +239,7 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
      "WHERE group_id=? AND message_id=? AND status='resolved' LIMIT 1"
     ).bind(row.group_id,row.message_id).first();
     if(original||(short&&urls.includes(short.short_url)))
-     terms=extractPromotionTerms(msg.hint);
+     terms=safePromotionTerms(msg.deal)||extractPromotionTerms(msg.hint);
    }
   }
   if(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0&&
@@ -505,7 +509,12 @@ export async function updateMonitorGroup(env,id,body){
  return {ok:true};
 }
 async function saveProduct(env,entry,source){
- const time=epoch(),deal=extractPromotionTerms(entry.hint),price=deal?.price_cents??null;
+ const time=epoch();
+ const evidence=await env.DB.prepare(
+  'SELECT deal_json FROM ml_monitor_message_prices WHERE group_id=? AND message_id=?'
+ ).bind(entry.group_id,entry.message_id).first();
+ const deal=entry.ambiguous_price?null:(safePromotionTerms(entry.deal)||safePromotionTerms(evidence?.deal_json)||extractPromotionTerms(entry.hint));
+ const price=deal?.price_cents??null;
  const title=productTitle(source.url,entry.hint,source.product_id);
  await ensureAutomationCenter(env);
  const cats=(await env.DB.prepare('SELECT * FROM affiliate_group_categories WHERE enabled=1').all()).results;
@@ -524,7 +533,18 @@ async function saveProduct(env,entry,source){
      .bind(entry.group_id,entry.message_id,source.product_id,source.url,title,category,classification.classification,time).run();
    return inserted.meta?.changes===1;
  }
- if(prior.status==='available')return false; // Já está na etapa 1; não repita.
+ if(prior.status==='available'){
+  // Mesmo produto anunciado novamente COM preço: associar o registro à
+  // mensagem mais recente, para que sua foto e seu preço sejam do mesmo anúncio.
+  // Não alterar categoria ou reiniciar fila de produtos existentes.
+  if(price>=1000&&entry.message_id){
+   await env.DB.prepare(
+    "UPDATE ml_monitor_links SET group_id=?,message_id=?,source_url=?,title=?,created_at=? "+
+    "WHERE product_id=? AND status='available'"
+   ).bind(entry.group_id,entry.message_id,source.url,title,time,source.product_id).run();
+  }
+  return false;
+ }
  if(prior.batch_status!=='imported')return false; // Lote ainda está aguardando conversão.
  const lastQueued=prior.last_queued_at||prior.imported_at||0;
  if(!canRequeueProduct(lastQueued,prior.last_queued_price_cents,price,time))return false;
@@ -560,6 +580,7 @@ async function recoverCaptionFromEvolution(env,msg){
   const recovered=extractMessageText(record.message||{},record),urls=extractUrls(recovered.text);
   if(!urls.length)return null;
   return {...msg,urls,format:'evolution:'+recovered.format,
+   deal:extractPromotionTerms(recovered.text),
    hint:recovered.text.replace(/https:\/\/[^\s<>"'()[\]{}]+/gi,'').replace(/\s+/g,' ').trim().slice(0,800)};
  }catch{return null;}
 }
@@ -612,6 +633,17 @@ export async function ingestMonitorEvent(env,payload){
    delivery.push([group.id,Number(msg.urls.length>0),receivedAt,msg.format]);
    if(!msg.urls.length)observations.push([group.id,'—','nenhum_link_na_legenda',msg.format,receivedAt]);
    const entry={...msg,group_id:group.id};
+   const supported=msg.urls.map(urlCandidate).filter(Boolean);
+   const unique=new Set(supported.map(x=>x.kind==='product'?x.product_id:x.url));
+   // Só associar preço quando a mensagem contém exatamente um produto.
+   if(unique.size===1&&Number.isSafeInteger(msg.deal?.price_cents)&&msg.deal.price_cents>=1000&&msg.message_id){
+    await env.DB.prepare(
+     'INSERT INTO ml_monitor_message_prices(group_id,message_id,price_cents,deal_json,captured_at) '+
+     'VALUES(?,?,?,?,?) ON CONFLICT(group_id,message_id) DO UPDATE SET '+
+     'price_cents=excluded.price_cents,deal_json=excluded.deal_json,captured_at=excluded.captured_at'
+    ).bind(group.id,msg.message_id,msg.deal.price_cents,JSON.stringify(msg.deal),receivedAt).run();
+   }
+   if(unique.size!==1){entry.deal=null;entry.ambiguous_price=true;}
    for(const raw of msg.urls){
      const candidate=urlCandidate(raw);
      let domain='inválido';
