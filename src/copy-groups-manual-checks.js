@@ -104,11 +104,15 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   }
   const processed=kind==='categories'?Math.max(0,Number(result?.processed||0))
    :Math.max(0,Number(result?.inspected||0));
-  const remaining=Math.max(0,Number(row.remaining||0)-processed);
-  // Se todos estiverem no cooldown da API, manter trabalho pendente:
-  // 'concluído' sem nenhuma classificação escondia o problema por horas.
+  // "Processado" inclui tentativas que falharam. Para categorias, calcular
+  // pendência REAL no banco: falha de API não equivale a classificado.
+  const remaining=kind==='categories'?
+   (await officialCategoryStats(env)).waiting:
+   Math.max(0,Number(row.remaining||0)-processed);
   const final=remaining===0?'completed':'pending';
-  const reason=String(result?.error||'').slice(0,180);
+  const changed=kind==='categories'?Number(result?.classified||0):
+   Number(result?.recovered??result?.found??0);
+  const reason=String(result?.error||(changed===0?row.last_error:'')||'').slice(0,180);
   await env.DB.prepare(
    "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,processed=processed+?,"+
    "classified=classified+?,created=created+?,reused=reused+?,failed=failed+?,"+
@@ -117,7 +121,7 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   ).bind(final,remaining,processed,
    Number(result?.classified||0),Number(result?.created||0),Number(result?.reused||0),Number(result?.failed||0),
    Number(result?.inspected??result?.checked??0),Number(result?.recovered??result?.found??0),
-   now,processed===0&&remaining>0?now+120:0,reason,kind,lease).run();
+   now,changed===0&&remaining>0?now+120:0,reason,kind,lease).run();
   return await readManualGroupCheck(env,kind);
  }catch(error){
   const message=String(error?.message||error).slice(0,180);
