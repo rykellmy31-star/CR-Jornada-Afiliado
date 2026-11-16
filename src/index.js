@@ -4,6 +4,7 @@ import {affiliateStoreState,connectAffiliateStore,previewAffiliateLink,createAff
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLinkBatchDuplicates} from './link-batches.js';
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
+import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled} from './group-copy.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto,cachedProductImage,rememberProductImage } from './offer-images.js';
@@ -436,6 +437,8 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/stores/mercadolivre/connect'&&method==='POST')return json(await connectAffiliateStore(env,await getBody(request)));
   if(u.pathname==='/api/stores/mercadolivre/preview'&&method==='POST')return json(await previewAffiliateLink(env,await getBody(request)));
   if(u.pathname==='/api/stores/mercadolivre/shorten'&&method==='POST')return json(await createAffiliateShortlink(env,await getBody(request),u.origin),201);
+  if(u.pathname==='/api/copy-groups'&&method==='GET')return json(await groupCopyState(env));
+  if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
   if(u.pathname==='/api/monitor/state'&&method==='GET'){
     const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
     return json({...state,background_review:backgroundReview});
@@ -810,6 +813,10 @@ export default {
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     start(runShopeeScheduled,'Shopee e categorias',true);
+    // Importação experimental depende de consentimento e grupos autorizados.
+    // Não altera o publicador nem os intervalos programados.
+    if(env.DB)ctx.waitUntil(runGroupCopyScheduled(env).catch(error=>
+      console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
     // Tarefa persistente de validação em massa: não depende da página aberta.
     if(env.DB)ctx.waitUntil(runBackgroundReview(env).catch(error=>
       console.error('Validação em massa no Cron:',String(error?.message||error).slice(0,140))));
