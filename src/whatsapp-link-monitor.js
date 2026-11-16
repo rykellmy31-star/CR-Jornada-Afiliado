@@ -224,12 +224,29 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={})
 }
 // Consulta o preço público do anúncio validado sem modificar a condição do grupo.
 // Executado após a confirmação dos links, via agendador, também para URLs diretas.
+// Preço observado no cartão principal de uma vitrine oficial, somente se a
+// extração tiver confirmado produto único e ID exato. Não altera comissão.
+async function persistFeaturedMonitorPrice(env,productId,featured,at=epoch()){
+ if(!/^MLBU?\d{6,}$/.test(String(productId||''))||
+  !Number.isSafeInteger(featured?.price_cents)||featured.price_cents<=0||
+  featured.price_cents>100_000_000)return false;
+ await env.DB.prepare(
+  "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,?,'ok',?,0,?) "+
+  "ON CONFLICT(product_id) DO UPDATE SET price_cents=excluded.price_cents,status='ok',checked_at=excluded.checked_at,tries=0,method=excluded.method "+
+  "WHERE ml_monitor_site_prices.checked_at<=excluded.checked_at"
+ ).bind(productId,featured.price_cents,at,'vitrine oficial do produto principal').run();
+ return true;
+}
 export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceRetry=false}={}){
  await ensureMonitor(env);
  const now=epoch();
  const cap=Math.max(1,Math.min(5,Number.isSafeInteger(limit)?limit:3));
  const rows=(await env.DB.prepare(
-  "SELECT l.product_id,l.source_url FROM ml_monitor_links l "+
+  "SELECT l.product_id,l.source_url,"+
+  "(SELECT s.short_url FROM ml_monitor_shortlinks s "+
+  "WHERE s.group_id=l.group_id AND s.message_id=l.message_id "+
+  "AND s.status='resolved' ORDER BY s.id DESC LIMIT 1) AS source_short_url "+
+  "FROM ml_monitor_links l "+
   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
   "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
@@ -251,6 +268,22 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceR
   if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
     try{site=await fetchMercadoLivrePublicPrice(item.source_url,fetcher);}
     catch{/* O ML pode exigir autenticação para alguns anúncios. Nunca inventar preço. */}
+  }
+  // Fallback: alguns links copiados vêm de vitrines /social oficiais que
+  // mostram o valor atualizado no cartão destacado, ainda que a página do
+  // anúncio e a API pública estejam bloqueadas.
+  // A extração exige o MESMO produto_id da oferta, jamais o primeiro
+  // recomendado e jamais um preço oriundo de outro encurtador.
+  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)&&item.source_short_url){
+    try{
+      const inspected=await inspectMonitorShortlink(item.source_short_url,{fetcher});
+      const featured=inspected?.featured_price;
+      if(inspected?.kind==='featured_product'&&
+       inspected.product?.product_id===item.product_id&&
+       Number.isSafeInteger(featured?.price_cents)&&featured.price_cents>0){
+        site={...featured,source:'vitrine oficial do produto principal confirmado'};
+      }
+    }catch{/* Vitrine pública indisponível: manter oferta pendente. */}
   }
   const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0;
   await env.DB.prepare(
@@ -534,16 +567,16 @@ export async function reviewMonitorShortlink(env,id,body){
  if(!short)throw fail('Link não encontrado.',404);
  if(short.status!=='review')throw fail('Este link não está mais em revisão. Atualize a lista.',409);
  if(!short.authorized)throw fail('Grupo sem autorização para revisar o link.',403);
- let candidate;
+ let candidate,inspected=null;
  if(action==='retry'){
-  let inspected=await inspectMonitorShortlink(short.short_url);
+  inspected=await inspectMonitorShortlink(short.short_url);
   candidate=inspected.product;
   // O botão em massa e o Cron exigem o produto principal identificado;
   // nunca aprovar o primeiro anúncio recomendado na vitrine.
   if(!candidate&&inspected.social_url&&['showcase','auth'].includes(inspected.kind)){
    if(await claimSocialBrowserBudget(env)){
     const featured=await browserFeaturedProduct(env,inspected.social_url);
-    if(featured)candidate=featured;
+    if(featured){candidate=featured;inspected.featured_price=featured.featured_price||null;inspected.kind='featured_product';}
    }else{
     inspected={...inspected,reason:'Vitrine exige navegador; limite ou intervalo de segurança atingido. Nova tentativa necessária.'};
    }
@@ -569,6 +602,10 @@ export async function reviewMonitorShortlink(env,id,body){
    throw fail('O endereço informado não corresponde ao produto identificado no link encurtado.',409);
  }
  await saveProduct(env,{group_id:short.group_id,message_id:short.message_id,hint:short.message_hint},candidate);
+ if(action==='retry'){
+  try{await persistFeaturedMonitorPrice(env,candidate.product_id,inspected.featured_price||candidate.featured_price);}
+  catch{/* O erro no preço não invalida a identificação do anúncio. */}
+ }
  const result=await env.DB.prepare(
   "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=? WHERE id=? AND status='review'"
  ).bind(action==='approve'?'Produto associado por confirmação manual':null,n).run();
@@ -1195,13 +1232,17 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
      if(await claimSocialBrowserBudget(env,at)){
       await claimMonitorItemBrowserAttempt(env,item.id,at);
       const rendered=await browserFeaturedProduct(env,result.social_url);
-      if(rendered)result={product:rendered,kind:'featured_product',reason:null};
+      if(rendered)result={product:rendered,kind:'featured_product',reason:null,featured_price:rendered.featured_price||null};
      }
     }
    }
    if(result.product){
     try{
      await saveProduct(env,{group_id:item.group_id,message_id:item.message_id,hint:item.message_hint},result.product);
+     if(result.kind==='featured_product'){
+      try{await persistFeaturedMonitorPrice(env,result.product.product_id,result.featured_price||result.product.featured_price,at);}
+      catch{/* Classificação continua mesmo se a gravação do preço falhar. */}
+     }
      const updated=await env.DB.prepare(
       "UPDATE ml_monitor_shortlinks SET status='resolved',tries=tries+1,reason=NULL "+
       "WHERE id=? AND status IN ('pending','review')"
