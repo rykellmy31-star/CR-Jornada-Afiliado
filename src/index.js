@@ -1015,7 +1015,7 @@ export default {
       await telegramPublished;
       // Classificação em segundo plano continua sem bloquear novas filas.
       await executeManualGroupCheck(env,'categories');
-      try{await classifyMonitorMissingCategories(env,{limit:4});}
+      try{await classifyMonitorMissingCategories(env,{limit:12});}
       catch(error){console.error('Categorias oficiais:',String(error?.message||error).slice(0,140));}
     })().catch(error=>console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
     // Tarefa persistente de validação em massa: não depende da página aberta.
