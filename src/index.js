@@ -5,6 +5,7 @@ import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLin
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,bulkCategorizeMonitorLinks,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport} from './group-copy.js';
+import {classifyMonitorMissingCategories} from './monitor-official-categories.js';
 import {installMonitorWebhook,deriveMonitorWebhookToken,monitorWebhookReady,monitorInstanceValid} from './monitor-webhook-setup.js';
 import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import {listMessageTemplates,saveMessageTemplate,saveMessageTemplateSettings,deleteMessageTemplate,previewMessageTemplate,withActiveMessageTemplate} from './message-templates.js';
@@ -447,6 +448,7 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/copy-groups'&&method==='GET')return json(await groupCopyState(env));
   if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
   if(u.pathname==='/api/copy-groups/test'&&method==='POST')return json(await testGroupCopyImport(env));
+  if(u.pathname==='/api/copy-groups/categorize'&&method==='POST')return json(await classifyMonitorMissingCategories(env,{limit:8}));
   if(u.pathname==='/api/monitor/state'&&method==='GET'){
     const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
     return json({...state,background_review:backgroundReview});
@@ -828,8 +830,13 @@ export default {
     start(runShopeeScheduled,'Shopee e categorias',true);
     // Importação experimental depende de consentimento e grupos autorizados.
     // Não altera o publicador nem os intervalos programados.
-    if(env.DB)ctx.waitUntil(runGroupCopyScheduled(env).catch(error=>
-      console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
+    if(env.DB)ctx.waitUntil((async()=>{
+      // Consultar categorias oficiais primeiro, preenchendo automaticamente
+      // a fila pendente mesmo quando o administrador fecha o painel.
+      try{await classifyMonitorMissingCategories(env,{limit:4});}
+      catch(error){console.error('Categorias oficiais:',String(error?.message||error).slice(0,140));}
+      await runGroupCopyScheduled(env);
+    })().catch(error=>console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
     // Tarefa persistente de validação em massa: não depende da página aberta.
     if(env.DB)ctx.waitUntil(runBackgroundReview(env).catch(error=>
       console.error('Validação em massa no Cron:',String(error?.message||error).slice(0,140))));
