@@ -216,3 +216,41 @@ export async function restoreGroupPhotosForQueue(env,{fetcher=fetch,at=now()}={}
   return {skipped:'temporary_failure'};
  }
 }
+
+
+// Contadores sem links, números ou conteúdo de grupo; diagnóstico autenticado
+// para distinguir falta de origem, falta de foto e falha do publicador.
+export async function groupOriginalPhotoDiagnostics(env){
+ if(!env?.DB)return {error:'db_unavailable'};
+ await ensureGroupOriginalPhotos(env);
+ const results={};
+ const checks=[
+  ['ready',"SELECT COUNT(*) AS total FROM offers WHERE status='ready'"],
+  ['mapped',"SELECT COUNT(DISTINCT o.id) AS total FROM offers o "+
+   "JOIN ml_link_batch_items bi ON bi.affiliate_url=o.affiliate_url "+
+   "JOIN ml_monitor_links l ON l.source_url=bi.source_url "+
+   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
+   "WHERE o.status='ready' AND g.authorized=1 AND l.message_id<>''"],
+  ['original_ready',"SELECT COUNT(DISTINCT o.id) AS total FROM offers o "+
+   "JOIN ml_link_batch_items bi ON bi.affiliate_url=o.affiliate_url "+
+   "JOIN ml_monitor_links l ON l.source_url=bi.source_url "+
+   "JOIN affiliate_group_original_photos p ON p.group_id=l.group_id AND p.message_id=l.message_id "+
+   "WHERE o.status='ready' AND p.created_at>=?"],
+  ['cdn_ready',"SELECT COUNT(DISTINCT o.id) AS total FROM offers o "+
+   "JOIN affiliate_product_images p ON p.affiliate_url=o.affiliate_url "+
+   "WHERE o.status='ready' AND p.updated_at>=?"],
+  ['original_stored',"SELECT COUNT(*) AS total FROM affiliate_group_original_photos WHERE created_at>=?"],
+  ['restores_attempted',"SELECT COUNT(*) AS total FROM affiliate_group_photo_restore_attempts"],
+  ['sending',"SELECT COUNT(*) AS total FROM offers WHERE status='sending'"]
+ ];
+ for(const [key,sql] of checks){
+  try{
+   const args=key==='original_ready'||key==='original_stored'?[now()-TTL]:
+    key==='cdn_ready'?[now()-7*24*3600]:[];
+   const row=await env.DB.prepare(sql).bind(...args).first();
+   results[key]=Number(row?.total||0);
+  }catch{results[key]=null;}
+ }
+ if(results.ready!==null&&results.mapped!==null)results.unmapped=results.ready-results.mapped;
+ return results;
+}
