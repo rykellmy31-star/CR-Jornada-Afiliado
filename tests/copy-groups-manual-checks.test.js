@@ -146,6 +146,8 @@ test('tarefa sem avanço por cooldown continua pendente em vez de anunciar concl
  const {env,db}=setup();
  try{
   await seed(env,1);
+  // Produto realmente não classificável por palavras-chave existentes.
+  env.DB.prepare("UPDATE ml_monitor_links SET title='Artigo sem palavra identificadora do produto'").run();
   const at=Math.floor(Date.now()/1000);
   env.DB.prepare(
    "INSERT INTO ml_monitor_official_category_retry(product_id,attempts,next_retry_at,last_error) VALUES('MLB12345678',7,?,'HTTP 429')"
