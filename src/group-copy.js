@@ -23,15 +23,19 @@ export async function ensureGroupCopyAutomation(env){
  await env.DB.prepare("INSERT OR IGNORE INTO ml_group_copy_auto_settings(id) VALUES(1)").run();
 }
 export async function groupCopyState(env){
- await ensureMonitor(env);await ensureGroupCopyAutomation(env);
+ await ensureMonitor(env);await ensureGroupCopyAutomation(env);await ensureLinkBatches(env);
  const at=epoch();
- const [row,monitor,groups,account,recent,waiting,readiness,official_categories]=await Promise.all([
+ const [row,monitor,groups,account,recent,waiting,readiness,official_categories,allCaptured,manualPending]=await Promise.all([
   env.DB.prepare('SELECT enabled,experimental_acknowledged,last_run_at,last_error,queued_count FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').first(),
   affiliateStoreState(env),
   env.DB.prepare('SELECT product_id,short_url,queued_at FROM ml_group_copy_auto_history ORDER BY queued_at DESC LIMIT 15').all(),
-  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE l.status='available' AND g.enabled=1 AND g.authorized=1").first(),
+  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
+    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+    "WHERE g.enabled=1 AND g.authorized=1 AND (l.status='available' OR "+
+    "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))").first(),
   env.DB.prepare("SELECT "+
    "COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 1 ELSE 0 END),0) AS needs_category,"+
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
@@ -44,15 +48,26 @@ export async function groupCopyState(env){
    "THEN 1 ELSE 0 END),0) AS with_price "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
-   "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1")
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+   "WHERE g.enabled=1 AND g.authorized=1 AND (l.status='available' OR "+
+   "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))")
   .bind(at-6*3600,at,at-6*3600,at).first(),
-  officialCategoryStats(env)
+  officialCategoryStats(env),
+  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE g.enabled=1 AND g.authorized=1").first(),
+  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
+    "JOIN ml_link_batches b ON b.id=l.batch_id "+
+    "JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+    "WHERE g.enabled=1 AND g.authorized=1 AND l.status='batched' AND b.status='awaiting_links' "+
+    "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL").first()
  ]);
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
   last_run_at:Number(row?.last_run_at||0),last_error:String(row?.last_error||''),
   queued_count:Number(row?.queued_count||0),monitor_enabled:monitor?.enabled===1,
   authorized_groups:Number(groups?.total||0),store_configured:account.mercadolivre.configured,
   label:account.mercadolivre.label||null,waiting:Number(waiting?.total||0),
+  total_identified:Number(allCaptured?.total||0),
+  awaiting_manual_batch:Number(manualPending?.total||0),
   readiness:{needs_category:Number(readiness?.needs_category||0),
    needs_price:Number(readiness?.needs_price||0),
    price_never_checked:Number(readiness?.price_never_checked||0),
@@ -110,14 +125,20 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
   await ensureLinkBatches(env);
   const permitted=await getPrimaryCategory(env);
   const rows=(await env.DB.prepare(
-   "SELECT l.id,l.group_id,l.product_id,l.title,l.category,l.source_url,sp.price_cents,sp.checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
+   "SELECT l.id,l.group_id,l.product_id,l.title,l.category,l.source_url, "+
+   "l.status AS source_status,l.batch_id AS source_batch_id,i.id AS original_batch_item_id, "+
+   "sp.price_cents,sp.checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
    "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
    "LEFT JOIN ml_group_copy_auto_history h ON h.product_id=l.product_id "+
-   "WHERE l.status='available' AND l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+   "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
    "AND g.enabled=1 AND g.authorized=1 AND sp.status='ok' AND sp.price_cents>0 "+
    "AND sp.checked_at>=? AND sp.checked_at<=? AND h.product_id IS NULL "+
+   "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
+   "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
    "ORDER BY l.id LIMIT 12"
   ).bind(at-6*3600,at).all()).results;
   for(const item of rows){
@@ -134,7 +155,11 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
    if(duplicate)continue;
    const code=shortCode();
    const shortUrl='https://promoml.app/'+code;
-   let offerId=null,batchId=null;
+   const fromManualBatch=item.source_status==='batched';
+   const priorBatch=fromManualBatch?Number(item.source_batch_id):null;
+   const priorItem=fromManualBatch?Number(item.original_batch_item_id):null;
+   if(fromManualBatch&&(!Number.isSafeInteger(priorBatch)||!Number.isSafeInteger(priorItem)))continue;
+   let offerId=null,batchId=null,createdBatchId=null;
    try{
     // O log único bloqueia a mesma oferta no próximo ciclo.
     await env.DB.prepare("INSERT INTO ml_group_copy_auto_history(product_id,group_id,offer_id,short_url,source_url,target_url,queued_at) VALUES(?,?,0,?,?,?,?)")
@@ -144,22 +169,46 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
       JSON.stringify({price_cents:price,old_price_cents:null,price_source:'mercadolivre',payment_mode:'unspecified',installments:null,installment_cents:null,installments_no_interest:false,card_price_cents:null,coupon_required:false,coupon_code:null}),Number(item.checked_at),at).run();
     offerId=Number(created.meta?.last_row_id);
     if(!Number.isSafeInteger(offerId)||offerId<1)throw fail('O banco não retornou a oferta criada.');
-    const createdBatch=await env.DB.prepare("INSERT INTO ml_link_batches(status,created_at,updated_at,imported_at) VALUES('imported',?,?,?)").bind(at,at,at).run();
-    batchId=Number(createdBatch.meta?.last_row_id);
+    if(fromManualBatch){
+      batchId=priorBatch; // Reutiliza o lote antigo. Não perde os itens ainda pendentes.
+    }else{
+      const createdBatch=await env.DB.prepare("INSERT INTO ml_link_batches(status,created_at,updated_at,imported_at) VALUES('imported',?,?,?)").bind(at,at,at).run();
+      batchId=Number(createdBatch.meta?.last_row_id);
+      createdBatchId=batchId;
+    }
+    const queueOperations=fromManualBatch?[
+      // O lote gerado pela rotina antiga é convertido item a item; outros itens
+      // aguardam preço sem serem apagados, devolvidos ou duplicados.
+      env.DB.prepare("UPDATE ml_link_batch_items SET affiliate_url=?,offer_id=?,category=?,status='queued' "+
+        "WHERE id=? AND batch_id=? AND status='awaiting_links' AND affiliate_url IS NULL AND offer_id IS NULL")
+       .bind(preview.target_url,offerId,item.category,priorItem,priorBatch)
+    ]:[
+      env.DB.prepare("INSERT INTO ml_link_batch_items(batch_id,position,title,source_url,category,classification,affiliate_url,offer_id,status) VALUES(?,1,?,?,?,'selected',?,?,'queued')")
+       .bind(batchId,item.title,item.source_url,item.category,preview.target_url,offerId),
+      env.DB.prepare("UPDATE ml_monitor_links SET status='batched',batch_id=? WHERE id=? AND status='available'").bind(batchId,item.id)
+    ];
     await env.DB.batch([
-     env.DB.prepare("INSERT INTO ml_link_batch_items(batch_id,position,title,source_url,category,classification,affiliate_url,offer_id,status) VALUES(?,1,?,?,?,'selected',?,?,'queued')")
-      .bind(batchId,item.title,item.source_url,item.category,preview.target_url,offerId),
-     env.DB.prepare("UPDATE ml_monitor_links SET status='batched',batch_id=? WHERE id=? AND status='available'").bind(batchId,item.id),
-     env.DB.prepare("INSERT INTO crj_affiliate_shortlinks(code,product_url,target_url,label,created_at) VALUES(?,?,?,?,?)")
-      .bind(code,preview.product_url,preview.target_url,preview.label,at),
-     env.DB.prepare('UPDATE ml_group_copy_auto_history SET offer_id=? WHERE product_id=?').bind(offerId,item.product_id),
-     env.DB.prepare('UPDATE ml_monitor_product_meta SET last_queued_at=?,last_queued_price_cents=? WHERE product_id=?').bind(at,price,item.product_id),
-     env.DB.prepare('UPDATE ml_group_copy_auto_settings SET queued_count=queued_count+1,last_run_at=?,last_error=? WHERE id=1').bind(at,'')
+      ...queueOperations,
+      env.DB.prepare("INSERT INTO crj_affiliate_shortlinks(code,product_url,target_url,label,created_at) VALUES(?,?,?,?,?)")
+       .bind(code,preview.product_url,preview.target_url,preview.label,at),
+      env.DB.prepare('UPDATE ml_group_copy_auto_history SET offer_id=? WHERE product_id=?').bind(offerId,item.product_id),
+      env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) VALUES(?,0)').bind(item.product_id),
+      env.DB.prepare('UPDATE ml_monitor_product_meta SET last_queued_at=?,last_queued_price_cents=?,'+
+         'pending_batch_id=NULL,pending_price_cents=NULL,pending_deal_json=NULL,pending_captured_at=NULL WHERE product_id=?')
+       .bind(at,price,item.product_id),
+      env.DB.prepare('UPDATE ml_group_copy_auto_settings SET queued_count=queued_count+1,last_run_at=?,last_error=? WHERE id=1').bind(at,'')
     ]);
+    if(fromManualBatch){
+      // Fecha apenas lotes cujos itens foram todos processados.
+      await env.DB.prepare("UPDATE ml_link_batches SET status='imported',imported_at=?,updated_at=? "+
+       "WHERE id=? AND status='awaiting_links' AND NOT EXISTS("+
+       "SELECT 1 FROM ml_link_batch_items WHERE batch_id=? AND status='awaiting_links')")
+       .bind(at,at,priorBatch,priorBatch).run();
+    }
     return {queued:1,product_id:item.product_id,offer_id:offerId,short_url:shortUrl,commission_verified:false};
    }catch(error){
     // Retira artefatos parciais; a fila NUNCA recebe um anúncio sem link validado.
-    if(batchId)try{await env.DB.prepare('DELETE FROM ml_link_batches WHERE id=? AND status=?').bind(batchId,'imported').run();}catch{}
+    if(createdBatchId)try{await env.DB.prepare('DELETE FROM ml_link_batches WHERE id=? AND status=?').bind(createdBatchId,'imported').run();}catch{}
     if(offerId)try{await env.DB.prepare("DELETE FROM offers WHERE id=? AND status='ready'").bind(offerId).run();}catch{}
     try{await env.DB.prepare('DELETE FROM ml_group_copy_auto_history WHERE product_id=? AND offer_id=0').bind(item.product_id).run();}catch{}
     throw error;
