@@ -1027,15 +1027,19 @@ export default {
     afterTelegram(runMultiChannelScheduled,'Telegram multicanal');
     afterTelegram(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
     afterTelegram(runShopeeScheduled,'Shopee e categorias',true);
-    // Importação experimental depende de consentimento e grupos autorizados.
-    // Não altera o publicador nem os intervalos programados.
+    // O trabalho de categorias solicitado pelo botão não deve esperar
+    // uma publicação Telegram (que pode aguardar foto/tempo de rede).
+    // É independente dos publicadores e tem lease D1 próprio.
+    const manualCategoryChecks=env.DB?executeManualGroupCheck(env,'categories')
+     .catch(error=>console.error('Checagem manual de categorias:',String(error?.message||error).slice(0,130))):
+     Promise.resolve();
+    if(env.DB)ctx.waitUntil(manualCategoryChecks);
+    // Não altera os publicadores nem seus intervalos.
     if(env.DB)ctx.waitUntil((async()=>{
-      // Enfileirar ofertas captadas exige apenas D1 e não deve esperar as
-      // consultas demoradas de foto do Telegram ou categorias do ML.
       await runGroupCopyBatch(env,{limit:3});
+      await manualCategoryChecks;
       await telegramPublished;
-      // Classificação em segundo plano continua sem bloquear novas filas.
-      await executeManualGroupCheck(env,'categories');
+      // A classificação automática restante roda isoladamente da fila.
       try{
         await classifyMonitorMissingCategories(env,{limit:12});
         // Também importar os produtos que acabaram de receber categoria
@@ -1052,10 +1056,9 @@ export default {
     // O pedido de checagem manual de preços pode ser feito mesmo quando
     // a captura Evolution não estiver conectada. Executá-lo de maneira
     // persistente e independente evita tarefas presas em "Agendada".
-    const manualPriceChecks=env.DB?(async()=>{
-      await telegramPublished;
-      return executeManualGroupCheck(env,'prices');
-    })().catch(error=>console.error('Checagem manual de preços:',String(error?.message||error).slice(0,130))):Promise.resolve();
+    const manualPriceChecks=env.DB?executeManualGroupCheck(env,'prices')
+     .catch(error=>console.error('Checagem manual de preços:',String(error?.message||error).slice(0,130))):
+     Promise.resolve();
     if(env.DB)ctx.waitUntil(manualPriceChecks);
     if(env.DB&&await monitorWebhookReady(env)){
       // O Cron nativo dispara a cada minuto. Nas execuções Cloudflare,
