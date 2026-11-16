@@ -134,7 +134,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "WHERE (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
    "AND g.enabled=1 AND g.authorized=1 "+
-   "AND l.classification<>'selected' AND (l.category='Geral' OR trim(l.category)='' OR l.classification='needs_review') "+
+   "AND l.classification<>'selected' AND (l.category='Geral' OR trim(l.category)='' OR l.classification<>'mercadolivre') "+
    "AND COALESCE(r.next_retry_at,0)<=? "+
    "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id "+(preferRecent?"DESC":"ASC")+" LIMIT ?"
   ).bind(stamp,cap).all()).results;
@@ -201,7 +201,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
     "WHERE id=? AND (status='available' OR "+
     "(status='batched' AND EXISTS(SELECT 1 FROM ml_link_batches b "+
     "WHERE b.id=ml_monitor_links.batch_id AND b.status='awaiting_links'))) "+
-    "AND classification<>'selected' AND (category='Geral' OR trim(category)='' OR classification='needs_review')"
+    "AND classification<>'selected' AND (category='Geral' OR trim(category)='' OR classification<>'mercadolivre')"
    ).bind(cat.name,row.id).run();
    classified+=Number(updated.meta?.changes||0);
    await env.DB.prepare('DELETE FROM ml_monitor_official_category_retry WHERE product_id=?').bind(row.product_id).run();
