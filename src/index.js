@@ -177,7 +177,7 @@ async function ensureTelegramPhotoRetries(env){
 function photoRequiredError(reason){
  return Object.assign(new Error(reason),{code:'PHOTO_NOT_READY'});
 }
-async function recordTelegramPhotoRetry(env,offer,error,{keepQueued=false}={}){
+async function recordTelegramPhotoRetry(env,offer,error,{keepQueued=false,preClaim=false}={}){
  const now=Math.floor(Date.now()/1000);
  await ensureTelegramPhotoRetries(env);
  await env.DB.prepare(
@@ -196,16 +196,23 @@ async function recordTelegramPhotoRetry(env,offer,error,{keepQueued=false}={}){
    .bind('Foto real indisponível após seis tentativas automáticas. Nenhum texto foi enviado.',offer.id).run();
   return {status:'needs_review',reason:'photo_not_found',attempts};
  }
- await env.DB.prepare("UPDATE offers SET status='ready',last_error=? WHERE id=? AND status='sending'")
-  .bind(keepQueued?'Aguardando foto real do produto. Nova tentativa automática agendada.':
+ await env.DB.prepare(
+  preClaim?"UPDATE offers SET last_error=? WHERE id=? AND status='ready'":
+   "UPDATE offers SET status='ready',last_error=? WHERE id=? AND status='sending'"
+ ).bind(keepQueued?'Aguardando foto real do produto. Nova tentativa automática agendada.':
    'Aguardando foto do produto. Próxima tentativa automática programada.',offer.id).run();
  return {status:'awaiting_photo',attempts,next_retry_at:nextAt};
 }
-async function sendOfferWithImage(env, chat, offer) {
- // Ambos os modos usam exatamente a foto do anúncio original — sem texto ou prévia.
+async function resolvePhotoForManualPublisher(env,offer){
  const imageUrl=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
   {retryOnMiss:true,sourceLookup:resolveOfferSource});
  if(!imageUrl)throw photoRequiredError('Foto real não encontrada no anúncio; não foi enviada publicação sem imagem.');
+ return imageUrl;
+}
+async function sendOfferWithImage(env, chat, offer, preparedPhoto=null) {
+ // A foto de Cron já foi obtida ANTES de o status virar 'sending'.
+ // O manual mantém a recuperação original dentro da requisição.
+ const imageUrl=preparedPhoto||await resolvePhotoForManualPublisher(env,offer);
  const outputOffer=await withGroupCopyPublicLink(env,offer);
  const renderOffer=await withActiveMessageTemplate(env,outputOffer,'mercadolivre');
  const payload=telegramPayload(renderOffer,chat,Date.now(),{includeLink:true});
@@ -219,10 +226,26 @@ async function sendOffer(env, offer, settings, {requirePhoto=true,keepQueuedOnPh
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
+  // A execução Cron pode terminar enquanto o Mercado Livre ainda responde:
+  // NÃO marque como 'sending' durante busca/retries de foto. Só entra no estado
+  // ambíguo quando já existe mídia real e estamos prestes a chamar o Telegram.
+  let preparedPhoto=null;
+  if(keepQueuedOnPhotoMiss){
+   try{
+    preparedPhoto=await resolvePhotoForManualPublisher(env,offer);
+   }catch(error){
+    if(error?.code!=='PHOTO_NOT_READY')throw error;
+    const current=await env.DB.prepare('SELECT status FROM offers WHERE id=?').bind(offer.id).first();
+    if(current?.status!=='ready')return {status:'already_claimed'};
+    const retry=await recordTelegramPhotoRetry(env,offer,error,{keepQueued:true,preClaim:true});
+    await log(env,retry.status,'Foto ainda não disponível antes de iniciar envio Telegram • tentativa '+retry.attempts,offer.id);
+    return retry;
+   }
+  }
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
   try {
-    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer,{requirePhoto});
+    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer,preparedPhoto);
     const timestamp = Math.floor(Date.now() / 1000);
     const localDay = localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE offers SET status='published', published_at=?, published_day=?, telegram_message_id=? WHERE id=? AND status='sending'")
@@ -278,6 +301,35 @@ async function publishUsingManualButton(env,offerId,{ctx=null,origin='manual'}={
  if(offer.status!=='ready')return {status:'already_claimed'};
  return publishWithManualTools(env,offer,settings,{ctx,origin,requirePhoto:true});
 }
+// Um Cron interrompido pode deixar status 'sending' sem confirmação final.
+// Como o Telegram pode ter enviado a mensagem antes da interrupção, é PROIBIDO
+// reenviar automaticamente. Após observar o estado por 10 minutos, marcar
+// revisão humana. Usa tabela aditiva, sem tocar em mensagens confirmadas.
+const SENDING_WATCH_TABLE="CREATE TABLE IF NOT EXISTS affiliate_sending_watch ("+
+ "offer_id INTEGER PRIMARY KEY,first_seen_at INTEGER NOT NULL)";
+async function quarantineStaleSending(env,now=Math.floor(Date.now()/1000)){
+ await env.DB.prepare(SENDING_WATCH_TABLE).run();
+ await env.DB.prepare(
+  "INSERT OR IGNORE INTO affiliate_sending_watch(offer_id,first_seen_at) "+
+  "SELECT id,? FROM offers WHERE status='sending' AND telegram_message_id IS NULL"
+ ).bind(now).run();
+ const pending=await env.DB.prepare(
+  "SELECT w.offer_id FROM affiliate_sending_watch w JOIN offers o ON o.id=w.offer_id "+
+  "WHERE o.status='sending' AND o.telegram_message_id IS NULL AND w.first_seen_at<=?"
+ ).bind(now-600).all();
+ for(const item of pending.results||[]){
+  const changed=await env.DB.prepare(
+   "UPDATE offers SET status='needs_review',last_error=? WHERE id=? "+
+   "AND status='sending' AND telegram_message_id IS NULL"
+  ).bind('Envio interrompido ou sem confirmação. Verifique Telegram e WhatsApp antes de reenviar.',item.offer_id).run();
+  if(changed.meta?.changes===1)
+   await log(env,'stale_sending_review','Envio antigo sem confirmação enviado para revisão, sem novo disparo.',item.offer_id);
+ }
+ await env.DB.prepare(
+  "DELETE FROM affiliate_sending_watch WHERE offer_id NOT IN "+
+  "(SELECT id FROM offers WHERE status='sending' AND telegram_message_id IS NULL)"
+ ).run();
+}
 // Trava entre Crons concorrentes + intervalo/dias/horários/limite diário do
 // Telegram. Não chamar um segundo publicador nem alterar os intervalos salvos.
 // Tenta recuperar ofertas RECENTES presas em revisão somente por falta de foto.
@@ -329,6 +381,7 @@ async function runScheduled(env){
  ).bind(leaseUntil,stamp).run();
  if(acquired.meta?.changes!==1)return {skipped:'busy'};
  try{
+  await quarantineStaleSending(env);
   // Limpar mensagens de preço herdadas da antiga validação bloqueante.
   // Hoje o modo programado usa o próprio publicador manual.
   await env.DB.prepare(
