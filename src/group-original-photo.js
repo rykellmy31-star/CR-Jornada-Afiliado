@@ -49,7 +49,11 @@ function originFromEnv(env){
 async function getOriginalMedia(env,entry,instance,{fetcher=fetch}={}){
  const origin=originFromEnv(env);
  if(!origin||!env.EVOLUTION_API_KEY||!INSTANCE.test(instance))return null;
- const payload=JSON.stringify({message:entry,convertToMp4:false});
+ // Algumas versões Evolution omitem messageType no webhook e envolvem
+ // imagem em ephemeralMessage. A API exige o nó imageMessage explícito.
+ const fullMessage={...entry,messageType:'imageMessage',
+  message:{...entry.message,imageMessage:mediaMessage(entry)}};
+ const payload=JSON.stringify({message:fullMessage,convertToMp4:false});
  if(payload.length>150_000)return null;
  try{
   const res=await fetcher(origin+'/chat/getBase64FromMediaMessage/'+encodeURIComponent(instance),{
