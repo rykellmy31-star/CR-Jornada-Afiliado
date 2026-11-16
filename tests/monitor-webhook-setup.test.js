@@ -18,7 +18,7 @@ function setup(){
     first(){return db.prepare(sql).get(...args)||null;},
     all(){return {results:db.prepare(sql).all(...args)};},
     run(){const r=db.prepare(sql).run(...args);return {meta:{changes:Number(r.changes),last_row_id:Number(r.lastInsertRowid)}};}}
- }};
+ },async batch(ops){db.exec('BEGIN');try{const out=ops.map(x=>x.run());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
  return {db,env:{DB,SESSION_SECRET:'secret_for_hook_auth_at_least_32_bytes_long',ADMIN_PASSWORD:'a test password',
   EVOLUTION_API_URL:'https://evolution.crjornada.com',EVOLUTION_API_KEY:'fake-global-key'}};
 }
