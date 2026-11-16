@@ -25,8 +25,14 @@ export async function monitorWebhookReady(env){
  if(typeof env?.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24)return true;
  if(!env?.DB||typeof env.SESSION_SECRET!=='string'||env.SESSION_SECRET.length<24)return false;
  await ensureMonitorWebhookInstall(env);
- const row=await env.DB.prepare('SELECT instance_name FROM ml_monitor_webhook_install LIMIT 1').first();
- return !!row;
+ const rows=(await env.DB.prepare('SELECT instance_name,webhook_url FROM ml_monitor_webhook_install LIMIT 25').all()).results;
+ for(const row of rows){
+  if(!monitorInstanceValid(row.instance_name))continue;
+  const token=await deriveMonitorWebhookToken(env,row.instance_name);
+  const target=ADMIN_ORIGIN+'/hooks/wa-links/auto/'+encodeURIComponent(row.instance_name)+'/'+token;
+  if(row.webhook_url===target)return true;
+ }
+ return false;
 }
 async function evolutionWebhook(env,instance,path,method='GET',body=null,fetcher=fetch){
  if(!monitorInstanceValid(instance))throw fail('Nome da instância inválido.');
