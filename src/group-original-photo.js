@@ -148,3 +148,71 @@ export async function sendTelegramOriginalPhoto(token,chat,photo,payload,{fetche
   throw Object.assign(new Error('Telegram não aceitou a foto original da oferta.'),{code:'PHOTO_NOT_READY'});
  throw new Error(String(data?.description||'Telegram HTTP '+res.status).slice(0,170));
 }
+
+
+// Recupera imagens de mensagens ANTIGAS ainda presentes na Evolution API.
+// Uma mensagem só é elegível se o anúncio e o grupo já estiverem registrados
+// e a oferta correspondente continuar na fila. Sem reenvio ou alterações de preço.
+export async function restoreGroupPhotosForQueue(env,{fetcher=fetch,at=now()}={}){
+ if(!env?.DB||!originFromEnv(env)||!env.EVOLUTION_API_KEY)return {skipped:'unconfigured'};
+ await ensureGroupOriginalPhotos(env);
+ await env.DB.prepare(
+  "CREATE TABLE IF NOT EXISTS affiliate_group_photo_restore_attempts ("+
+  "group_id INTEGER NOT NULL,message_id TEXT NOT NULL,last_attempt_at INTEGER NOT NULL DEFAULT 0,"+
+  "attempts INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(group_id,message_id))"
+ ).run();
+ let item;
+ try{
+  item=await env.DB.prepare(
+   "SELECT l.group_id,l.message_id,g.instance_name,g.group_jid "+
+   "FROM offers o JOIN ml_link_batch_items bi ON bi.affiliate_url=o.affiliate_url "+
+   "JOIN ml_monitor_links l ON l.source_url=bi.source_url "+
+   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
+   "LEFT JOIN affiliate_group_original_photos p ON p.group_id=l.group_id AND p.message_id=l.message_id "+
+   "LEFT JOIN affiliate_group_photo_restore_attempts r ON r.group_id=l.group_id AND r.message_id=l.message_id "+
+   "WHERE o.status='ready' AND g.enabled=1 AND g.authorized=1 "+
+   "AND l.message_id<>'' AND p.message_id IS NULL "+
+   "AND COALESCE(r.last_attempt_at,0)<=? "+
+   "ORDER BY o.id ASC LIMIT 1"
+  ).bind(at-6*3600).first();
+ }catch{return {skipped:'no_source_mapping'};}
+ if(!item)return {skipped:'no_pending_images'};
+ const lease=await env.DB.prepare(
+  "INSERT INTO affiliate_group_photo_restore_attempts(group_id,message_id,last_attempt_at,attempts) "+
+  "VALUES(?,?,?,1) ON CONFLICT(group_id,message_id) DO UPDATE SET "+
+  "last_attempt_at=excluded.last_attempt_at,attempts=attempts+1 "+
+  "WHERE last_attempt_at<=?"
+ ).bind(item.group_id,item.message_id,at,at-6*3600).run();
+ if(lease.meta?.changes!==1)return {skipped:'busy'};
+ if(!INSTANCE.test(item.instance_name)||!GROUP.test(item.group_jid)||
+  !/^[A-Za-z0-9._:-]{4,150}$/.test(item.message_id))return {skipped:'invalid_message'};
+ try{
+  const res=await fetcher(
+   originFromEnv(env)+'/chat/findMessages/'+encodeURIComponent(item.instance_name),{
+    method:'POST',redirect:'manual',headers:{
+     apikey:String(env.EVOLUTION_API_KEY).trim(),accept:'application/json',
+     'content-type':'application/json'
+    },body:JSON.stringify({where:{key:{remoteJid:item.group_jid,id:item.message_id}},limit:4}),
+    signal:AbortSignal.timeout(7500)
+   });
+  if(!res.ok||Number(res.headers.get('content-length')||0)>1_000_000)return {skipped:'lookup_failed'};
+  const body=await res.text();
+  if(body.length>1_000_000)return {skipped:'oversized'};
+  const json=JSON.parse(body);
+  const records=Array.isArray(json)?json:
+   Array.isArray(json?.messages?.records)?json.messages.records:
+   Array.isArray(json?.records)?json.records:
+   Array.isArray(json?.messages)?json.messages:[];
+  const record=records.find(m=>m?.key?.remoteJid===item.group_jid&&
+   m?.key?.id===item.message_id&&m?.key?.fromMe===false&&mediaMessage(m));
+  if(!record)return {skipped:'message_unavailable'};
+  const photo=await getOriginalMedia(env,record,item.instance_name,{fetcher});
+  if(!photo)return {skipped:'media_unavailable'};
+  await env.DB.prepare(
+   'INSERT OR IGNORE INTO affiliate_group_original_photos(group_id,message_id,mime,image_b64,created_at) VALUES(?,?,?,?,?)'
+  ).bind(item.group_id,item.message_id,photo.mime,photo.image_b64,at).run();
+  return {restored:1};
+ }catch(error){
+  return {skipped:'temporary_failure'};
+ }
+}
