@@ -134,7 +134,7 @@ export async function groupCopyState(env){
  const siteRecent="(COALESCE(sp.status,'')='ok' AND COALESCE(sp.price_cents,0)>0 "+
   "AND COALESCE(sp.checked_at,0) BETWEEN unixepoch()-21600 AND unixepoch())";
  const groupRecent="(COALESCE(m.last_seen_price_cents,0)>=1000 "+
-  "AND COALESCE(m.last_seen_at,0) BETWEEN unixepoch()-21600 AND unixepoch() "+
+  "AND COALESCE(m.last_seen_at,0) BETWEEN unixepoch()-86400 AND unixepoch() "+
   "AND l.message_id<>'' AND json_valid(COALESCE(m.last_seen_deal_json,'')) "+
   "AND CAST(json_extract(CASE WHEN json_valid(COALESCE(m.last_seen_deal_json,'')) "+
   "THEN m.last_seen_deal_json ELSE '{}' END,'$.price_cents') AS INTEGER)=m.last_seen_price_cents)";
@@ -214,7 +214,8 @@ export async function saveGroupCopySettings(env,body){
   const state=await groupCopyState(env);
   if(!state.store_configured)throw fail('Cadastre antes sua etiqueta em LOJAS.');
   if(!state.monitor_enabled)throw fail('Ative a captura de grupos na aba COPIAR DE GRUPOS.');
-  if(!state.authorized_groups)throw fail('Selecione ao menos um grupo autorizado para copiar produtos.');
+  if(!state.authorized_groups&&!state.waiting)
+   throw fail('Selecione ao menos um grupo autorizado ou mantenha uma fila já capturada para processar.');
  }
  await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET enabled=?,experimental_acknowledged=?,updated_at=?,last_error=? WHERE id=1')
   .bind(Number(body.enabled),Number(body.enabled),epoch(),'').run();
@@ -226,7 +227,7 @@ export async function testGroupCopyImport(env){
  const state=await groupCopyState(env);
  if(!state.enabled)throw fail('Ative e salve a importação automática antes de testar.');
  if(!state.monitor_enabled)throw fail('Ative o monitor de grupos para continuar o teste.');
- if(!state.store_configured||!state.authorized_groups)
+ if(!state.store_configured||(!state.authorized_groups&&!state.waiting))
   throw fail('Cadastre sua loja e escolha pelo menos um grupo autorizado.');
  const result=await runGroupCopyScheduled(env);
  const stateAfter=await groupCopyState(env);
