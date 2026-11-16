@@ -89,7 +89,7 @@ export async function officialCategoryStats(env){
 }
 // Enriquecimento por lote: executa mesmo com painel fechado. Nunca enfileira
 // ou envia mensagens; somente atualiza categorias de produtos disponíveis.
-export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=4,at=null}={}){
+export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=4,at=null,preferRecent=false}={}){
  if(!env?.DB)return {skipped:'database'};
  await ensureOfficialCategories(env);
  const stamp=Number.isSafeInteger(at)&&at>0?at:now();
@@ -112,7 +112,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    "AND g.enabled=1 AND g.authorized=1 "+
    "AND l.classification<>'selected' AND oc.product_id IS NULL "+
    "AND COALESCE(r.next_retry_at,0)<=? "+
-   "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id ASC LIMIT ?"
+   "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id "+(preferRecent?"DESC":"ASC")+" LIMIT ?"
   ).bind(stamp,cap).all()).results;
   for(const row of rows){
    const prediction=await predictOfficialCategory(row.title,{fetcher});
