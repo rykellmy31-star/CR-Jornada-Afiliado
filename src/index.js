@@ -889,7 +889,7 @@ async function readMasterForScheduled(env){
  }catch(error){
   // Instalações anteriores ao painel mestre não possuem essa tabela.
   // Ausência da tabela equivale ao comportamento legado (sem bloqueio).
-  if(/no such table:\\s*automation_master/i.test(String(error?.message||error)))
+  if(/no such table:\s*automation_master/i.test(String(error?.message||error)))
    return {enabled:null};
   throw error;
  }
