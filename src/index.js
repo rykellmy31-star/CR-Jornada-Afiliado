@@ -6,6 +6,7 @@ import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport} from './group-copy.js';
 import {classifyMonitorMissingCategories} from './monitor-official-categories.js';
+import {requestManualGroupCheck,readManualGroupCheck,executeManualGroupCheck} from './copy-groups-manual-checks.js';
 import {installMonitorWebhook,deriveMonitorWebhookToken,monitorWebhookReady,monitorInstanceValid} from './monitor-webhook-setup.js';
 import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import {listMessageTemplates,saveMessageTemplate,saveMessageTemplateSettings,deleteMessageTemplate,previewMessageTemplate,withActiveMessageTemplate} from './message-templates.js';
@@ -474,8 +475,9 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/copy-groups'&&method==='GET')return json(await groupCopyState(env));
   if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
   if(u.pathname==='/api/copy-groups/test'&&method==='POST')return json(await testGroupCopyImport(env));
-  if(u.pathname==='/api/copy-groups/categorize'&&method==='POST')return json(await classifyMonitorMissingCategories(env,{limit:8}));
-  if(u.pathname==='/api/copy-groups/prices'&&method==='POST')return json(await refreshMonitorSitePrices(env,{limit:2,forceRetry:true}));
+  if(u.pathname==='/api/copy-groups/categorize'&&method==='POST')return json(await requestManualGroupCheck(env,'categories'),202);
+  if(u.pathname==='/api/copy-groups/prices'&&method==='POST')return json(await requestManualGroupCheck(env,'prices'),202);
+  if(u.pathname==='/api/copy-groups/check-status'&&method==='GET')return json(await readManualGroupCheck(env,u.searchParams.get('kind')));
   if(u.pathname==='/api/monitor/state'&&method==='GET'){
     const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
     return json({...state,background_review:backgroundReview});
@@ -862,8 +864,9 @@ export default {
     // Não altera o publicador nem os intervalos programados.
     if(env.DB)ctx.waitUntil((async()=>{
       await telegramPublished;
-      // Consultar categorias oficiais primeiro, preenchendo automaticamente
-      // a fila pendente mesmo quando o administrador fecha o painel.
+      // As verificações manuais ficam em D1; o Cron processa sem bloquear o painel.
+      await executeManualGroupCheck(env,'categories');
+      // Consultar categorias oficiais para novos produtos, mesmo sem a tela aberta.
       try{await classifyMonitorMissingCategories(env,{limit:4});}
       catch(error){console.error('Categorias oficiais:',String(error?.message||error).slice(0,140));}
       await runGroupCopyScheduled(env);
@@ -892,6 +895,7 @@ export default {
       }
       ctx.waitUntil((async()=>{
         await telegramPublished;
+        await executeManualGroupCheck(env,'prices');
         return refreshMonitorSitePrices(env);
       })().catch(error=>
         console.error('Monitor preços:',String(error?.message||error).slice(0,120))));
