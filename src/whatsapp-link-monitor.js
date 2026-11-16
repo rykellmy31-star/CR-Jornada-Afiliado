@@ -232,7 +232,12 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceR
   "SELECT l.product_id,l.source_url FROM ml_monitor_links l "+
   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
   "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
-  "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 AND (sp.product_id IS NULL "+
+  "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+  "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+  "WHERE g.enabled=1 AND g.authorized=1 AND "+
+  "(l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
+  "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
+  "AND (sp.product_id IS NULL "+
   "OR (sp.status='ok' AND sp.checked_at<=?) "+
   "OR (sp.status='unavailable' AND (sp.checked_at<=?-(CASE WHEN sp.tries<=1 THEN 900 WHEN sp.tries=2 THEN 3600 ELSE 21600 END) "+
   "OR (?=1 AND sp.checked_at<=?-90)))) "+

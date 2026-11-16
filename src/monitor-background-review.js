@@ -63,6 +63,17 @@ async function currentConversion(env){
 }
 async function prepareConfirmedForConversion(env){
  const existing=await currentConversion(env);
+ // Em modo automático, NÃO transferir produtos para lotes de conversão manual.
+ // Essa transição antiga tirava produtos de status='available' e os escondia
+ // do importador automático, fazendo o contador cair sem qualquer publicação.
+ const hasSettings=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_group_copy_auto_settings'").first();
+ if(hasSettings){
+  const auto=await env.DB.prepare(
+   'SELECT enabled,experimental_acknowledged FROM ml_group_copy_auto_settings WHERE id=1'
+  ).first();
+  if(auto?.enabled===1&&auto?.experimental_acknowledged===1)
+   return {...existing,created:false,delegated_to_automatic_import:true};
+ }
  if(existing.batch_id||!existing.eligible_waiting)return {...existing,created:false};
  const prepared=await prepareMonitorBatch(env,{automatic:true});
  return {...await currentConversion(env),created:true,created_batch_id:Number(prepared.batch.id)};
