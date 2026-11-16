@@ -15,7 +15,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
-import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto} from './group-original-photo.js';
+import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,ensureGroupOriginalPhotos} from './group-original-photo.js';
 import {prewarmTelegramQueue,resolveScheduledShowcasePhoto} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
@@ -413,6 +413,7 @@ async function runScheduled(env){
   // Um produto com foto já guardada pode ultrapassar a fila de falhas.
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS affiliate_product_images ("+
    "affiliate_url TEXT PRIMARY KEY,image_url TEXT NOT NULL,updated_at INTEGER NOT NULL)").run();
+  await ensureGroupOriginalPhotos(env);
   // Rotação de produtos sem foto, sem bloquear outras ofertas prontas.
   // O cursor registra tentativas, nunca um envio confirmado.
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS affiliate_telegram_schedule_cursor ("+
@@ -438,9 +439,24 @@ async function runScheduled(env){
    const bindBase=[settings.category,settings.category,due,...checkedOffers];
    const cacheCondition=" AND EXISTS (SELECT 1 FROM affiliate_product_images img "+
     "WHERE img.affiliate_url=o.affiliate_url AND img.updated_at>=?)";
+   // Foto da própria mensagem, como no modo "Copiar daqui" do ProAfiliados.
+   // Verificar vínculo (grupo autorizado → mensagem → anúncio original →
+   // link preparado) antes de priorizar; não reaproveitar foto alheia.
+   let offer=null;
+   try{
+    const sourceBase=OFFER_WITH_COUPON+
+     " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+exclude;
+    const withGroupImage=
+     " AND EXISTS (SELECT 1 FROM affiliate_group_original_photos p "+
+     "JOIN ml_monitor_links l ON l.group_id=p.group_id AND l.message_id=p.message_id "+
+     "JOIN ml_link_batch_items bi ON bi.source_url=l.source_url "+
+     "WHERE bi.affiliate_url=o.affiliate_url AND p.created_at>=?)";
+    offer=await env.DB.prepare(sourceBase+withGroupImage+" ORDER BY o.id ASC LIMIT 1")
+     .bind(settings.category,settings.category,...checkedOffers,due-3*24*3600).first();
+   }catch{} // Integração opcional, sem interferir no publicador antigo.
    // Foto já aprovada pela CDN sai primeiro, mesmo quando existam ofertas
    // mais antigas com fotos temporariamente bloqueadas.
-   let offer=await env.DB.prepare(base+cacheCondition+" ORDER BY o.id ASC LIMIT 1")
+   if(!offer)offer=await env.DB.prepare(base+cacheCondition+" ORDER BY o.id ASC LIMIT 1")
     .bind(...bindBase,photoCacheCutoff).first();
    // Continua da última tentativa, volta ao começo ao final da fila.
    if(!offer)offer=await env.DB.prepare(base+" AND o.id>? ORDER BY o.id ASC LIMIT 1")
