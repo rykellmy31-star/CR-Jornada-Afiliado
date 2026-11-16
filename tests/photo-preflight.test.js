@@ -66,7 +66,7 @@ test('foto recuperada reabilita apenas falha explícita segura e limpa retries',
 });
 
 
-test('Cron prepara foto ANTES de chamar publicador automático, sem alterar o botão manual',async()=>{
+test('Cron publica por método compartilhado e reaproveita a foto em cache, sem alterar o botão manual',async()=>{
  const {DB,env,close}=setup(),original=globalThis.fetch;
  const counter={reads:0,photos:0,sourceReads:0};
  const mock=mockImageFetch(counter);
@@ -208,4 +208,45 @@ test('Cron NÃO copia a imagem de uma recomendação com MLB diferente do produt
   assert.equal(await cachedProductImage(env,SHORT),null);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
  }finally{globalThis.fetch=original;close();}
+});
+
+
+test('oferta Na fila com Aguardando foto prioriza vitrine e publica, sem repetir HTTP do produto',async()=>{
+ const {DB,env,close}=setup(),previous=globalThis.fetch;
+ const social='https://www.mercadolivre.com.br/social/vitrine-produto';
+ let originalReads=0,photoPosts=0;
+ try{
+  DB.prepare("UPDATE offers SET last_error=? WHERE id=1")
+   .bind('Aguardando foto real do produto. Nova tentativa automática agendada.').run();
+  env.BROWSER={async quickAction(kind){
+   if(kind==='content')return new Response('<html>sem foto em metadados</html>',{
+    headers:{'content-type':'text/html'}});
+   return Response.json({result:[
+    {selector:'.rl-card-featured-wrapper a.poly-component__title[href]',
+     results:{attributes:[{name:'href',value:SOURCE}]}},
+    {selector:'.rl-card-featured-wrapper img.poly-component__picture',
+     results:{attributes:[{name:'src',value:PREVIEW}]}}
+   ]});
+  }};
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===SOURCE){originalReads++;return new Response('<html>sem metadados</html>',{
+    headers:{'content-type':'text/html'}});}
+   if(u===SHORT)return new Response(null,{status:302,headers:{location:social}});
+   if(u===social)return new Response('<html>vitrine</html>',{headers:{'content-type':'text/html'}});
+   if(u===LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'250000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){
+    photoPosts++;assert.equal(JSON.parse(opts.body).photo,LARGE);
+    return Response.json({ok:true,result:{message_id:7733}});
+   }
+   throw Error('unexpected '+u);
+  };
+  const result=await runScheduled(env);
+  assert.equal(result.status,'published');
+  assert.equal(photoPosts,1);
+  assert.equal(originalReads,0,'não perde tempo repetindo GET do anúncio já falhado');
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
+ }finally{globalThis.fetch=previous;close();}
 });
