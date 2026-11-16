@@ -1,4 +1,4 @@
-// Importação automática EXPERIMENTAL dos produtos de grupos WhatsApp AUTORIZADOS.
+// Importação automática dos produtos de grupos WhatsApp AUTORIZADOS.
 // Os parâmetros matt_word/matt_tool não representam geração oficial de ref ou garantia de comissão.
 // Nunca reutiliza o link nem a etiqueta de quem compartilhou o anúncio.
 import {ensureMonitor} from './whatsapp-link-monitor.js';
@@ -177,22 +177,20 @@ export async function saveGroupCopySettings(env,body){
  await ensureGroupCopyAutomation(env);
  if(typeof body?.enabled!=='boolean')throw fail('Informe se a importação automática está ligada ou desligada.');
  if(body.enabled){
-  if(body.experimental_acknowledged!==true)
-   throw fail('Confirme que a conversão por etiqueta é experimental e que o Mercado Livre ainda não confirmou as comissões.');
   const state=await groupCopyState(env);
   if(!state.store_configured)throw fail('Cadastre antes sua etiqueta em LOJAS.');
   if(!state.monitor_enabled)throw fail('Ative a captura de grupos na aba COPIAR DE GRUPOS.');
   if(!state.authorized_groups)throw fail('Selecione ao menos um grupo autorizado para copiar produtos.');
  }
  await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET enabled=?,experimental_acknowledged=?,updated_at=?,last_error=? WHERE id=1')
-  .bind(Number(body.enabled),Number(body.enabled&&body.experimental_acknowledged===true),epoch(),'').run();
+  .bind(Number(body.enabled),Number(body.enabled),epoch(),'').run();
  return {ok:true,...await groupCopyState(env)};
 }
 // Ação de teste explícita: importa no máximo uma oferta elegível para a fila,
 // sem chamar APIs de envio nem alterar horários de publicação.
 export async function testGroupCopyImport(env){
  const state=await groupCopyState(env);
- if(!state.enabled)throw fail('Ative e salve a importação automática experimental antes de testar.');
+ if(!state.enabled)throw fail('Ative e salve a importação automática antes de testar.');
  if(!state.monitor_enabled)throw fail('Ative o monitor de grupos para continuar o teste.');
  if(!state.store_configured||!state.authorized_groups)
   throw fail('Cadastre sua loja e escolha pelo menos um grupo autorizado.');
@@ -204,14 +202,14 @@ function shortCode(){
  const bytes=crypto.getRandomValues(new Uint8Array(9));
  return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
 }
-// Um produto por Cron. Somente ofertas classificadas com preço OFICIAL recente
-// e canal compatível; o publicador existente impõe intervalo, horário e foto real.
+// Um produto por reivindicação D1. O lote reaproveita esta operação, com a mesma
+// proteção contra duplicação e sem tocar nos horários ou publicadores.
 export async function runGroupCopyScheduled(env,{now=null}={}){
  if(!env?.DB)return {skipped:'database'};
  await ensureGroupCopyAutomation(env);
  const at=Number.isSafeInteger(now)&&now>0?now:epoch();
  const lease=at+180;
- const claimed=await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET lease_until=? WHERE id=1 AND enabled=1 AND experimental_acknowledged=1 AND lease_until<=?')
+ const claimed=await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET lease_until=? WHERE id=1 AND enabled=1 AND lease_until<=?')
   .bind(lease,at).run();
  if(claimed.meta?.changes!==1)return {skipped:'disabled_or_busy'};
  try{
@@ -325,4 +323,42 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
  }finally{
   await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET lease_until=0 WHERE id=1 AND lease_until=?').bind(lease).run();
  }
+}
+
+
+/**
+ * Processa itens prontos sem aguardar o próximo minuto do Cron.
+ * Usa a reivindicação exclusiva já existente em runGroupCopyScheduled,
+ * logo webhook e Cron simultâneos não produzem dois envios da mesma oferta.
+ */
+export async function runGroupCopyBatch(env,{limit=4,now=null}={}){
+ const cap=Math.min(6,Math.max(1,Number.isInteger(limit)?limit:4));
+ const results=[],at=Number.isSafeInteger(now)&&now>0?now:epoch();
+ for(let i=0;i<cap;i++){
+  const outcome=await runGroupCopyScheduled(env,{now:at});
+  results.push(outcome);
+  if(outcome?.queued!==1)break;
+ }
+ return {queued:results.filter(x=>x?.queued===1).length,
+   products:results.filter(x=>x?.queued===1).map(x=>x.product_id),
+   last:results[results.length-1],commission_verified:false};
+}
+/** Leitura leve para o painel ao vivo; NÃO faz consultas externas,
+ * classificações, conversões ou alterações de status. */
+export async function groupCopyLiveState(env){
+ await ensureGroupCopyAutomation(env);
+ const [settings,diagnostics,counts]=await Promise.all([
+  env.DB.prepare('SELECT enabled,queued_count,last_run_at,last_error FROM ml_group_copy_auto_settings WHERE id=1').first(),
+  env.DB.prepare('SELECT last_event_at FROM ml_monitor_diagnostics WHERE id=1').first(),
+  env.DB.prepare("SELECT COUNT(*) AS total,"+
+   "COALESCE(SUM(CASE WHEN l.status='available' OR (l.status='batched' AND b.status='awaiting_links') THEN 1 ELSE 0 END),0) AS waiting,"+
+   "COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS imported "+
+   "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.enabled=1 AND g.authorized=1").first()
+ ]);
+ return {enabled:!!settings?.enabled,total_identified:Number(counts?.total||0),
+  waiting:Number(counts?.waiting||0),imported:Number(counts?.imported||0),
+  queued_count:Number(settings?.queued_count||0),last_run_at:Number(settings?.last_run_at||0),
+  last_event_at:Number(diagnostics?.last_event_at||0),
+  last_error:String(settings?.last_error||'')};
 }
