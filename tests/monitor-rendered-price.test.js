@@ -50,7 +50,7 @@ test('monitor consulta navegador oficial quando HTML e API não mostram preço',
     assert.deepEqual(result,{checked:1,found:1});
     assert.equal(calls,1);
     const saved=env.DB.prepare("SELECT price_cents,status,method FROM ml_monitor_site_prices WHERE product_id='MLB12345678'").first();
-    assert.deepEqual(saved,{price_cents:3482,status:'ok',method:'navegador do anuncio oficial'});
+    assert.deepEqual({...saved},{price_cents:3482,status:'ok',method:'navegador do anuncio oficial'});
   }finally{db.close();}
 });
 
@@ -62,7 +62,7 @@ test('navegador ignora outro produto e não inventa valor',async()=>{
     const result=await refreshMonitorSitePrices(env,{fetcher:unavailable});
     assert.deepEqual(result,{checked:1,found:0});
     const saved=env.DB.prepare("SELECT price_cents,status FROM ml_monitor_site_prices WHERE product_id='MLB12345678'").first();
-    assert.deepEqual(saved,{price_cents:null,status:'unavailable'});
+    assert.deepEqual({...saved},{price_cents:null,status:'unavailable'});
   }finally{db.close();}
 });
 
