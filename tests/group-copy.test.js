@@ -321,7 +321,7 @@ test('salvar não depende do diagnóstico completo, lento ou indisponível',asyn
   await seed(env);
   const normalPrepare=env.DB.prepare.bind(env.DB);
   env.DB.prepare=sql=>{
-   if(String(sql).includes('LEFT JOIN ml_monitor_site_prices sp'))
+   if(String(sql).includes("COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review'"))
     throw new Error('diagnóstico completo temporariamente indisponível');
    return normalPrepare(sql);
   };
@@ -340,7 +340,7 @@ test('interface mantém checkbox sincronizado sem respostas antigas do diagnóst
  assert.match(CLIENT_JS,/expectedEpoch===copyGroupsSaveEpoch/);
  assert.match(CLIENT_JS,/copyGroupsTouched=true/);
  assert.match(CLIENT_JS,/saved\?\.ok!==true\|\|saved\.enabled!==desired/);
- assert.match(CLIENT_JS,/const saved=await call\('\/api\/copy-groups\/live'/);
+ assert.match(CLIENT_JS,/const state=await call\('\/api\/copy-groups\/live'/);
 });
 
 
