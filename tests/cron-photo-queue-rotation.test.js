@@ -53,9 +53,13 @@ test('Cron percorre ofertas além das cinco primeiras sem foto, reutilizando pub
   };
   const first=await runScheduled(env);
   assert.equal(first.skipped,'awaiting_photo');
-  assert.equal(DB.prepare('SELECT last_offer_id FROM affiliate_telegram_schedule_cursor WHERE id=1').first().last_offer_id,5);
+  assert.equal(DB.prepare('SELECT last_offer_id FROM affiliate_telegram_schedule_cursor WHERE id=1').first().last_offer_id,2);
   assert.equal(published,0);
   assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE status='ready'").first().n,7);
+  assert.equal((await runScheduled(env)).skipped,'awaiting_photo');
+  assert.equal(DB.prepare('SELECT last_offer_id FROM affiliate_telegram_schedule_cursor WHERE id=1').first().last_offer_id,4);
+  assert.equal((await runScheduled(env)).skipped,'awaiting_photo');
+  assert.equal(DB.prepare('SELECT last_offer_id FROM affiliate_telegram_schedule_cursor WHERE id=1').first().last_offer_id,6);
   const second=await runScheduled(env);
   assert.equal(second.status,'published');
   assert.equal(second.format,'photo');
@@ -65,5 +69,28 @@ test('Cron percorre ofertas além das cinco primeiras sem foto, reutilizando pub
   assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').first().interval_minutes,77);
   assert.equal((await runScheduled(env)).skipped,'interval_or_schedule');
   assert.equal(published,1,'não duplicou após confirmar a publicação');
+ }finally{globalThis.fetch=previous;close();}
+});
+
+
+test('Cron prioriza oferta com foto oficial já em cache mesmo atrás de ofertas sem mídia',async()=>{
+ const {DB,env,close}=setup(),previous=globalThis.fetch;
+ let sent=0;
+ try{
+  DB.prepare('CREATE TABLE affiliate_product_images(affiliate_url TEXT PRIMARY KEY,image_url TEXT NOT NULL,updated_at INTEGER NOT NULL)').run();
+  DB.prepare('INSERT INTO affiliate_product_images VALUES(?,?,?)')
+   .bind(affiliate(7),LARGE,Math.floor(Date.now()/1000)).run();
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){sent++;assert.equal(JSON.parse(opts.body).photo,LARGE);
+    return Response.json({ok:true,result:{message_id:91919}});}
+   throw Error('O Cron não deveria buscar imagem novamente: '+u);
+  };
+  const response=await runScheduled(env);
+  assert.equal(response.status,'published');
+  assert.equal(sent,1);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=7').first().status,'published');
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready');
  }finally{globalThis.fetch=previous;close();}
 });
