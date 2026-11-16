@@ -343,6 +343,16 @@ async function runScheduled(env){
    "AND reason<>'Aguardando foto real na preparação automática' "+
    "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).run();
+  // Os retries antigos podiam impor 5/15 minutos de espera mesmo depois
+  // de chegar o próximo horário válido de publicação. Encurtar SOMENTE
+  // esperas de foto confirmadamente seguras; não alterar intervalo de
+  // publicação nem rever envios de status ambíguo.
+  const photoNow=Math.floor(Date.now()/1000);
+  await env.DB.prepare(
+   "UPDATE telegram_photo_retries SET next_retry_at=? "+
+   "WHERE reason='Aguardando foto real na preparação automática' "+
+   "AND next_retry_at>? AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
+  ).bind(photoNow+60,photoNow+60).run();
   for(let checked=0;checked<5;checked++){
    const offer=await env.DB.prepare(OFFER_WITH_COUPON+
      " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id "+
@@ -364,18 +374,28 @@ async function runScheduled(env){
    const result=await publishWithManualTools(env,offer,settings,
      {origin:'automático',requirePhoto:true});
    if(result?.status==='awaiting_photo'){
-    // A primeira tentativa não enviou mensagem (PHOTO_NOT_READY).
-    // Buscar somente a foto real do produto principal, armazenar no cache
-    // e tentar UMA vez pelo mesmo publicador, sem duplicar envios.
+    // A primeira busca falhou ANTES de qualquer envio. O Cron agora tenta
+    // obter a foto real da vitrine e faz um segundo disparo IMEDIATO pelo
+    // MESMO publicador do botão manual, mesmo sem vitrine ou cache.
+    // Erros ambíguos de Telegram nunca entram neste bloco (sem duplicação).
     try{
-     const featured=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
-     if(featured){
-      await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).run();
-      const retry=await publishWithManualTools(env,offer,settings,
-       {origin:'automático',requirePhoto:true});
-      if(retry?.status!=='awaiting_photo')return retry;
-     }
+     await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
     }catch(error){console.warn('Foto adicional da vitrine:',String(error?.message||error).slice(0,110));}
+    const retried=await publishWithManualTools(env,offer,settings,
+     {origin:'automático',requirePhoto:true});
+    if(retried?.status!=='awaiting_photo')return retried;
+    // Rechecagem da FOTO em um ciclo independente de 60 segundos.
+    // Não altera interval_minutes: os intervalos de PUBLICAÇÕES seguem
+    // exclusivamente a verificação shouldSend() já existente.
+    const nextAt=Math.floor(Date.now()/1000)+60;
+    // Duas buscas dentro do mesmo ciclo equivalem a UMA tentativa
+    // agendada para o contador histórico de falhas, preservando métricas.
+    await env.DB.prepare(
+     'UPDATE telegram_photo_retries SET next_retry_at=?, '+
+     'attempts=CASE WHEN attempts>1 THEN attempts-1 ELSE 1 END WHERE offer_id=?'
+    ).bind(nextAt,offer.id).run();
+    await log(env,'photo_retry_scheduled',
+     'Foto não recuperada após duas buscas imediatas; rechecagem da foto em até 60 segundos.',offer.id);
     continue;
    }
    return result;

@@ -353,3 +353,62 @@ test('prewarm do Cron prepara foto principal da vitrine ANTES do disparo agendad
   assert.equal(sent,1);
  }finally{globalThis.fetch=previous;close();}
 });
+
+test('Cron procura foto outra vez IMEDIATAMENTE e publica como o botão manual sem duplicar',async()=>{
+ const {DB,env,close}=setup(),previous=globalThis.fetch;
+ let reads=0,photos=0;
+ try{
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===SOURCE){
+    reads++;
+    return new Response(reads<=3?'<html>foto temporariamente ausente</html>':
+     '<meta property="og:image" content="'+PREVIEW+'">',{
+      headers:{'content-type':'text/html'}});
+   }
+   if(u===SHORT)return new Response('<html>sem metadados</html>',{
+    headers:{'content-type':'text/html'}});
+   if(u===LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'260000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){
+    photos++;
+    assert.equal(JSON.parse(opts.body).photo,LARGE);
+    return Response.json({ok:true,result:{message_id:7812}});
+   }
+   throw Error('Unexpected photo retry request: '+u);
+  };
+  const outcome=await runScheduled(env);
+  assert.equal(outcome.status,'published','segundo caminho manual deve enviar na mesma janela');
+  assert.equal(photos,1,'não pode duplicar publicação após a foto ser encontrada');
+  assert.ok(reads>=4,'fez uma busca de foto nova quando a primeira falhou');
+  assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM telegram_photo_retries").first().n,0);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
+ }finally{globalThis.fetch=previous;close();}
+});
+
+test('nova tentativa de FOTO não altera o intervalo entre PUBLICAÇÕES',async()=>{
+ const {DB,env,close}=setup(),previous=globalThis.fetch;
+ let photoPosts=0;
+ try{
+  DB.prepare('UPDATE settings SET interval_minutes=77').run();
+  globalThis.fetch=async(url)=>{
+   const u=String(url);
+   if(u===SOURCE||u===SHORT)
+    return new Response('<html>sem foto temporariamente</html>',{
+     headers:{'content-type':'text/html'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){photoPosts++;throw Error('Não deveria enviar sem foto');}
+   throw Error('Unexpected fetch '+u);
+  };
+  const before=Math.floor(Date.now()/1000);
+  const response=await runScheduled(env);
+  assert.equal(response.skipped,'awaiting_photo');
+  const row=DB.prepare('SELECT next_retry_at FROM telegram_photo_retries WHERE offer_id=1').first();
+  assert.ok(row.next_retry_at>=before+60&&row.next_retry_at<=before+65,
+   'a nova tentativa de foto deve ser independente do intervalo de 77 minutos');
+  assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').first().interval_minutes,77);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready');
+  assert.equal(photoPosts,0);
+ }finally{globalThis.fetch=previous;close();}
+});
