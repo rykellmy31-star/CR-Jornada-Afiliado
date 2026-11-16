@@ -204,7 +204,7 @@ function shortCode(){
 }
 // Um produto por reivindicação D1. O lote reaproveita esta operação, com a mesma
 // proteção contra duplicação e sem tocar nos horários ou publicadores.
-export async function runGroupCopyScheduled(env,{now=null}={}){
+export async function runGroupCopyScheduled(env,{now=null,preferRecent=false}={}){
  if(!env?.DB)return {skipped:'database'};
  await ensureGroupCopyAutomation(env);
  const at=Number.isSafeInteger(now)&&now>0?now:epoch();
@@ -236,7 +236,7 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
    "AND g.enabled=1 AND g.authorized=1 AND h.product_id IS NULL "+
    "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
    "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
-   "ORDER BY l.id LIMIT 120"
+   "ORDER BY l.id "+(preferRecent?"DESC":"ASC")+" LIMIT 120"
   ).all()).results;
   let sawValidPrice=false;
   for(const item of rows){
@@ -331,11 +331,11 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
  * Usa a reivindicação exclusiva já existente em runGroupCopyScheduled,
  * logo webhook e Cron simultâneos não produzem dois envios da mesma oferta.
  */
-export async function runGroupCopyBatch(env,{limit=4,now=null}={}){
+export async function runGroupCopyBatch(env,{limit=4,now=null,preferRecent=false}={}){
  const cap=Math.min(6,Math.max(1,Number.isInteger(limit)?limit:4));
  const results=[],at=Number.isSafeInteger(now)&&now>0?now:epoch();
  for(let i=0;i<cap;i++){
-  const outcome=await runGroupCopyScheduled(env,{now:at});
+  const outcome=await runGroupCopyScheduled(env,{now:at,preferRecent});
   results.push(outcome);
   if(outcome?.queued!==1)break;
  }
