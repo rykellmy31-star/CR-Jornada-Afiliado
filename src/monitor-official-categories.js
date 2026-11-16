@@ -65,6 +65,32 @@ export async function predictOfficialCategory(title,{fetcher=fetch}={}){
  const prediction=readOfficialPrediction(data);
  return prediction||{error:'Mercado Livre não informou categoria confiável para o produto'};
 }
+// Título genérico ou preditor indisponível: consultar a categoria do anúncio
+// oficial pelo código MLB. Só aceita o ID e o nome devolvidos pela própria API.
+export async function lookupOfficialItemCategory(productId,{fetcher=fetch}={}){
+ const id=String(productId||'').trim();
+ if(!/^MLB\d{6,15}$/.test(id))return null;
+ async function getJson(url){
+  try{
+   const response=await fetcher(url,{method:'GET',redirect:'manual',
+    headers:{accept:'application/json'},signal:AbortSignal.timeout(8000)});
+   if(!response.ok)return null;
+   const mime=String(response.headers.get('content-type')||'');
+   if(mime&&!/application\/json/i.test(mime))return null;
+   const body=await response.text();
+   return body.length<=100000?JSON.parse(body):null;
+  }catch{return null;}
+ }
+ const item=await getJson('https://api.mercadolibre.com/items/'+id+'?attributes=id,title,category_id,domain_id');
+ if(!item||item.id!==id||!/^MLB\d{3,12}$/.test(String(item.category_id||'')))return null;
+ const category=await getJson('https://api.mercadolibre.com/categories/'+item.category_id);
+ const label=category?.id===item.category_id?safeLabel(category.name):null;
+ if(!label)return null;
+ const domain=String(item.domain_id||'');
+ return {category_id:item.category_id,
+  domain_id:/^MLB-[A-Z0-9_]{3,100}$/.test(domain)?domain:'',
+  official_label:label,category_name:label};
+}
 function matchExisting(categories,official){
  // ID oficial prevalece, depois nome exato (acentos, caixa e espaços).
  // Nunca escolhe categoria pela primeira palavra do título; isso causaria
@@ -77,9 +103,8 @@ export async function officialCategoryStats(env){
  const [state,pending]=await Promise.all([
   env.DB.prepare('SELECT * FROM ml_monitor_official_category_state WHERE id=1').first(),
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
-   "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
    "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 "+
-   "AND (l.classification='needs_review' OR l.category='Geral')").first()
+   "AND l.classification<>'selected' AND (l.classification='needs_review' OR l.category='Geral' OR trim(l.category)='')").first()
  ]);
  return {waiting:Number(pending?.total||0),last_run_at:Number(state?.last_run_at||0),
   last_classified:Number(state?.last_classified||0),last_created:Number(state?.last_created||0),
@@ -87,12 +112,12 @@ export async function officialCategoryStats(env){
 }
 // Enriquecimento por lote: executa mesmo com painel fechado. Nunca enfileira
 // ou envia mensagens; somente atualiza categorias de produtos disponíveis.
-export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=4,at=null}={}){
+export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=12,at=null}={}){
  if(!env?.DB)return {skipped:'database'};
  await ensureOfficialCategories(env);
  const stamp=Number.isSafeInteger(at)&&at>0?at:now();
- const cap=Math.min(8,Math.max(1,Number.isSafeInteger(limit)?limit:4));
- const lease=stamp+150;
+ const cap=Math.min(16,Math.max(1,Number.isSafeInteger(limit)?limit:12));
+ const lease=stamp+180;
  const acquired=await env.DB.prepare(
   'UPDATE ml_monitor_official_category_state SET lease_until=? WHERE id=1 AND lease_until<=?'
  ).bind(lease,stamp).run();
@@ -104,14 +129,28 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    "SELECT l.id,l.product_id,l.title,l.category,l.classification "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
-   "LEFT JOIN ml_monitor_official_category_items oc ON oc.product_id=l.product_id "+
    "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 "+
-   "AND l.classification<>'selected' AND oc.product_id IS NULL "+
+   "AND l.classification<>'selected' AND (l.category='Geral' OR trim(l.category)='' OR l.classification='needs_review') "+
    "AND COALESCE(r.next_retry_at,0)<=? "+
    "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id ASC LIMIT ?"
   ).bind(stamp,cap).all()).results;
-  for(const row of rows){
-   const prediction=await predictOfficialCategory(row.title,{fetcher});
+  // Busca em paralelo, mas a escrita no banco segue serial para não duplicar categorias.
+  const predictions=[];
+  for(let i=0;i<rows.length;i+=4){
+   predictions.push(...await Promise.all(rows.slice(i,i+4).map(async row=>{
+    const existing=await env.DB.prepare(
+     'SELECT c.id,c.name,c.enabled FROM ml_monitor_official_category_items oc '+
+     'JOIN affiliate_group_categories c ON c.id=oc.group_category_id WHERE oc.product_id=?'
+    ).bind(row.product_id).first();
+    if(existing)return {cached_category:existing};
+    const predicted=await predictOfficialCategory(row.title,{fetcher});
+    if(predicted&&!predicted.error)return predicted;
+    return await lookupOfficialItemCategory(row.product_id,{fetcher})||predicted||
+     {error:'A API do Mercado Livre não retornou categoria para o produto'};
+   })));
+  }
+  for(let i=0;i<rows.length;i++){
+   const row=rows[i],prediction=predictions[i];
    if(!prediction||prediction.error){
     failed++;
     const message=String(prediction?.error||'Título do produto insuficiente para a categorização oficial').slice(0,150);
@@ -122,12 +161,13 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
      .bind(row.product_id,stamp+600,message,stamp+Math.min(21600,600*Math.pow(3,Math.min(4,Number((await env.DB.prepare('SELECT attempts FROM ml_monitor_official_category_retry WHERE product_id=?').bind(row.product_id).first())?.attempts||1)))),message).run();
     continue;
    }
-   const existingMap=await env.DB.prepare(
+   const existingMap=prediction.cached_category?null:await env.DB.prepare(
     'SELECT group_category_id FROM ml_monitor_official_category_map WHERE ml_category_id=?'
    ).bind(prediction.category_id).first();
-   const categories=(await env.DB.prepare('SELECT id,name,enabled FROM affiliate_group_categories').all()).results;
+   const categories=prediction.cached_category?[]:
+    (await env.DB.prepare('SELECT id,name,enabled FROM affiliate_group_categories').all()).results;
    const old=existingMap?categories.find(c=>c.id===existingMap.group_category_id):null;
-   let cat=old||matchExisting(categories,prediction);
+   let cat=prediction.cached_category||old||matchExisting(categories,prediction);
    if(!cat){
     const result=await env.DB.prepare('INSERT OR IGNORE INTO affiliate_group_categories(name,keywords,enabled,created_at,updated_at) VALUES(?,?,1,?,?)')
      .bind(prediction.official_label,'',stamp,stamp).run();
@@ -136,7 +176,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
     if(result.meta?.changes===1)created++;else reused++;
    }else reused++;
    if(!cat){failed++;errors.push('A categoria oficial não pôde ser salva');continue;}
-   await env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_official_category_map(ml_category_id,domain_id,official_label,group_category_id,created_at) VALUES(?,?,?,?,?)')
+   if(!prediction.cached_category)await env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_official_category_map(ml_category_id,domain_id,official_label,group_category_id,created_at) VALUES(?,?,?,?,?)')
     .bind(prediction.category_id,prediction.domain_id,prediction.official_label,cat.id,stamp).run();
    // Nunca reabilitar categorias que o proprietário desativou. Quando ele
    // decidir ativar novamente, a tarefa reusa o mesmo mapeamento, sem criar outra.
@@ -149,12 +189,12 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
      .bind(row.product_id,stamp+600,reason).run();
     continue;
    }
-   await env.DB.prepare('INSERT INTO ml_monitor_official_category_items(product_id,ml_category_id,domain_id,official_label,group_category_id,classified_at) VALUES(?,?,?,?,?,?) '+
+   if(!prediction.cached_category)await env.DB.prepare('INSERT INTO ml_monitor_official_category_items(product_id,ml_category_id,domain_id,official_label,group_category_id,classified_at) VALUES(?,?,?,?,?,?) '+
     'ON CONFLICT(product_id) DO UPDATE SET ml_category_id=excluded.ml_category_id,domain_id=excluded.domain_id,official_label=excluded.official_label,group_category_id=excluded.group_category_id,classified_at=excluded.classified_at')
     .bind(row.product_id,prediction.category_id,prediction.domain_id,prediction.official_label,cat.id,stamp).run();
    const updated=await env.DB.prepare(
     "UPDATE ml_monitor_links SET category=?,classification='mercadolivre' "+
-    "WHERE id=? AND status='available' AND classification<>'selected'"
+    "WHERE id=? AND status='available' AND classification<>'selected' AND (category='Geral' OR trim(category)='' OR classification='needs_review')"
    ).bind(cat.name,row.id).run();
    classified+=Number(updated.meta?.changes||0);
    await env.DB.prepare('DELETE FROM ml_monitor_official_category_retry WHERE product_id=?').bind(row.product_id).run();
