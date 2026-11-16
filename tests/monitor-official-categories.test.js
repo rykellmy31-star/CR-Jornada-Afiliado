@@ -142,6 +142,49 @@ test('resposta não disponível entra em retry com espera e não cria categorias
   assert.equal((await env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB34567890'").first()).category,'Geral');
  }finally{db.close();}
 });
+test('título genérico usa o código do anúncio para consultar sua categoria real no Mercado Livre',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  product(env,'87654321','Produto Mercado Livre MLB87654321');
+  const requests=[];
+  const fetcher=async url=>{
+   const u=String(url);requests.push(u);
+   if(u.includes('/items/MLB87654321'))return new Response(JSON.stringify({
+    id:'MLB87654321',category_id:'MLB189007',domain_id:'MLB-ELECTRIC_DRILLS'
+   }),{status:200,headers:{'content-type':'application/json'}});
+   if(u.endsWith('/categories/MLB189007'))return new Response(JSON.stringify({
+    id:'MLB189007',name:'Furadeiras elétricas'
+   }),{status:200,headers:{'content-type':'application/json'}});
+   throw new Error('endpoint inesperado: '+u);
+  };
+  const job=await classifyMonitorMissingCategories(env,{fetcher,at:1700000000});
+  assert.equal(job.classified,1);
+  assert.equal(job.created,1);
+  assert.equal(requests.length,2);
+  assert.equal(env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB87654321'").first().category,'Furadeiras elétricas');
+ }finally{db.close();}
+});
+test('produto que volta a Geral recupera categoria oficial em cache sem nova consulta externa',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  product(env,'87654322','Furadeira de bancada 220V');
+  const first=await classifyMonitorMissingCategories(env,{fetcher:async()=>response(),at:1700000000});
+  assert.equal(first.classified,1);
+  env.DB.prepare("UPDATE ml_monitor_links SET category='Geral',classification='needs_review' WHERE product_id='MLB87654322'").run();
+  const second=await classifyMonitorMissingCategories(env,{fetcher:async()=>{throw Error('não deveria consultar a API');},at:1700000060});
+  assert.equal(second.classified,1);
+  assert.equal(second.created,0);
+  assert.equal(env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB87654322'").first().category,'Furadeiras elétricas');
+ }finally{db.close();}
+});
+test('a tela remove a escolha de categoria única em massa e oferece classificação individual automática',()=>{
+ const page=renderPage();
+ assert.match(page,/Classificar automaticamente todos/);
+ assert.doesNotMatch(page,/id="ml-monitor-bulk-category-select"/);
+ assert.match(CLIENT_JS,/\/api\/copy-groups\/categorize/);
+});
 test('aba COPIAR DE GRUPOS expõe classificação automática e API requer login administrativo',async()=>{
  const page=renderPage();
  assert.match(page,/id="copy-groups-categorize"/);

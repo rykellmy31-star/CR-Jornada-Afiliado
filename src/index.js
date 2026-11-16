@@ -1029,7 +1029,7 @@ export default {
       // Classificação em segundo plano continua sem bloquear novas filas.
       await executeManualGroupCheck(env,'categories');
       try{
-        await classifyMonitorMissingCategories(env,{limit:8});
+        await classifyMonitorMissingCategories(env,{limit:12});
         // Também importar os produtos que acabaram de receber categoria
         // neste próprio ciclo, sem aguardar mais um minuto.
         await runGroupCopyBatch(env,{limit:3});

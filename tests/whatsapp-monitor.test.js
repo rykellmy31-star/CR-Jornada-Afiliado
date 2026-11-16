@@ -1836,8 +1836,9 @@ test('88 itens antigos Geral são categorizados em massa SOMENTE com confirmaç�
  }finally{DB.close();}
 });
 
-test('UI indica necessidade de classificação em massa e espera segura ao invés de progresso infinito',()=>{
- assert.match(MONITOR_HTML,/ml-monitor-bulk-category-select/);
- assert.match(MONITOR_CLIENT_JS,/\/api\/monitor\/categories\/bulk/);
+test('UI permite classificação automática por produto e espera segura ao invés de progresso infinito',()=>{
+ assert.match(MONITOR_HTML,/Classificar automaticamente todos/);
+ assert.doesNotMatch(MONITOR_HTML,/ml-monitor-bulk-category-select/);
+ assert.match(MONITOR_CLIENT_JS,/\/api\/copy-groups\/categorize/);
  assert.match(MONITOR_CLIENT_JS,/Aguardando nova tentativa automática/);
 });
