@@ -85,6 +85,25 @@ test('reutiliza categoria existente por nome oficial sem criar duplicada, inclui
   assert.equal((await env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB23456789'").first()).category,'Moda e Acessórios');
  }finally{db.close();}
 });
+test('categoria existente desativada não cria duplicata nem classifica até o administrador reabilitar',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  product(env,'23555555','Vestido casual feminino');
+  env.DB.prepare("UPDATE affiliate_group_categories SET enabled=0 WHERE name='Moda e Acessórios'").run();
+  const fetcher=async()=>response('MLB100022','Moda e acessórios','MLB-CLOTHING','Moda');
+  const a=await classifyMonitorMissingCategories(env,{fetcher,at:1700000000});
+  assert.equal(a.classified,0);
+  assert.equal(a.created,0);
+  assert.equal((await env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB23555555'").first()).category,'Geral');
+  env.DB.prepare("UPDATE affiliate_group_categories SET enabled=1 WHERE name='Moda e Acessórios'").run();
+  const b=await classifyMonitorMissingCategories(env,{fetcher,at:1700000610});
+  assert.equal(b.classified,1);
+  assert.equal(b.created,0);
+  assert.equal((await env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB23555555'").first()).category,'Moda e Acessórios');
+ }finally{db.close();}
+});
+
 test('backfill automático classifica 22 produtos em lotes sem duplicar categorias e sem publicar nada',async()=>{
  const {env,db}=setup();
  try{
