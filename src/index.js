@@ -820,17 +820,23 @@ export default {
     // publicador tenta o mesmo caminho manual primeiro e só depois aquece
     // a foto da próxima oferta. Não mexe no botão manual nem nos intervalos.
     const telegramPublished=start(runScheduled,'Telegram');
-    start(async configured=>{
+    // A requisição MANUAL ocorre isoladamente; o Cron não pode disputar
+    // navegação, rede e consultas D1 com oito robôs enquanto procura a foto.
+    // Todos os outros agendadores continuam rodando, mas APÓS a tentativa
+    // do publicador primário terminar. Não mexer nas regras de intervalo.
+    const afterTelegram=(fn,label,route=false)=>start(async configured=>{
       await telegramPublished;
-      return prewarmTelegramQueue(configured);
-    },'Preparar fotos antecipadamente');
-    start(runWhatsAppScheduled,'WhatsApp');
-    start(runMultiChannelScheduled,'Telegram multicanal');
-    start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
-    start(runShopeeScheduled,'Shopee e categorias',true);
+      return fn(configured);
+    },label,route);
+    afterTelegram(prewarmTelegramQueue,'Preparar fotos antecipadamente');
+    afterTelegram(runWhatsAppScheduled,'WhatsApp');
+    afterTelegram(runMultiChannelScheduled,'Telegram multicanal');
+    afterTelegram(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
+    afterTelegram(runShopeeScheduled,'Shopee e categorias',true);
     // Importação experimental depende de consentimento e grupos autorizados.
     // Não altera o publicador nem os intervalos programados.
     if(env.DB)ctx.waitUntil((async()=>{
+      await telegramPublished;
       // Consultar categorias oficiais primeiro, preenchendo automaticamente
       // a fila pendente mesmo quando o administrador fecha o painel.
       try{await classifyMonitorMissingCategories(env,{limit:4});}
@@ -838,23 +844,36 @@ export default {
       await runGroupCopyScheduled(env);
     })().catch(error=>console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
     // Tarefa persistente de validação em massa: não depende da página aberta.
-    if(env.DB)ctx.waitUntil(runBackgroundReview(env).catch(error=>
+    if(env.DB)ctx.waitUntil((async()=>{
+      await telegramPublished;
+      return runBackgroundReview(env);
+    })().catch(error=>
       console.error('Validação em massa no Cron:',String(error?.message||error).slice(0,140))));
     if(env.DB&&await monitorWebhookReady(env)){
       // O Cron nativo dispara a cada minuto. Nas execuções Cloudflare,
       // scheduler.wait mantém a própria invocação Cron ativa até a segunda
       // pulsação ~30s depois (Cron aceita até 15min); nada depende do painel.
-      ctx.waitUntil(resolveMonitorShortlinks(env).catch(error=>
+      ctx.waitUntil((async()=>{
+        await telegramPublished;
+        return resolveMonitorShortlinks(env);
+      })().catch(error=>
         console.error('Revisão automática:',String(error?.message||error).slice(0,120))));
       if(typeof scheduler!=='undefined'&&typeof scheduler.wait==='function'){
+        const secondPulse=scheduler.wait(30000);
         ctx.waitUntil((async()=>{
-          await scheduler.wait(30000);
+          await Promise.all([telegramPublished,secondPulse]);
           await resolveMonitorShortlinks(env);
         })().catch(error=>console.error('Segunda revisão automática:',String(error?.message||error).slice(0,120))));
       }
-      ctx.waitUntil(refreshMonitorSitePrices(env).catch(error=>
+      ctx.waitUntil((async()=>{
+        await telegramPublished;
+        return refreshMonitorSitePrices(env);
+      })().catch(error=>
         console.error('Monitor preços:',String(error?.message||error).slice(0,120))));
-      ctx.waitUntil(recoverMissingMonitorPrices(env,{allowEvolution:true}).catch(error=>
+      ctx.waitUntil((async()=>{
+        await telegramPublished;
+        return recoverMissingMonitorPrices(env,{allowEvolution:true});
+      })().catch(error=>
         console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
     }
   }
