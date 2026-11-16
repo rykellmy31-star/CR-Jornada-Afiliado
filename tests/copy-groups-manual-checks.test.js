@@ -54,13 +54,13 @@ test('clique agenda TODOS os produtos sem categoria; job avança mesmo sem paine
   assert.equal(a.status,'pending');
   assert.equal(a.remaining,10);
   assert.equal(a.classified,12);
-  assert.equal(calls,12);
+  assert.equal(calls,0,'categorias locais específicas não precisam consultar API');
   const b=await executeManualGroupCheck(env,'categories',{fetcher});
   assert.equal(b.status,'completed');
   assert.equal(b.classified,22);
   assert.equal(b.remaining,0);
-  assert.equal(calls,22);
-  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_links WHERE classification='mercadolivre'").first().n,22);
+  assert.equal(calls,0,'não gastar 22 consultas de API para furadeiras já reconhecíveis');
+  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_links WHERE classification='keywords'").first().n,22);
   const restarted=await requestManualGroupCheck(env,'categories');
   assert.equal(restarted.status,'completed');
   assert.equal(restarted.remaining,0);
@@ -104,6 +104,7 @@ test('failures are bounded and reattempted, invalid requests rejected',async()=>
  const {env,db}=setup();
  try{
   await seed(env,1);
+  env.DB.prepare("UPDATE ml_monitor_links SET title='Produto genérico sem categoria específica'").run();
   await assert.rejects(()=>requestManualGroupCheck(env,'invalid'),/desconhecido/);
   await assert.rejects(()=>readManualGroupCheck(env,'invalid'),/desconhecido/);
   await requestManualGroupCheck(env,'categories');
