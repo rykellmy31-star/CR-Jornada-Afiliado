@@ -2,7 +2,7 @@
 // Os parâmetros matt_word/matt_tool não representam geração oficial de ref ou garantia de comissão.
 // Nunca reutiliza o link nem a etiqueta de quem compartilhou o anúncio.
 import {ensureMonitor} from './whatsapp-link-monitor.js';
-import {affiliateStoreState,previewAffiliateLink} from './affiliate-stores.js';
+import {affiliateStoreState,previewAffiliateLink,parseMercadoLivreProduct} from './affiliate-stores.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
 import {ensureLinkBatches,productId} from './link-batches.js';
 import {officialCategoryStats} from './monitor-official-categories.js';
@@ -65,6 +65,9 @@ export async function groupCopyEligibility(env,{now=null}={}){
  const at=Number.isSafeInteger(now)&&now>0?now:epoch();
  await ensureMonitor(env);await ensureLinkBatches(env);await ensureGroupCopyAutomation(env);
  const permitted=await getPrimaryCategory(env);
+ // Um único acesso às credenciais do afiliado para todo o diagnóstico.
+ // O importador real continua usando previewAffiliateLink com todas as regras.
+ const account=await env.DB.prepare('SELECT label,tool_id FROM crj_affiliate_store_ml WHERE id=1').first();
  const items=(await env.DB.prepare(
   "SELECT l.product_id,l.message_id,l.title,l.source_url,l.category,l.status, "+
   "l.batch_id,i.id AS original_batch_item_id, "+
@@ -99,8 +102,12 @@ export async function groupCopyEligibility(env,{now=null}={}){
    reason='lote_incompleto';description='O lote antigo não possui um item correspondente.';
   }else{
    try{
-    const preview=await previewAffiliateLink(env,{product_url:checkedProductUrl(item)});
-    const duplicate=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=? LIMIT 1').bind(preview.target_url).first();
+    if(!account)throw fail('Cadastre sua etiqueta em LOJAS.');
+    const url=new URL(parseMercadoLivreProduct(checkedProductUrl(item)));
+    url.searchParams.set('forceInApp','true');
+    url.searchParams.set('matt_tool',account.tool_id);
+    url.searchParams.set('matt_word',account.label);
+    const duplicate=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=? LIMIT 1').bind(url.toString()).first();
     if(duplicate){reason='duplicado';description='Este anúncio já consta da fila ou do histórico de ofertas.';}
    }catch(error){
     reason='link_incompativel';description='O link de origem não passou na validação: '+String(error?.message||error).slice(0,110);
