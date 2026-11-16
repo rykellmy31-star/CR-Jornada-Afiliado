@@ -260,8 +260,8 @@ test('agendador não possui barreira de foto extra antes do publicador manual',(
  const start=source.indexOf('async function runScheduled(env){');
  const end=source.indexOf('\nexport ',start);
  const cron=source.slice(start,end);
- assert.ok(cron.includes('publishWithManualTools(env,offer,settings'),
-  'Cron chama diretamente o MESMO publicador manual');
+ assert.ok(cron.includes('publishUsingManualButton(env,offer.id'),
+  'Cron chama a mesma operação interna usada pela rota do botão manual');
  assert.ok(!cron.includes('prepareScheduledPhoto(env,offer)'),'Cron não deve exigir segundo pré-validador');
  assert.ok(!cron.includes('deferScheduledPhoto(env,offer)'),'Cron nunca adia a foto antes de tentar o publicador');
 });
@@ -411,4 +411,36 @@ test('nova tentativa de FOTO não altera o intervalo entre PUBLICAÇÕES',async(
   assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready');
   assert.equal(photoPosts,0);
  }finally{globalThis.fetch=previous;close();}
+});
+
+
+test('Cron aciona o publicador manual mesmo com retry de foto no futuro',async()=>{
+ const {DB,env,close}=setup(),previous=globalThis.fetch;
+ const counter={reads:0,photos:0};
+ try{
+  DB.prepare('CREATE TABLE telegram_photo_retries(offer_id INTEGER PRIMARY KEY,attempts INTEGER,next_retry_at INTEGER,reason TEXT,updated_at INTEGER)').run();
+  DB.prepare('INSERT INTO telegram_photo_retries VALUES(1,5,2147483647,?,1)')
+   .bind('Aguardando foto real na preparação automática').run();
+  globalThis.fetch=mockImageFetch(counter);
+  const published=await runScheduled(env);
+  assert.equal(published.status,'published',
+   'o relógio deve publicar como o botão manual, sem bloquear por next_retry_at');
+  assert.equal(counter.photos,1);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
+  assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_photo_retries').first().n,0);
+  assert.equal((await runScheduled(env)).skipped,'interval_or_schedule',
+   'publicação já concluída nunca pode ser repetida');
+ }finally{globalThis.fetch=previous;close();}
+});
+
+test('manual e cron acionam a mesma operação, sem modificar intervalo',()=>{
+ const src=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
+ const manual=src.slice(src.indexOf("const publish = u.pathname.match"),src.indexOf("\n  return fail('Rota inexistente.', 404)",src.indexOf("const publish = u.pathname.match")));
+ const cron=src.slice(src.indexOf('async function runScheduled(env){'),
+  src.indexOf('\nasync function router(',src.indexOf('async function runScheduled(env){')));
+ assert.match(manual,/publishUsingManualButton\(env,Number\(publish\[1\]\)/);
+ assert.match(cron,/publishUsingManualButton\(env,offer\.id/);
+ assert.match(cron,/shouldSend\(settings,now,total,latest/);
+ assert.doesNotMatch(cron,/tpr\.next_retry_at<=/);
+ assert.doesNotMatch(cron,/UPDATE settings SET interval_minutes/);
 });

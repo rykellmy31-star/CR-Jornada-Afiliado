@@ -266,6 +266,18 @@ async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manua
  }
  return result;
 }
+// Mesma operação do botão Publicar para a interface e para o Cron.
+// O horário seleciona apenas QUANDO chamar; a foto é buscada na hora.
+async function publishUsingManualButton(env,offerId,{ctx=null,origin='manual'}={}){
+ await ensureCouponTable(env);
+ const [settings,offer]=await Promise.all([
+  readSettings(env),
+  env.DB.prepare(OFFER_WITH_COUPON+' WHERE o.id=?').bind(offerId).first()
+ ]);
+ if(!offer)return {status:'not_found'};
+ if(offer.status!=='ready')return {status:'already_claimed'};
+ return publishWithManualTools(env,offer,settings,{ctx,origin,requirePhoto:true});
+}
 // Trava entre Crons concorrentes + intervalo/dias/horários/limite diário do
 // Telegram. Não chamar um segundo publicador nem alterar os intervalos salvos.
 // Tenta recuperar ofertas RECENTES presas em revisão somente por falta de foto.
@@ -353,26 +365,21 @@ async function runScheduled(env){
    "WHERE reason='Aguardando foto real na preparação automática' "+
    "AND next_retry_at>? AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).bind(photoNow+60,photoNow+60).run();
+  // A espera de FOTO não deve bloquear um horário válido: o botão
+  // manual nunca usa telegram_photo_retries para selecionar uma oferta.
+  // Ignorar esse filtro apenas na seleção, mantendo os intervalos em shouldSend.
+  const checkedOffers=[];
   for(let checked=0;checked<5;checked++){
+   const exclude=checkedOffers.length?
+    ' AND o.id NOT IN ('+checkedOffers.map(()=>'?').join(',')+')':'';
    const offer=await env.DB.prepare(OFFER_WITH_COUPON+
-     " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id "+
      " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+
-     "AND (tpr.offer_id IS NULL OR tpr.next_retry_at<=?)"+
-     " ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
-   ).bind(settings.category,settings.category,Math.floor(Date.now()/1000)).first();
-   if(!offer){
-     const waiting=await env.DB.prepare(
-       "SELECT COUNT(*) AS total FROM telegram_photo_retries r "+
-       "JOIN offers o ON o.id=r.offer_id "+
-       "WHERE o.status='ready' AND r.next_retry_at>?"
-     ).bind(Math.floor(Date.now()/1000)).first();
-     return {skipped:waiting?.total?'awaiting_photo':'empty'};
-   }
-   // PRIMEIRO: usar exatamente o publicador do botão manual.
-   // O antigo preflight era uma barreira extra que bloqueava ofertas que
-   // a própria publicação compartilhada conseguia enviar com foto.
-   const result=await publishWithManualTools(env,offer,settings,
-     {origin:'automático',requirePhoto:true});
+     exclude+" ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
+   ).bind(settings.category,settings.category,...checkedOffers).first();
+   if(!offer)return {skipped:checkedOffers.length?'awaiting_photo':'empty'};
+   checkedOffers.push(offer.id);
+   // Mesma operação acionada pelo botão Publicar, relendo a oferta em D1.
+   const result=await publishUsingManualButton(env,offer.id,{origin:'automático'});
    if(result?.status==='awaiting_photo'){
     // A primeira busca falhou ANTES de qualquer envio. O Cron agora tenta
     // obter a foto real da vitrine e faz um segundo disparo IMEDIATO pelo
@@ -381,8 +388,7 @@ async function runScheduled(env){
     try{
      await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
     }catch(error){console.warn('Foto adicional da vitrine:',String(error?.message||error).slice(0,110));}
-    const retried=await publishWithManualTools(env,offer,settings,
-     {origin:'automático',requirePhoto:true});
+    const retried=await publishUsingManualButton(env,offer.id,{origin:'automático'});
     if(retried?.status!=='awaiting_photo')return retried;
     // Rechecagem da FOTO em um ciclo independente de 60 segundos.
     // Não altera interval_minutes: os intervalos de PUBLICAÇÕES seguem
@@ -808,12 +814,10 @@ async function router(request, env, ctx=null) {
   }
   const publish = u.pathname.match(/^\/api\/offers\/(\d+)\/publish$/);
   if (publish && method === 'POST') {
-    await ensureCouponTable(env);
-    const [settings, offer] = await Promise.all([readSettings(env), env.DB.prepare(OFFER_WITH_COUPON + ' WHERE o.id=?').bind(Number(publish[1])).first()]);
-    if (!offer) return fail('Oferta não encontrada.', 404);
-    if (offer.status !== 'ready') return fail('Oferta já enviada ou em revisão.', 409);
-    const result=await publishWithManualTools(env,offer,settings,{ctx,origin:'manual'});
-   return json(result, result.status === 'published' ? 200 : 409);
+    const result=await publishUsingManualButton(env,Number(publish[1]),{ctx,origin:'manual'});
+    if(result.status==='not_found')return fail('Oferta não encontrada.',404);
+    if(result.status==='already_claimed')return fail('Oferta já enviada ou em revisão.',409);
+    return json(result,result.status==='published'?200:409);
   }
   return fail('Rota inexistente.', 404);
 }
