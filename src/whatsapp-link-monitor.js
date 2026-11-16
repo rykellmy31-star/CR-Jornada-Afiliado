@@ -5,6 +5,7 @@ import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
 import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 import {fetchRenderedMonitorPrice} from './monitor-rendered-price.js';
+import {browseFeaturedDestination} from './monitor-featured-click.js';
 import {monitorWebhookReady} from './monitor-webhook-setup.js';
 
 const SCHEMA=[
@@ -1068,12 +1069,26 @@ async function claimMonitorItemBrowserAttempt(env,shortlinkId,at){
 // Primeira alternativa: HTML completo do produto principal. Se o ML renderizar
 // o botão só depois, use scrape com seletores restritos à vitrine principal.
 // Nunca seleciona um link de "Quem viu este produto também comprou".
-export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false}={}){
+export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false,launchBrowser=null}={}){
  if(typeof env?.BROWSER?.quickAction!=='function')return null;
  let u;
  try{u=new URL(socialUrl);}catch{return null;}
  if(u.protocol!=='https:'||!REDIRECT_HOSTS.has(u.hostname.toLowerCase())||
     !/^\/social(?:\/|$)/i.test(u.pathname))return null;
+ // A vitrine pode renderizar o CTA por JavaScript sem colocar seu destino
+ // no HTML. Navegar no botão REAL do cartão destacado vem antes de repetir
+ // os Quick Actions de leitura que não permitem clicar.
+ const clicked=await browseFeaturedDestination(env,u.href,{launchBrowser});
+ if(clicked){
+  const unique=new Map();
+  for(const address of clicked.addresses||[]){
+   if(!trustedHop(address))continue;
+   const candidate=urlCandidate(address);
+   if(candidate?.kind==='product')unique.set(candidate.product_id,candidate);
+   if(unique.size>1)return null; // cartão ambíguo: nunca escolher recomendado
+  }
+  if(unique.size===1)return [...unique.values()][0];
+ }
  const opts={url:u.href,gotoOptions:{waitUntil:'networkidle2',timeout:20000},
   rejectResourceTypes:['image','font','media']};
  try{
