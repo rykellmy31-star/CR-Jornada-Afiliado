@@ -109,13 +109,14 @@ test('failures are bounded and reattempted, invalid requests rejected',async()=>
   await assert.rejects(()=>readManualGroupCheck(env,'invalid'),/desconhecido/);
   await requestManualGroupCheck(env,'categories');
   const job=await executeManualGroupCheck(env,'categories',{fetcher:async()=>new Response('bloqueado',{status:403})});
-  assert.equal(job.status,'completed');
+  assert.equal(job.status,'pending','falha de API não vira conclusão sem categoria');
   assert.equal(job.failed,1);
-  assert.equal(job.remaining,0);
+  assert.equal(job.remaining,1);
   // Persisted status allows a browser to close and reopen without restarting.
   const current=await readManualGroupCheck(env,'categories');
   assert.equal(current.failed,1);
-  assert.equal(current.remaining,0);
+  assert.equal(current.remaining,1);
+  assert.match(current.last_error,/HTTP 403|limitou/i);
  }finally{db.close();}
 });
 test('UI starts asynchronously, polls short route, and no longer chains long refreshes to button responses',()=>{
