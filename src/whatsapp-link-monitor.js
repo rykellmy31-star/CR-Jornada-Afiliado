@@ -185,11 +185,15 @@ function productTitle(url,hint,id){
 // Recupera somente preços ausentes de produtos ainda disponíveis.
 // Usa primeiro a legenda já guardada, e depois (em agendamento) consulta
 // apenas a mensagem original na instância e grupo autorizados. Não publica nada.
-export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={}){
+export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limit=null}={}){
  await ensureMonitor(env);
  const now=epoch();
- const query=`SELECT l.product_id,l.message_id,l.group_id,l.created_at,g.instance_name,g.group_jid,
-   m.last_seen_at,
+ const cap=Math.min(8,Math.max(1,Number.isInteger(limit)?limit:(allowEvolution?3:10)));
+ // Não abandonar produtos antigos: o limite anterior de 2 dias e o teto
+ // de 3 tentativas deixavam históricos permanentemente sem pesquisa.
+ // Aguardar mais entre falhas, sem requisitar mensagens continuamente.
+ const query=`SELECT l.product_id,l.source_url,l.message_id,l.group_id,l.created_at,
+   g.instance_name,g.group_jid,m.last_seen_at,
    (SELECT s.message_hint FROM ml_monitor_shortlinks s
     WHERE s.group_id=l.group_id AND s.message_id=l.message_id AND s.status='resolved'
     ORDER BY s.created_at DESC LIMIT 1) AS saved_hint
@@ -200,33 +204,58 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={})
    LEFT JOIN ml_link_batches b ON b.id=l.batch_id
    LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url
    WHERE (l.status='available' OR
-     (l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links'
-      AND i.affiliate_url IS NULL AND i.offer_id IS NULL))
-     AND l.message_id<>'' AND l.created_at>=?
-     AND g.enabled=1 AND g.authorized=1 AND m.last_seen_price_cents IS NULL
-     AND m.last_seen_at<=l.created_at+5
-     AND (r.product_id IS NULL OR (r.attempts<3 AND r.last_attempt_at<=?))
-   ORDER BY l.created_at DESC LIMIT ?`;
- const records=(await env.DB.prepare(query).bind(now-2*86400,now-900,allowEvolution?3:10).all()).results;
- let recovered=0,attempted=0;
+    (l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links'
+     AND i.affiliate_url IS NULL AND i.offer_id IS NULL))
+    AND l.message_id<>'' AND g.enabled=1 AND g.authorized=1
+    AND (m.last_seen_price_cents IS NULL OR m.last_seen_price_cents<=0)
+    AND (r.product_id IS NULL OR r.last_attempt_at <= ? -
+      CASE WHEN r.attempts<=1 THEN 120 WHEN r.attempts<=3 THEN 900
+       WHEN r.attempts<=7 THEN 3600 ELSE 21600 END)
+   ORDER BY COALESCE(r.last_attempt_at,0) ASC,l.created_at DESC LIMIT ?`;
+ const records=(await env.DB.prepare(query).bind(now,cap).all()).results||[];
+ let recovered=0,attempted=0,inspected=0;
  for(const row of records){
+  inspected++;
   let terms=extractPromotionTerms(row.saved_hint||'');
   if(!(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0)&&allowEvolution){
    attempted++;
    const msg=await recoverCaptionFromEvolution(env,{instance:row.instance_name,
     group_jid:row.group_jid,message_id:row.message_id,urls:[],hint:''});
-   if(msg)terms=extractPromotionTerms(msg.hint);
+   // Exigir o mesmo produto OU seu encurtador salvo na mesma mensagem.
+   if(msg){
+    const urls=msg.urls||[];
+    const original=urls.some(url=>url===row.source_url);
+    const short=await env.DB.prepare(
+     "SELECT short_url FROM ml_monitor_shortlinks "+
+     "WHERE group_id=? AND message_id=? AND status='resolved' LIMIT 1"
+    ).bind(row.group_id,row.message_id).first();
+    if(original||(short&&urls.includes(short.short_url)))
+     terms=extractPromotionTerms(msg.hint);
+   }
   }
-  if(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0){
+  if(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0&&
+   terms.price_cents<=100_000_000){
+   // O preço encontrado na mensagem ANTIGA conserva a data original.
+   // Não apresentar promoção antiga como preço atual!
    const result=await env.DB.prepare(
-    "UPDATE ml_monitor_product_meta SET last_seen_price_cents=?,last_seen_deal_json=? WHERE product_id=? AND last_seen_price_cents IS NULL AND last_seen_at<=?"
-   ).bind(terms.price_cents,JSON.stringify(terms),row.product_id,row.created_at+5).run();
-   if(result.meta?.changes===1)recovered++;
+    "UPDATE ml_monitor_product_meta SET last_seen_price_cents=?,"+
+    "last_seen_deal_json=?,last_seen_at=? WHERE product_id=? "+
+    "AND (last_seen_price_cents IS NULL OR last_seen_price_cents<=0)"
+   ).bind(terms.price_cents,JSON.stringify(terms),row.created_at,row.product_id).run();
+   if(result.meta?.changes===1){
+    recovered++;
+    await env.DB.prepare("DELETE FROM ml_monitor_price_recovery WHERE product_id=?")
+     .bind(row.product_id).run();
+   }
   }else if(allowEvolution){
-   await env.DB.prepare("INSERT INTO ml_monitor_price_recovery(product_id,last_attempt_at,attempts) VALUES(?,?,1) ON CONFLICT(product_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,attempts=attempts+1").bind(row.product_id,now).run();
+   await env.DB.prepare(
+    "INSERT INTO ml_monitor_price_recovery(product_id,last_attempt_at,attempts) "+
+    "VALUES(?,?,1) ON CONFLICT(product_id) DO UPDATE SET "+
+    "last_attempt_at=excluded.last_attempt_at,attempts=attempts+1"
+   ).bind(row.product_id,now).run();
   }
  }
- return {recovered,attempted};
+ return {recovered,attempted,inspected};
 }
 // Consulta o preço público do anúncio validado sem modificar a condição do grupo.
 // Executado após a confirmação dos links, via agendador, também para URLs diretas.
@@ -430,7 +459,11 @@ async function saveProduct(env,entry,source){
  const category=classification.category?.name||'Geral';
  // Registre o último preço mencionado com precisão, inclusive NULL para mensagens sem preço.
  const prior=await env.DB.prepare("SELECT l.id,l.status,l.batch_id,b.status AS batch_status,b.imported_at,m.last_queued_at,m.last_queued_price_cents FROM ml_monitor_links l LEFT JOIN ml_link_batches b ON b.id=l.batch_id LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id WHERE l.product_id=?").bind(source.product_id).first();
- await env.DB.prepare("INSERT INTO ml_monitor_product_meta(product_id,last_seen_price_cents,last_seen_deal_json,last_seen_at) VALUES(?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET last_seen_price_cents=excluded.last_seen_price_cents,last_seen_deal_json=excluded.last_seen_deal_json,last_seen_at=excluded.last_seen_at")
+ await env.DB.prepare("INSERT INTO ml_monitor_product_meta(product_id,last_seen_price_cents,last_seen_deal_json,last_seen_at) VALUES(?,?,?,?) "+
+  "ON CONFLICT(product_id) DO UPDATE SET "+
+  "last_seen_price_cents=CASE WHEN excluded.last_seen_price_cents>0 THEN excluded.last_seen_price_cents ELSE ml_monitor_product_meta.last_seen_price_cents END,"+
+  "last_seen_deal_json=CASE WHEN excluded.last_seen_price_cents>0 THEN excluded.last_seen_deal_json ELSE ml_monitor_product_meta.last_seen_deal_json END,"+
+  "last_seen_at=CASE WHEN excluded.last_seen_price_cents>0 THEN excluded.last_seen_at ELSE ml_monitor_product_meta.last_seen_at END")
    .bind(source.product_id,price,deal?JSON.stringify(deal):null,time).run();
  if(!prior){
    const inserted=await env.DB.prepare("INSERT OR IGNORE INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) VALUES(?,?,?,?,?,?,?,'available',?)")
