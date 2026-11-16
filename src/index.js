@@ -15,7 +15,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
-import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,ensureGroupOriginalPhotos,restoreGroupPhotosForQueue} from './group-original-photo.js';
+import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,ensureGroupOriginalPhotos,restoreGroupPhotosForQueue,groupOriginalPhotoDiagnostics} from './group-original-photo.js';
 import {prewarmTelegramQueue,resolveScheduledShowcasePhoto} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
@@ -563,6 +563,7 @@ async function router(request, env, ctx=null) {
   if (!await verifySession(request, env)) return fail('Faça login para acessar o painel.', 401);
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
+  if(u.pathname==='/api/media-health'&&method==='GET')return json(await groupOriginalPhotoDiagnostics(env));
   if(u.pathname==='/api/overview'&&method==='GET')return json(await overviewState(env));
   if(u.pathname==='/api/message-templates'&&method==='GET')return json(await listMessageTemplates(env,u.searchParams.get('platform')||'mercadolivre'));
   if(u.pathname==='/api/message-templates/save'&&method==='POST')return json(await saveMessageTemplate(env,await getBody(request)));
