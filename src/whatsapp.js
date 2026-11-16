@@ -4,6 +4,7 @@ import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
 import {photoForWhatsApp} from './whatsapp-photo.js';
+import {groupOriginalPhotoForOffer} from './group-original-photo.js';
 import {ensureAutomaticPrices,prepareAutomaticOfferPrice,recordAutomaticPriceRetry,clearAutomaticPriceRetry,hasFreshOfferPrice,resolveOfferSource} from './automatic-price.js';
 import { ensureCouponTable } from './coupons.js';
 import { normalizeChannelCategory, categoryMatches } from './multichannel.js';
@@ -391,16 +392,21 @@ export async function testWhatsApp(env) {
 function textForWhatsApp(offer){
   return formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
 }
-async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null}={}){
+async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,originalPhoto=null}={}){
  const displayOffer=await withGroupCopyPublicLink(env,offer);
  const text=textForWhatsApp(await withActiveMessageTemplate(env,displayOffer,'mercadolivre'));
- let image=imageUrl;
- if(!image)try{
+ const sourcePhoto=originalPhoto||await groupOriginalPhotoForOffer(env,offer.affiliate_url).catch(()=>null);
+ let image=sourcePhoto?null:imageUrl;
+ if(!image&&!sourcePhoto)try{
   image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,
    {retryOnMiss:true,sourceLookup:resolveOfferSource});
  }catch(error){console.warn('Foto WhatsApp:',String(error?.message||error).slice(0,100));}
- if(!image)throw Object.assign(new Error('Foto do produto indisponível; publicação sem imagem bloqueada.'),{code:'PHOTO_NOT_FOUND'});
- const photo=await photoForWhatsApp(image);
+ if(!image&&!sourcePhoto)throw Object.assign(new Error('Foto do produto indisponível; publicação sem imagem bloqueada.'),{code:'PHOTO_NOT_FOUND'});
+ const photo=sourcePhoto?{
+  mimetype:sourcePhoto.mime,
+  media:'data:'+sourcePhoto.mime+';base64,'+sourcePhoto.image_b64,
+  filename:sourcePhoto.mime==='image/png'?'oferta.png':'oferta.jpg'
+ }:await photoForWhatsApp(image);
  const body={number:cfg.group_jid,mediatype:'image',mimetype:photo.mimetype,
   media:photo.media,caption:text,fileName:photo.filename,filename:photo.filename};
  const data=await evoFetch(env,cfg.instance_name,'/message/sendMedia',{method:'POST',body:JSON.stringify(body)});
@@ -411,6 +417,8 @@ async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null}={}){
 // a oferta. Quando a página/vitrine não oferece foto, só agenda nova tentativa;
 // não publica uma mensagem incompleta em nenhum grupo.
 async function preflightWhatsAppPhoto(env,offer,source,cfg){
+  const originalPhoto=await groupOriginalPhotoForOffer(env,offer.affiliate_url).catch(()=>null);
+  if(originalPhoto)return {originalPhoto};
   let image=null;
   try{image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});}
   catch(e){console.warn('Pré-verificação da foto WhatsApp:',String(e?.message||e).slice(0,110));}
@@ -447,14 +455,15 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   const timestamp=nowSec(),minGap=schedule.interval_minutes*60;
   if(schedule.last_attempt_at>0&&timestamp-schedule.last_attempt_at<minGap)
     return {skipped:'interval'};
-  let verifiedImage=null;
+  let verifiedImage=null,verifiedOriginal=null;
   {
     // Exatamente a mesma busca de foto usada pelo botão Publicar, com cache
     // de foto já enviada ao Telegram. Não exigir preço novo para descobrir foto.
     // Se a mídia não existe, NÃO usar sendText nem consumir intervalo.
     const checked=await preflightWhatsAppPhoto(env,offer,source,cfg);
-    if(!checked.image)return checked;
+    if(!checked.image&&!checked.originalPhoto)return checked;
     verifiedImage=checked.image;
+    verifiedOriginal=checked.originalPhoto||null;
   }
   // Uma mesma instância respeita o ritmo configurado, inclusive entre ofertas
   // manuais, espelhadas e outros grupos Evolution deste número.
@@ -481,7 +490,7 @@ async function dispatchPrimaryWhatsApp(env,cfg,offer,source,{automatic=false}={}
   }
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage});
+    const result=await sendOfferWhatsApp(env,cfg,offer,{imageUrl:verifiedImage,originalPhoto:verifiedOriginal});
     const updatedAt=nowSec();
     if(direct){
       await env.DB.prepare("UPDATE whatsapp_direct_offers SET status='published',published_at=?,message_id=?,last_error=NULL WHERE id=? AND status='sending'")
