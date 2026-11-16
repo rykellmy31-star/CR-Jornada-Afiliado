@@ -561,19 +561,22 @@ export async function reviewMonitorShortlink(env,id,body){
 }
 // Processa a revisão inteira em páginas pequenas, preservando limites do Worker.
 // Nunca converte link de terceiros em um link de afiliado nem publica a oferta.
-export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={}){
+export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3,now=null}={}){
  await ensureMonitor(env);
  const after=Number(after_id),batchSize=Number(limit);
  if(!Number.isSafeInteger(after)||after<0||!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>3)
   throw fail('Lote de revisão inválido.');
+ const t=Number.isSafeInteger(now)&&now>0?now:epoch();
  const candidates=(await env.DB.prepare(
-  "SELECT s.id,s.reason,g.authorized FROM ml_monitor_shortlinks s "+
-  "JOIN ml_monitor_groups g ON g.id=s.group_id "+
-  "WHERE s.status='review' AND s.id>? ORDER BY s.id LIMIT ?"
- ).bind(after,batchSize).all()).results;
+  "SELECT s.id,s.reason,g.authorized,COALESCE(rs.auto_attempts,0) AS auto_attempts "+
+  "FROM ml_monitor_shortlinks s JOIN ml_monitor_groups g ON g.id=s.group_id "+
+  "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
+  "WHERE s.status='review' AND s.id>? "+
+  "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? "+
+  "ORDER BY s.id LIMIT ?"
+ ).bind(after,t,t,batchSize).all()).results;
  const outcome={ok:true,processed:0,resolved:0,not_confirmed:0,requires_manual:0,
   busy:0,results:[],next_cursor:after,has_more:false};
- const t=epoch();
  for(const item of candidates){
   outcome.next_cursor=Number(item.id);
   if(!item.authorized){
@@ -613,7 +616,7 @@ export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={})
     const reason=String(result.reason||'Produto não confirmado').slice(0,220);
     await env.DB.prepare(
      'UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 WHERE shortlink_id=?'
-    ).bind(t,t+monitorRetryDelaySeconds(1),item.id).run();
+    ).bind(t,t+monitorRetryDelaySeconds(Number(item.auto_attempts||0)+1),item.id).run();
     outcome.results.push({id:item.id,status:'not_confirmed',reason});
    }
   }catch(error){
@@ -624,8 +627,11 @@ export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3}={})
   }
  }
  const next=await env.DB.prepare(
-  "SELECT 1 AS available FROM ml_monitor_shortlinks WHERE status='review' AND id>? LIMIT 1"
- ).bind(outcome.next_cursor).first();
+  "SELECT 1 AS available FROM ml_monitor_shortlinks s "+
+  "LEFT JOIN ml_monitor_retry_schedule rs ON rs.shortlink_id=s.id "+
+  "WHERE s.status='review' AND s.id>? "+
+  "AND COALESCE(rs.next_retry_at,0)<=? AND COALESCE(rs.lease_until,0)<=? LIMIT 1"
+ ).bind(outcome.next_cursor,t,t).first();
  outcome.has_more=!!next;
  return outcome;
 }
@@ -639,6 +645,40 @@ export async function updateMonitorLinkCategory(env,id,body){
    .bind(category,n).run();
  if(row.meta?.changes!==1)throw fail('Produto não disponível para editar.',409);
  return {ok:true};
+}
+// A categoria "Geral" bloqueia o lote. Permita classificar TODOS os
+// produtos ainda não classificados explicitamente, mas SOMENTE após o dono
+// escolher uma categoria ativa. Não modifica itens de lotes anteriores.
+export async function bulkCategorizeMonitorLinks(env,body){
+ await ensureMonitor(env);
+ await ensureAutomationCenter(env);
+ const category=String(body?.category||'').trim();
+ if(body?.confirm_all_unclassified!==true)
+  throw fail('Confirme a classificação dos produtos disponíveis.');
+ if(!category||category==='Geral')
+  throw fail('Selecione uma categoria específica antes de continuar.');
+ const active=await env.DB.prepare(
+  'SELECT name FROM affiliate_group_categories WHERE enabled=1 AND name=?'
+ ).bind(category).first();
+ if(!active)throw fail('Categoria inválida ou desativada.');
+ const items=(await env.DB.prepare(
+  "SELECT id FROM ml_monitor_links WHERE status='available' "+
+  "AND (category='Geral' OR trim(category)='') ORDER BY id LIMIT 100"
+ ).all()).results;
+ if(!items.length)return {ok:true,classified:0,remaining:0,category};
+ const operations=items.map(x=>env.DB.prepare(
+  "UPDATE ml_monitor_links SET category=?,classification='selected' "+
+  "WHERE id=? AND status='available' AND (category='Geral' OR trim(category)='')"
+ ).bind(active.name,x.id));
+ if(typeof env.DB.batch!=='function')throw fail('Banco transacional indisponível.',503);
+ await env.DB.batch(operations);
+ const remaining=await env.DB.prepare(
+  "SELECT count(*) AS total FROM ml_monitor_links WHERE status='available' "+
+  "AND (category='Geral' OR trim(category)='')"
+ ).first();
+ // Na etapa seguinte, a validação em segundo plano já prepara até 50
+ // desses produtos. Não cria nem publica nada aqui, sem uma conferência.
+ return {ok:true,classified:items.length,remaining:Number(remaining?.total||0),category:active.name};
 }
 export async function prepareMonitorBatch(env,body){
  await ensureMonitor(env);
