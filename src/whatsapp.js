@@ -1,3 +1,4 @@
+import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import { formatOfferMessage, normalizeOffer, localTimeParts } from './logic.js';
 import { findProductImage } from './images.js';
 import { sharedWhatsAppProductPhoto } from './offer-images.js';
@@ -390,7 +391,7 @@ function textForWhatsApp(offer){
   return formatOfferMessage(offer,{platform:'mercadolivre',network:'whatsapp',includeLink:true});
 }
 async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null}={}){
- const text=textForWhatsApp(offer);
+ const text=textForWhatsApp(await withGroupCopyPublicLink(env,offer));
  let image=imageUrl;
  if(!image)try{
   image=await sharedWhatsAppProductPhoto(env,offer.affiliate_url,findProductImage,

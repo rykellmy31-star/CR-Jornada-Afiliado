@@ -157,6 +157,11 @@ function urlCandidate(input){
        : /^\/[A-Za-z0-9_-]{5,50}\/?$/.test(u.pathname))){
    u.search='';u.hash='';return {kind:'short',url:u.href};
  }
+ // A vitrine social oficial enviada diretamente por outra pessoa também é fonte.
+ // O ref de terceiro NÃO é reaproveitado: somente identificamos o produto destacado.
+ if(HOSTS.has(u.hostname.toLowerCase()) && /^\/social\/[A-Za-z0-9_-]{3,80}\/?$/.test(u.pathname) && u.searchParams.has('ref')){
+   u.hash='';return {kind:'short',url:u.href};
+ }
  if(!HOSTS.has(u.hostname.toLowerCase()))return null;
  try{
    const source_url=validateSourceUrl(u.href);

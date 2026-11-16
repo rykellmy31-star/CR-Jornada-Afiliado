@@ -190,7 +190,7 @@ export function formatOfferMessage(offer,{platform='mercadolivre',network='whats
   }
   const coupons=couponDescription(offer,localTimeParts(new Date(now)).day);
   if(coupons.length)info.push('',...coupons.map((line,i)=>i===0?'🎟️ '+bold(line.replace(/^🎟️\s*/,'') ):clean(line)));
-  const link=String(offer.affiliate_url||'');
+  const link=String(offer.public_url||offer.affiliate_url||'');
   const footer=[
     '',
     '✅ Confira preço, disponibilidade e condições antes de comprar.',
@@ -218,6 +218,6 @@ export function telegramPayload(offer, chatId, now = Date.now(),{includeLink=fal
     text: formatOfferMessage(offer,{platform:'mercadolivre',network:'telegram',now,includeLink}),
     parse_mode:'HTML',
     disable_web_page_preview: false,
-    reply_markup: { inline_keyboard: [[{ text: '🛒 Ver oferta no Mercado Livre', url: offer.affiliate_url }]] }
+    reply_markup: { inline_keyboard: [[{ text: '🛒 Ver oferta no Mercado Livre', url: offer.public_url||offer.affiliate_url }]] }
   };
 }
