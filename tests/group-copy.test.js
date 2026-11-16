@@ -47,13 +47,13 @@ test('COPIAR DE GRUPOS usa monitor único, aparece no menu e conserva conversão
  assert.match(CLIENT_JS,/selectedPage==='copygroups'/);
  assert.match(CLIENT_JS,/runCopyGroupsScheduled|refreshCopyGroups/);
 });
-test('importação experimental começa desligada e requer confirmação, loja e monitor',async()=>{
+test('importação automática começa desligada, exige loja e monitor, sem exigir confirmação repetida',async()=>{
  const {env,db}=setup();
  try{
   const initial=await groupCopyState(env);
   assert.equal(initial.enabled,false);
   await assert.rejects(testGroupCopyImport(env),/Ative e salve a importação/);
-  await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:false}),/Confirme/);
+  await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:false}),/Cadastre antes/);
   await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true}),/Cadastre antes/);
   await seed(env);
   const active=await saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true});
