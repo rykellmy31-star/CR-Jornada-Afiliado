@@ -3,7 +3,7 @@ import {findProductImage} from './images.js';
 import {resolveOfferSource} from './automatic-price.js';
 import {getPrimaryCategory} from './multichannel.js';
 import {cachedProductImage,resolveProductImageWithRetry,sourcePageForAffiliateImage,rememberProductImage} from './offer-images.js';
-import {inspectMonitorShortlink} from './whatsapp-link-monitor.js';
+import {inspectMonitorShortlink,browserFeaturedProduct} from './whatsapp-link-monitor.js';
 import {productId} from './link-batches.js';
 import {trustedProductImage,validatedProductPhoto} from './images.js';
 const TABLE="CREATE TABLE IF NOT EXISTS affiliate_photo_preflight (affiliate_url TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0)";
@@ -39,8 +39,12 @@ export async function prewarmTelegramQueue(env){
    // O agendador verifica preços com retry próprio. A rotina de fotos não
    // deve consumir o orçamento de navegador em consultas duplicadas.
    const cached=await cachedProductImage(env,item.affiliate_url);
-   const image=cached||await resolveProductImageWithRetry(
+   // O botão manual continua usando o resolvedor original. Se a vitrine
+   // React esconder a foto nos metadados, o pré-carregamento AGENDADO usa
+   // também a foto do cartão principal (nunca a de recomendações).
+   let image=cached||await resolveProductImageWithRetry(
      env,item.affiliate_url,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});
+   if(!image)image=await resolveScheduledShowcasePhoto(env,item.affiliate_url);
    if(!image)continue;
    await env.DB.prepare('DELETE FROM affiliate_photo_preflight WHERE affiliate_url=?')
      .bind(item.affiliate_url).run();
@@ -140,12 +144,17 @@ export async function resolveScheduledShowcasePhoto(env,affiliateUrl){
  const titleSelector='.rl-card-featured-wrapper a.poly-component__title[href]';
  const actionSelector='.rl-card-featured-wrapper a.poly-component__link--action-link[href]';
  const photoSelector='.rl-card-featured-wrapper img.poly-component__picture';
+ const alternatePhotoSelector='[class*="card-featured"] img.poly-component__picture';
+ const alternateTitleSelector='[class*="card-featured"] a.poly-component__title[href]';
+ const photoSelectors=[photoSelector,alternatePhotoSelector];
+ const linkSelectors=[titleSelector,actionSelector,alternateTitleSelector];
  try{
   const scraped=await env.BROWSER.quickAction('scrape',{
    url:social,gotoOptions:{waitUntil:'domcontentloaded',timeout:18000},
    rejectResourceTypes:['font','media'],
    elements:[
-    {selector:titleSelector},{selector:actionSelector},{selector:photoSelector}
+    ...linkSelectors.map(selector=>({selector})),
+    ...photoSelectors.map(selector=>({selector}))
    ]
   });
   if(!scraped?.ok||typeof scraped.json!=='function')return null;
@@ -155,11 +164,11 @@ export async function resolveScheduledShowcasePhoto(env,affiliateUrl){
    Array.isArray(payload?.results)?payload.results:[];
   const matched=new Map(),photos=[];
   for(const section of sections){
-   if(![titleSelector,actionSelector,photoSelector].includes(section?.selector))continue;
+   if(![...linkSelectors,...photoSelectors].includes(section?.selector))continue;
    const items=Array.isArray(section?.results)?section.results:
     (section?.results&&typeof section.results==='object'?[section.results]:[]);
    for(const element of items.slice(0,6)){
-    if(section.selector===photoSelector){
+    if(photoSelectors.includes(section.selector)){
      for(const key of ['src','data-src']){
       const url=elementAttribute(element,key);
       if(trustedProductImage(url)&&!photos.includes(url))photos.push(url);
@@ -171,11 +180,30 @@ export async function resolveScheduledShowcasePhoto(env,affiliateUrl){
     if(candidate)matched.set(candidate.id,candidate);
    }
   }
-  if(matched.size!==1||photos.length===0)return null;
-  const [featured]=matched.values();
+  // As vitrines às vezes usam links /sec/ no destaque: o scraper de imagem
+  // encontra a foto, mas o href sozinho não revela o MLB. Reutilizar o
+  // resolvedor de destino do cartão principal, que segue somente /sec/
+  // oficiais, antes de desistir da imagem válida.
+  let featured=matched.size===1?[...matched.values()][0]:null;
+  if(matched.size>1)return null;
+  if(!featured&&photos.length){
+   try{
+    const resolved=await browserFeaturedProduct(env,social,{includeDetails:true});
+    const official=officialProduct(resolved?.url);
+    if(official&&(!source||source.id===official.id)){
+     featured=official;
+     if(trustedProductImage(resolved?.featured_price?.image_url)&&
+        !photos.includes(resolved.featured_price.image_url))
+      photos.unshift(resolved.featured_price.image_url);
+    }
+   }catch(error){
+    console.warn('Identidade do destaque renderizado:',String(error?.message||error).slice(0,100));
+   }
+  }
+  if(!featured||!photos.length)return null;
   if(source&&source.id!==featured.id)return null;
-  // A foto só é aceita quando título/CTA do cartão dão UM único produto.
-  for(const imageUrl of photos.slice(0,2)){
+  // Só a foto do cartão destacado do MESMO MLB; nunca recomendações.
+  for(const imageUrl of photos.slice(0,3)){
    const photo=await saveVerifiedShowcasePhoto(env,affiliateUrl,featured.url,imageUrl);
    if(photo)return photo;
   }
