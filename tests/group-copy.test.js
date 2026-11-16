@@ -253,7 +253,7 @@ test('página de Copiar Grupos mostra painel definitivo, polling leve e aviso co
  assert.doesNotMatch(html,/copy-groups-ack/);
  assert.match(CLIENT_JS,/refreshCopyGroupsLive/);
  assert.match(CLIENT_JS,/copy-groups\/live/);
- assert.match(CLIENT_JS,/setInterval\(refreshCopyGroupsLive,3000\)/);
+ assert.match(CLIENT_JS,/setInterval\(refreshCopyGroupsLive,8000\)/);
  assert.match(CLIENT_JS,/Importação automática ativa/);
  assert.match(html,/comissão ainda não está comprovada/);
 });
@@ -341,4 +341,48 @@ test('interface mantém checkbox sincronizado sem respostas antigas do diagnóst
  assert.match(CLIENT_JS,/copyGroupsTouched=true/);
  assert.match(CLIENT_JS,/saved\?\.ok!==true\|\|saved\.enabled!==desired/);
  assert.match(CLIENT_JS,/const saved=await call\('\/api\/copy-groups\/live'/);
+});
+
+
+test('diagnóstico leve separa falta de preço, preço vencido, categoria e itens prontos sem travar painel',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  const missing=await groupCopyLiveState(env);
+  assert.equal(missing.blockers.considered,1);
+  assert.equal(missing.blockers.price_missing,1);
+  assert.equal(missing.blockers.price_expired,0);
+  const row=env.DB.prepare('SELECT product_id FROM ml_monitor_links LIMIT 1').first();
+  const t=Math.floor(Date.now()/1000);
+  const deal=extractPromotionTerms('De: R$ 129,90 Por: R$ 79,90');
+  env.DB.prepare('UPDATE ml_monitor_product_meta SET last_seen_price_cents=?,last_seen_deal_json=?,last_seen_at=? WHERE product_id=?')
+   .bind(7990,JSON.stringify(deal),t-26*3600,row.product_id).run();
+  const expired=await groupCopyLiveState(env);
+  assert.equal(expired.blockers.price_missing,0);
+  assert.equal(expired.blockers.price_expired,1);
+  assert.equal(expired.blockers.price_and_category_ready,0);
+  env.DB.prepare('UPDATE ml_monitor_product_meta SET last_seen_at=? WHERE product_id=?')
+   .bind(t-120,row.product_id).run();
+  const ready=await groupCopyLiveState(env);
+  assert.equal(ready.blockers.price_expired,0);
+  assert.equal(ready.blockers.price_and_category_ready,1);
+  env.DB.prepare("UPDATE ml_monitor_links SET category='Geral',classification='needs_review'").run();
+  const uncategorized=await groupCopyLiveState(env);
+  assert.equal(uncategorized.blockers.needs_category,1);
+  assert.equal(uncategorized.blockers.price_and_category_ready,0);
+ }finally{db.close();}
+});
+
+test('Copiar Grupos usa contadores leves em vez da API cara que dava timeout na tela',()=>{
+ const source=CLIENT_JS.slice(CLIENT_JS.indexOf('async function refreshCopyGroups(){'),
+  CLIENT_JS.indexOf('// Consulta rápida: apenas contadores'));
+ assert.match(source,/api\/copy-groups\/live/);
+ assert.doesNotMatch(source,/call\('\/api\/copy-groups'\)/);
+ const refresh=CLIENT_JS.slice(CLIENT_JS.indexOf("$('copy-groups-refresh').addEventListener"),
+  CLIENT_JS.indexOf("$('copy-groups-test').addEventListener"));
+ assert.match(refresh,/await refreshCopyGroups/);
+ assert.doesNotMatch(refresh,/refreshWhatsAppMonitor/);
+ assert.match(CLIENT_JS,/price_expired/);
+ assert.match(CLIENT_JS,/price_missing/);
+ assert.match(CLIENT_JS,/last_run_at/);
 });
