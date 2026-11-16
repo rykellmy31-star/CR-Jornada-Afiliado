@@ -2,6 +2,15 @@
 // A configuração não altera as filas, não comprova comissão e não usa credenciais de login.
 const error=(message,status=400)=>Object.assign(new Error(message),{status});
 const ML_HOSTS=new Set(['www.mercadolivre.com.br','mercadolivre.com.br']);
+const ML_PRODUCT_HOSTS=new Set([...ML_HOSTS,'produto.mercadolivre.com.br']);
+// Listagens clássicas usam produto.mercadolivre.com.br/MLB-1234-...-_JM,
+// enquanto o catálogo usa /p/MLB... e /up/MLBU.... Aceitar somente
+// caminhos de anúncios, nunca buscas, vitrines ou redirecionadores externos.
+function productPath(pathname){
+  if(typeof pathname!=='string'||pathname.length>420)return false;
+  return /\/(?:p\/MLB\d{6,}|up\/MLBU\d{6,})\/?$/i.test(pathname)||
+    /^\/MLB-\d{6,}(?:-[A-Za-z0-9_-]{1,260})?\/?$/i.test(pathname);
+}
 const CREATE_STORE="CREATE TABLE IF NOT EXISTS crj_affiliate_store_ml (id INTEGER PRIMARY KEY CHECK(id=1), label TEXT NOT NULL, tool_id TEXT NOT NULL, official_url TEXT NOT NULL, connected_at INTEGER NOT NULL)";
 const CREATE_LINKS="CREATE TABLE IF NOT EXISTS crj_affiliate_shortlinks (code TEXT PRIMARY KEY, product_url TEXT NOT NULL, target_url TEXT NOT NULL, label TEXT NOT NULL, created_at INTEGER NOT NULL)";
 const now=()=>Math.floor(Date.now()/1000);
@@ -73,11 +82,13 @@ export async function connectAffiliateStore(env,payload,fetcher=fetch){
 }
 export function parseMercadoLivreProduct(value){
   const u=safeUrl(value);
-  if(!ML_HOSTS.has(u.hostname))throw error('Aceitamos somente URLs de produtos do Mercado Livre Brasil.');
-  if(!/\/(?:p\/MLB\d+|up\/MLBU\d+)\/?$/i.test(u.pathname))
-    throw error('Cole o endereço completo de um produto Mercado Livre, com /p/MLB... ou /up/MLBU....');
-  // Remove tags de outros afiliados e rastreadores. A conversão ainda é experimental.
-  return 'https://www.mercadolivre.com.br'+u.pathname.replace(/\/$/,'');
+  if(!ML_PRODUCT_HOSTS.has(u.hostname))throw error('Aceitamos somente URLs de produtos do Mercado Livre Brasil.');
+  if(!productPath(u.pathname))
+    throw error('O endereço não identifica um anúncio: use /p/MLB..., /up/MLBU... ou /MLB-...-...-_JM.');
+  // Preserve o host e o caminho oficiais: mudar produto.mercadolivre.com.br/MLB-...-_JM
+  // para /p/MLB... poderia apontar para outro tipo de anúncio.
+  // Sempre exclua rastreamento, etiquetas de terceiros, query e hash.
+  return u.origin+u.pathname.replace(/\/$/,'');
 }
 export async function previewAffiliateLink(env,payload){
   await ensureAffiliateStores(env);
@@ -110,8 +121,11 @@ export async function followAffiliateShortlink(env,code){
   const row=await env.DB.prepare('SELECT target_url FROM crj_affiliate_shortlinks WHERE code=?').bind(code).first();
   if(!row)return new Response('Link não encontrado.',{status:404});
   // Não permitir que um valor manipulado no banco converta o encurtador em open redirect.
-  const url=safeUrl(row.target_url);
-  if(!ML_HOSTS.has(url.hostname)||!/(?:\/p\/MLB\d+|\/up\/MLBU\d+)/.test(url.pathname))
-    return new Response('Destino não autorizado.',{status:410});
+  let url;
+  try{
+    url=safeUrl(row.target_url);
+    // Usa EXATAMENTE o mesmo validador usado na criação do encurtamento.
+    parseMercadoLivreProduct(url.toString());
+  }catch{return new Response('Destino não autorizado.',{status:410});}
   return new Response(null,{status:302,headers:{location:url.toString(),'cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff'}});
 }
