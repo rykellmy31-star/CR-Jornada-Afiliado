@@ -317,11 +317,18 @@ async function deferScheduledPhoto(env,offer){
 async function prepareScheduledPhoto(env,offer){
  let image=await cachedProductImage(env,offer.affiliate_url);
  if(image)return image;
- image=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
+ // Se o item JÁ foi adiado por foto, a primeira coisa a fazer no próximo
+ // Cron é buscar a imagem visível na vitrine. Não repetir antes várias
+ // leituras HTTP que já falharam e consomem a janela do agendador.
+ const awaitingPhoto=/^Aguardando foto real do produto\./.test(String(offer.last_error||''));
+ if(awaitingPhoto){
+  try{image=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);}
+  catch(error){console.warn('Foto da vitrine programada:',String(error?.message||error).slice(0,100));}
+ }
+ if(!image)image=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
   {retryOnMiss:true,sourceLookup:resolveOfferSource});
- // Se o HTTP do anúncio falhar, o automático verifica a FOTO REAL do
- // cartão principal da vitrine. Confirma o ID antes de usar a imagem.
- if(!image)image=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
+ // Nova oferta: se o HTTP do anúncio falhar, verificar o cartão principal.
+ if(!image&&!awaitingPhoto)image=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
  if(!image)return null;
  await rememberProductImage(env,offer.affiliate_url,image);
  return image;
