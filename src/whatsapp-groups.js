@@ -1,3 +1,4 @@
+import {withActiveMessageTemplate} from './message-templates.js';
 import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import { normalizeOffer,localTimeParts,formatOfferMessage } from './logic.js';
 import { normalizeCoupon } from './coupons.js';
@@ -269,7 +270,8 @@ export async function listManagedWhatsAppGroupOptions(env,id){
 }
 async function sendWhatsApp(env,g,offer,{photoUrl=null}={}){
  const link=offer.affiliate_url;
- const text=formatOfferMessage(await withGroupCopyPublicLink(env,offer),{platform:'mercadolivre',network:'whatsapp',includeLink:true});
+ const displayOffer=await withGroupCopyPublicLink(env,offer);
+ const text=formatOfferMessage(await withActiveMessageTemplate(env,displayOffer,'mercadolivre'),{platform:'mercadolivre',network:'whatsapp',includeLink:true});
  let photo=photoUrl;
  if(!photo)try{
   photo=await sharedWhatsAppProductPhoto(env,link,findProductImage,{retryOnMiss:true,sourceLookup:resolveOfferSource});
