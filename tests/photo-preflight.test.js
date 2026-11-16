@@ -308,3 +308,48 @@ test('Cron deixa o envio principal terminar antes de preparar fotos das outras f
   close();
  }
 });
+
+
+test('prewarm do Cron prepara foto principal da vitrine ANTES do disparo agendado',async()=>{
+ const {DB,env,close}=setup(),previous=globalThis.fetch;
+ const social='https://www.mercadolivre.com.br/social/vitrine-teste-prewarm';
+ let sent=0,lookups=0;
+ try{
+  env.BROWSER={async quickAction(kind,options){
+   if(kind==='content')return new Response('<html>vitrine sem meta de foto</html>',{
+    headers:{'content-type':'text/html'}});
+   assert.equal(kind,'scrape');
+   lookups++;
+   assert.equal(options.url,social);
+   return Response.json({result:[
+    {selector:'.rl-card-featured-wrapper a.poly-component__title[href]',
+     results:{attributes:[{name:'href',value:SOURCE}]}},
+    {selector:'[class*="card-featured"] img.poly-component__picture',
+     results:{attributes:[{name:'src',value:PREVIEW}]}}
+   ]});
+  }};
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u===SOURCE)return new Response('<html>sem foto nesta leitura</html>',{
+    headers:{'content-type':'text/html'}});
+   if(u===SHORT)return new Response(null,{status:302,headers:{location:social}});
+   if(u===social)return new Response('<html>vitrine renderizada por JS</html>',{
+    headers:{'content-type':'text/html'}});
+   if(u===LARGE&&opts.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'260000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){
+    sent++;
+    assert.equal(JSON.parse(opts.body).photo,LARGE);
+    return Response.json({ok:true,result:{message_id:90901}});
+   }
+   throw Error('URL inesperada: '+u);
+  };
+  const prepared=await prewarmTelegramQueue(env);
+  assert.equal(prepared.status,'photo_ready');
+  assert.ok(lookups>=1,'pré-carregamento deve consultar a foto real do destaque');
+  assert.equal(await cachedProductImage(env,SHORT),LARGE);
+  assert.equal((await runScheduled(env)).status,'published');
+  assert.equal(sent,1);
+ }finally{globalThis.fetch=previous;close();}
+});
