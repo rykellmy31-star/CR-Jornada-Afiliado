@@ -37,34 +37,32 @@ const fakeCategory=async()=>new Response(JSON.stringify([{
  category_id:'MLB189007',domain_name:'Furadeiras elétricas',
  domain_id:'MLB-ELECTRIC_DRILLS',category_name:'De Mão'
 }]),{status:200,headers:{'content-type':'application/json'}});
-test('click creates a durable nonblocking task; duplicate clicks do not reset its progress',async()=>{
+test('clique agenda TODOS os produtos sem categoria; job avança mesmo sem painel',async()=>{
  const {env,db}=setup();
  try{
-  await seed(env,3);
+  await seed(env,22);
   const first=await requestManualGroupCheck(env,'categories');
   assert.equal(first.status,'pending');
-  assert.equal(first.remaining,8);
+  assert.equal(first.remaining,22);
   assert.equal(first.already_queued,false);
   const repeat=await requestManualGroupCheck(env,'categories');
   assert.equal(repeat.already_queued,true);
   let calls=0;
-  const result=await executeManualGroupCheck(env,'categories',{fetcher:async(...args)=>{calls++;return fakeCategory(...args);}});
-  assert.equal(result.status,'pending');
-  assert.equal(result.remaining,6);
-  assert.equal(result.classified,2);
-  assert.equal(calls,2,'per Cron máximo 2 anúncios, e não 8 chamadas dentro da requisição do painel');
-  const again=await executeManualGroupCheck(env,'categories',{fetcher:fakeCategory});
-  assert.equal(again.classified,3);
-  assert.equal(again.remaining,5);
-  const done=await executeManualGroupCheck(env,'categories',{fetcher:fakeCategory});
-  assert.equal(done.status,'completed');
-  assert.equal(done.classified,3);
-  assert.equal((await readManualGroupCheck(env,'categories')).status,'completed');
-  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_links WHERE classification='mercadolivre'").first().n,3);
+  const fetcher=async(...args)=>{calls++;return fakeCategory(...args);};
+  const a=await executeManualGroupCheck(env,'categories',{fetcher});
+  assert.equal(a.status,'pending');
+  assert.equal(a.remaining,10);
+  assert.equal(a.classified,12);
+  assert.equal(calls,12);
+  const b=await executeManualGroupCheck(env,'categories',{fetcher});
+  assert.equal(b.status,'completed');
+  assert.equal(b.classified,22);
+  assert.equal(b.remaining,0);
+  assert.equal(calls,22);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_links WHERE classification='mercadolivre'").first().n,22);
   const restarted=await requestManualGroupCheck(env,'categories');
-  assert.equal(restarted.status,'pending');
-  assert.equal(restarted.remaining,8);
-  assert.equal(restarted.classified,0);
+  assert.equal(restarted.status,'completed');
+  assert.equal(restarted.remaining,0);
  }finally{db.close();}
 });
 test('manual price lookup proceeds in Cron with one item per pulse and reports confirmed price',async()=>{
@@ -102,13 +100,13 @@ test('failures are bounded and reattempted, invalid requests rejected',async()=>
   await assert.rejects(()=>readManualGroupCheck(env,'invalid'),/desconhecido/);
   await requestManualGroupCheck(env,'categories');
   const job=await executeManualGroupCheck(env,'categories',{fetcher:async()=>new Response('bloqueado',{status:403})});
-  assert.equal(job.status,'pending');
+  assert.equal(job.status,'completed');
   assert.equal(job.failed,1);
-  assert.equal(job.remaining,7);
+  assert.equal(job.remaining,0);
   // Persisted status allows a browser to close and reopen without restarting.
   const current=await readManualGroupCheck(env,'categories');
   assert.equal(current.failed,1);
-  assert.equal(current.remaining,7);
+  assert.equal(current.remaining,0);
  }finally{db.close();}
 });
 test('UI starts asynchronously, polls short route, and no longer chains long refreshes to button responses',()=>{
