@@ -64,21 +64,23 @@ export async function readManualGroupCheck(env,kind){
  if(value.status==='running'&&Number(row.lease_until||0)<=stamp()){
   await env.DB.prepare("UPDATE ml_group_manual_check_jobs SET status='pending',lease_until=0 "+
    "WHERE kind=? AND status='running' AND lease_until<=?").bind(kind,stamp()).run();
-  retur  remaining=await countMissingPrices(env);dos os produtos pendentes, mesmo com o painel fechado. O Cron regular continuará
+  return output(await env.DB.prepare('SELECT * FROM ml_group_manual_check_jobs WHERE kind=?').bind(kind).first());
+ }
+ return value;
+}
+export async function requestManualGroupCheck(env,kind){
+ kind=safeKind(kind);await ensureManualGroupChecks(env);
+ const at=stamp();
+ const current=await readManualGroupCheck(env,kind);
+ if(current?.status==='pending'||current?.status==='running')
+  return {ok:true,already_queued:true,...current};
+ // O clique agenda todos os produtos pendentes, mesmo com o painel fechado. O Cron regular continuará
  // procurando os demais produtos automaticamente com o painel fechado.
  let remaining;
  if(kind==='categories')remaining=(await officialCategoryStats(env)).waiting;
  else{
   await ensureMonitor(env);
-  const row=await env.DB.prepare(
-   "SELECT COUNT(DISTINCT l.product_id) AS total FROM ml_monitor_links l "+
-   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
-   "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
-   "WHERE g.authorized=1 AND l.message_id<>'' "+
-   "AND l.status IN ('available','batched') "+
-   "AND (m.last_seen_price_cents IS NULL OR m.last_seen_price_cents<=0)"
-  ).first();
-  remaining=Number(row?.total||0);
+  remaining=await countMissingPrices(env);
  }
  await env.DB.prepare(
   "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,attempts=0,"+
@@ -116,15 +118,13 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   const remaining=kind==='categories'?
    (await officialCategoryStats(env)).waiting:
    await countMissingPrices(env);
-  // A mensagem pode ter sido analisada SEM que o preço fosse recuperado.
-  // Nesse caso, ela continua pendente, e não diminui artificialmente o total.
   const final=remaining===0?'completed':'pending';
   const changed=kind==='categories'?Number(result?.classified||0):
    Number(result?.recovered??result?.found??0);
   const reason=String(result?.error||
    (changed===0&&remaining>0&&kind==='prices'?
     'Ainda sem valor confirmado na mensagem original. Próximas tentativas respeitam o intervalo da Evolution.':
-    changed===0?row.last_error:'' )||'').slice(0,180);
+    changed===0?row.last_error:'')||'').slice(0,180);
   await env.DB.prepare(
    "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,processed=processed+?,"+
    "classified=classified+?,created=created+?,reused=reused+?,failed=failed+?,"+
