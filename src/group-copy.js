@@ -23,19 +23,34 @@ export async function ensureGroupCopyAutomation(env){
 }
 export async function groupCopyState(env){
  await ensureMonitor(env);await ensureGroupCopyAutomation(env);
- const [row,monitor,groups,account,recent,waiting]=await Promise.all([
+ const at=epoch();
+ const [row,monitor,groups,account,recent,waiting,readiness]=await Promise.all([
   env.DB.prepare('SELECT enabled,experimental_acknowledged,last_run_at,last_error,queued_count FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').first(),
   affiliateStoreState(env),
   env.DB.prepare('SELECT product_id,short_url,queued_at FROM ml_group_copy_auto_history ORDER BY queued_at DESC LIMIT 15').all(),
-  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE l.status='available' AND g.enabled=1 AND g.authorized=1").first()
+  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE l.status='available' AND g.enabled=1 AND g.authorized=1").first(),
+  env.DB.prepare("SELECT "+
+   "COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 1 ELSE 0 END),0) AS needs_category,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND (sp.product_id IS NULL OR sp.status<>'ok' OR sp.price_cents<=0 OR sp.checked_at<? OR sp.checked_at>?) "+
+   "THEN 1 ELSE 0 END),0) AS needs_price,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND sp.status='ok' AND sp.price_cents>0 AND sp.checked_at>=? AND sp.checked_at<=? "+
+   "THEN 1 ELSE 0 END),0) AS with_price "+
+   "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
+   "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+   "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1")
+  .bind(at-6*3600,at,at-6*3600,at).first()
  ]);
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
   last_run_at:Number(row?.last_run_at||0),last_error:String(row?.last_error||''),
   queued_count:Number(row?.queued_count||0),monitor_enabled:monitor?.enabled===1,
   authorized_groups:Number(groups?.total||0),store_configured:account.mercadolivre.configured,
   label:account.mercadolivre.label||null,waiting:Number(waiting?.total||0),
+  readiness:{needs_category:Number(readiness?.needs_category||0),
+   needs_price:Number(readiness?.needs_price||0),with_price:Number(readiness?.with_price||0)},
   recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
@@ -52,6 +67,17 @@ export async function saveGroupCopySettings(env,body){
  await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET enabled=?,experimental_acknowledged=?,updated_at=?,last_error=? WHERE id=1')
   .bind(Number(body.enabled),Number(body.enabled&&body.experimental_acknowledged===true),epoch(),'').run();
  return {ok:true,...await groupCopyState(env)};
+}
+// Ação de teste explícita: importa no máximo uma oferta elegível para a fila,
+// sem chamar APIs de envio nem alterar horários de publicação.
+export async function testGroupCopyImport(env){
+ const state=await groupCopyState(env);
+ if(!state.enabled)throw fail('Ative e salve a importação automática experimental antes de testar.');
+ if(!state.monitor_enabled)throw fail('Ative o monitor de grupos para continuar o teste.');
+ if(!state.store_configured||!state.authorized_groups)
+  throw fail('Cadastre sua loja e escolha pelo menos um grupo autorizado.');
+ const result=await runGroupCopyScheduled(env);
+ return {ok:!result.error,result,state:await groupCopyState(env)};
 }
 function shortCode(){
  const bytes=crypto.getRandomValues(new Uint8Array(9));
