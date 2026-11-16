@@ -1055,14 +1055,32 @@ export default {
       // pulsação ~30s depois (Cron aceita até 15min); nada depende do painel.
       ctx.waitUntil((async()=>{
         await telegramPublished;
-        return resolveMonitorShortlinks(env);
+        const result=await resolveMonitorShortlinks(env);
+        // Produto confirmado ganha categoria e preço antes da próxima
+        // tentativa de importação, sem aguardar mais um ciclo completo.
+        if(Number(result?.resolved||0)>0){
+          try{
+            await classifyMonitorMissingCategories(env,{limit:8,preferRecent:true});
+            await refreshMonitorSitePrices(env,{limit:3});
+            await runGroupCopyBatch(env,{limit:3,preferRecent:true});
+          }catch(error){console.error('Preparação após revisão:',String(error?.message||error).slice(0,120));}
+        }
+        return result;
       })().catch(error=>
         console.error('Revisão automática:',String(error?.message||error).slice(0,120))));
       if(typeof scheduler!=='undefined'&&typeof scheduler.wait==='function'){
         const secondPulse=scheduler.wait(30000);
         ctx.waitUntil((async()=>{
           await Promise.all([telegramPublished,secondPulse]);
-          await resolveMonitorShortlinks(env);
+          const result=await resolveMonitorShortlinks(env);
+          if(Number(result?.resolved||0)>0){
+            try{
+              await classifyMonitorMissingCategories(env,{limit:8,preferRecent:true});
+              await refreshMonitorSitePrices(env,{limit:3});
+              await runGroupCopyBatch(env,{limit:3,preferRecent:true});
+            }catch(error){console.error('Preparação da segunda revisão:',String(error?.message||error).slice(0,120));}
+          }
+          return result;
         })().catch(error=>console.error('Segunda revisão automática:',String(error?.message||error).slice(0,120))));
       }
       ctx.waitUntil((async()=>{

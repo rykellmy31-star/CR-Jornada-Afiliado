@@ -60,15 +60,13 @@ test('validação em massa fica no D1 e funciona sem uma aba ou sessão de naveg
    throw Error('Destino inesperado: '+text);
   };
   const first=await runBackgroundReview(env);
-  assert.equal(first.status,'running');
-  assert.equal(first.resolved,1);
-  assert.equal((await backgroundReviewState(env)).resolved,1);
-  // Agora só o Worker: nenhum pedido HTTP do painel, nenhuma aba aberta.
-  const next=Number((await backgroundReviewState(env)).next_run_at);
-  const second=await runBackgroundReview(env,{now:next});
-  assert.equal(second.resolved,1);
-  assert.equal((await backgroundReviewState(env)).status,'completed');
+  assert.equal(first.status,'completed');
+  assert.equal(first.resolved,2,'até três links resolvidos no mesmo ciclo');
   assert.equal((await backgroundReviewState(env)).resolved,2);
+  // Agora só o Worker: nenhum pedido HTTP do painel, nenhuma aba aberta.
+  const second=await runBackgroundReview(env);
+  assert.equal(second.skipped,'not_due');
+  assert.equal((await backgroundReviewState(env)).status,'completed');
   assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_shortlinks WHERE status='resolved'").first().total,2);
   assert.equal(DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0,
    'A validação não pode publicar ofertas');
@@ -146,12 +144,10 @@ test('validação em segundo plano prepara 2 links confirmados para conversão s
    throw Error('URL fora do teste: '+url);
   };
   const step1=await runBackgroundReview(env);
-  assert.equal(step1.resolved,1);
-  assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM ml_link_batches WHERE status='awaiting_links'").first().total,0,
-   'não criar lote antes de terminar a passagem pelos links revisados');
-  const step2=await runBackgroundReview(env,{now:Number((await backgroundReviewState(env)).next_run_at)});
-  assert.equal(step2.resolved,1);
-  assert.equal(step2.status,'completed');
+  assert.equal(step1.resolved,2,'os dois links seguem juntos no mesmo lote');
+  assert.equal(step1.status,'completed');
+  assert.equal(DB.prepare("SELECT COUNT(*) AS total FROM ml_link_batches WHERE status='awaiting_links'").first().total,1,
+   'criar um único lote após concluir a passagem pelos links revisados');
   const state=await backgroundReviewState(env);
   assert.ok(state.conversion.batch_id>0,'precisa aparecer na aba Conversão de Link em Lote');
   assert.equal(state.conversion.batch_items,2);

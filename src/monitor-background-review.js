@@ -1,7 +1,7 @@
 import {ensureMonitor,monitorState,bulkValidateMonitorShortlinks,prepareMonitorBatch} from './whatsapp-link-monitor.js';
 
 // Controle persistente no D1. A interface apenas solicita o trabalho;
-// o Cron da Cloudflare avança um link por execução, sem navegador aberto.
+// o Cron da Cloudflare avança em pequenos lotes, sem navegador aberto.
 const TABLE="CREATE TABLE IF NOT EXISTS ml_monitor_background_review ("+
  "id INTEGER PRIMARY KEY CHECK(id=1),"+
  "status TEXT NOT NULL DEFAULT 'idle',"+
@@ -152,7 +152,7 @@ export async function runBackgroundReview(env,{now=null}={}){
   const earlyConversion=readyForBatch.eligible_waiting>=50
    ?await prepareConfirmedForConversion(env):null;
   const result=await bulkValidateMonitorShortlinks(env,{
-   after_id:Number(row.cursor||0),limit:1,now:at
+   after_id:Number(row.cursor||0),limit:3,now:at
   });
   const advance=Number(result.next_cursor||row.cursor||0);
   if(result.has_more&&advance<=Number(row.cursor||0)){
