@@ -1,7 +1,7 @@
 // Importação automática dos produtos de grupos WhatsApp AUTORIZADOS.
 // Os parâmetros matt_word/matt_tool não representam geração oficial de ref ou garantia de comissão.
 // Nunca reutiliza o link nem a etiqueta de quem compartilhou o anúncio.
-import {ensureMonitor} from './whatsapp-link-monitor.js';
+import {ensureMonitor,monitorPriceDeepScanStats} from './whatsapp-link-monitor.js';
 import {affiliateStoreState,previewAffiliateLink,parseMercadoLivreProduct} from './affiliate-stores.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
 import {ensureLinkBatches,productId} from './link-batches.js';
@@ -125,6 +125,16 @@ export async function groupCopyEligibility(env,{now=null}={}){
 export async function groupCopyState(env){
  await ensureMonitor(env);await ensureGroupCopyAutomation(env);await ensureLinkBatches(env);
  const at=epoch();
+ // Contar preços conhecidos do grupo, não apenas os retornados pelo site.
+ // A interface antiga subtraía apenas os primeiros 120 itens avaliados e
+ // mostrava dezenas de produtos como "sem preço" de forma enganosa.
+ const siteRecent="(COALESCE(sp.status,'')='ok' AND COALESCE(sp.price_cents,0)>0 "+
+  "AND COALESCE(sp.checked_at,0) BETWEEN unixepoch()-21600 AND unixepoch())";
+ const groupRecent="(COALESCE(m.last_seen_price_cents,0)>=1000 "+
+  "AND COALESCE(m.last_seen_at,0) BETWEEN unixepoch()-21600 AND unixepoch() "+
+  "AND l.message_id<>'' AND json_valid(COALESCE(m.last_seen_deal_json,'')) "+
+  "AND CAST(json_extract(CASE WHEN json_valid(COALESCE(m.last_seen_deal_json,'')) "+
+  "THEN m.last_seen_deal_json ELSE '{}' END,'$.price_cents') AS INTEGER)=m.last_seen_price_cents)";
  const [row,monitor,groups,account,recent,waiting,readiness,official_categories,allCaptured,manualPending]=await Promise.all([
   env.DB.prepare('SELECT enabled,experimental_acknowledged,last_run_at,last_error,queued_count FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first(),
@@ -139,20 +149,23 @@ export async function groupCopyState(env){
   env.DB.prepare("SELECT "+
    "COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 1 ELSE 0 END),0) AS needs_category,"+
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
-   "AND (sp.product_id IS NULL OR sp.status<>'ok' OR sp.price_cents<=0 OR sp.checked_at<? OR sp.checked_at>?) "+
-   "THEN 1 ELSE 0 END),0) AS needs_price,"+
-   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' AND sp.product_id IS NULL THEN 1 ELSE 0 END),0) AS price_never_checked,"+
-   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' AND sp.status='unavailable' THEN 1 ELSE 0 END),0) AS price_lookup_failed,"+
+   "AND NOT ("+siteRecent+" OR "+groupRecent+") THEN 1 ELSE 0 END),0) AS needs_price,"+
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
-   "AND sp.status='ok' AND sp.price_cents>0 AND sp.checked_at>=? AND sp.checked_at<=? "+
-   "THEN 1 ELSE 0 END),0) AS with_price "+
+   "AND sp.product_id IS NULL AND NOT "+groupRecent+" THEN 1 ELSE 0 END),0) AS price_never_checked,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND sp.status='unavailable' AND NOT "+groupRecent+" THEN 1 ELSE 0 END),0) AS price_lookup_failed,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND (("+siteRecent+") OR ("+groupRecent+")) THEN 1 ELSE 0 END),0) AS with_price,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND NOT "+siteRecent+" AND "+groupRecent+" THEN 1 ELSE 0 END),0) AS with_group_price "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+   "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
    "WHERE g.enabled=1 AND g.authorized=1 AND (l.status='available' OR "+
    "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))")
-  .bind(at-6*3600,at,at-6*3600,at).first(),
+  .first(),
   officialCategoryStats(env),
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE g.enabled=1 AND g.authorized=1").first(),
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
@@ -162,7 +175,8 @@ export async function groupCopyState(env){
     "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL").first()
  ]);
  const eligibility=await groupCopyEligibility(env,{now:at});
- const groupPrices=Number(eligibility.with_group_price||0);
+ const price_search=await monitorPriceDeepScanStats(env);
+
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
   last_run_at:Number(row?.last_run_at||0),last_error:String(row?.last_error||''),
   queued_count:Number(row?.queued_count||0),monitor_enabled:monitor?.enabled===1,
@@ -171,13 +185,13 @@ export async function groupCopyState(env){
   total_identified:Number(allCaptured?.total||0),
   awaiting_manual_batch:Number(manualPending?.total||0),
   readiness:{needs_category:Number(readiness?.needs_category||0),
-   needs_price:Math.max(0,Number(readiness?.needs_price||0)-groupPrices),
+   needs_price:Number(readiness?.needs_price||0),
    price_never_checked:Number(readiness?.price_never_checked||0),
    price_lookup_failed:Number(readiness?.price_lookup_failed||0),
-   with_price:Number(readiness?.with_price||0)+groupPrices,
-   with_group_price:groupPrices},
+   with_price:Number(readiness?.with_price||0),
+   with_group_price:Number(readiness?.with_group_price||0)},
   official_categories:{...official_categories,waiting:Number(readiness?.needs_category||0)},
-  eligibility,
+  eligibility,price_search,
   recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
