@@ -580,7 +580,7 @@ async function router(request, env, ctx=null) {
       env.DB.prepare(OFFER_WITH_COUPON + ' ORDER BY o.created_at DESC, o.id DESC LIMIT 100').all(),
       env.DB.prepare('SELECT status, COUNT(*) AS total FROM offers GROUP BY status').all(),
       env.DB.prepare('SELECT event,detail,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 20').all(),
-      env.DB.prepare('SELECT last_checked_at,last_result,last_error FROM affiliate_telegram_cron_health WHERE id=1').first().catch(()=>null)
+      Promise.resolve().then(()=>env.DB.prepare('SELECT last_checked_at,last_result,last_error FROM affiliate_telegram_cron_health WHERE id=1').first()).catch(()=>null)
     ]);
     const forecast=await readTelegramForecast(env,{settings});
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results,
