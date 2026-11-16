@@ -104,9 +104,11 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    "SELECT l.id,l.product_id,l.title,l.category,l.classification "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
+   "LEFT JOIN ml_monitor_official_category_items oc ON oc.product_id=l.product_id "+
    "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 "+
-   "AND (l.category='Geral' OR l.classification='needs_review') "+
-   "AND COALESCE(r.next_retry_at,0)<=? ORDER BY l.id ASC LIMIT ?"
+   "AND l.classification<>'selected' AND oc.product_id IS NULL "+
+   "AND COALESCE(r.next_retry_at,0)<=? "+
+   "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id ASC LIMIT ?"
   ).bind(stamp,cap).all()).results;
   for(const row of rows){
    const prediction=await predictOfficialCategory(row.title,{fetcher});
@@ -144,7 +146,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    if(cat.enabled===1){
     const updated=await env.DB.prepare(
      "UPDATE ml_monitor_links SET category=?,classification='mercadolivre' "+
-     "WHERE id=? AND status='available' AND (category='Geral' OR classification='needs_review') AND classification<>'selected'"
+     "WHERE id=? AND status='available' AND classification<>'selected'"
     ).bind(cat.name,row.id).run();
     classified+=Number(updated.meta?.changes||0);
    }else errors.push('Categoria existente desativada: '+cat.name);
