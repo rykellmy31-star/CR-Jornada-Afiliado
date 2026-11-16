@@ -21,9 +21,9 @@ export async function processCapturedGroupOffers(env,{captured=0,pending=0}={}){
  // Categorias desconhecidas usam a API pública oficial; o Cron faz o restante.
  const [prices,categories]=await Promise.allSettled([
   recoverMissingMonitorPrices(env,{allowEvolution:false}),
-  classifyMonitorMissingCategories(env,{limit:2})
+  classifyMonitorMissingCategories(env,{limit:2,preferRecent:true})
  ]);
- const imported=await runGroupCopyBatch(env,{limit:2});
+ const imported=await runGroupCopyBatch(env,{limit:2,preferRecent:true});
  return {links,prices:prices.status==='fulfilled'?prices.value:{skipped:'retry_in_cron'},
   categories:categories.status==='fulfilled'?categories.value:{skipped:'retry_in_cron'},
   imported};
