@@ -260,8 +260,8 @@ test('agendador não possui barreira de foto extra antes do publicador manual',(
  const start=source.indexOf('async function runScheduled(env){');
  const end=source.indexOf('\nexport ',start);
  const cron=source.slice(start,end);
- assert.ok(cron.includes('publishWithManualTools(env,offer,settings'),
-  'Cron chama diretamente o MESMO publicador manual');
+ assert.ok(cron.includes('publishUsingManualButton(env,offer.id'),
+  'Cron chama a mesma operação interna usada pela rota do botão manual');
  assert.ok(!cron.includes('prepareScheduledPhoto(env,offer)'),'Cron não deve exigir segundo pré-validador');
  assert.ok(!cron.includes('deferScheduledPhoto(env,offer)'),'Cron nunca adia a foto antes de tentar o publicador');
 });
