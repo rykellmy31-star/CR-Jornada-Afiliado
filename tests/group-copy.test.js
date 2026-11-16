@@ -116,6 +116,29 @@ test('sem grupo autorizado ativo ou sem preço recente não há publicação',as
 });
 
 
+test('link encurtado confirmado antes da pausa continua apto à fila, mas sem reativar captura',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  await saveGroupCopySettings(env,{enabled:true});
+  const item=env.DB.prepare('SELECT group_id,message_id,product_id FROM ml_monitor_links').first();
+  const at=Math.floor(Date.now()/1000);
+  env.DB.prepare(
+   "INSERT INTO ml_monitor_shortlinks(group_id,message_id,short_url,message_hint,status,created_at) "+
+   "VALUES(?,?,?,'Furadeira por R$ 45,90','resolved',?)"
+  ).bind(item.group_id,item.message_id,'https://meli.la/CONFIRMADOGR',at).run();
+  env.DB.prepare('UPDATE ml_monitor_groups SET enabled=0').run();
+  env.DB.prepare(
+   "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,4590,'ok',?,0,'oficial')"
+  ).bind(item.product_id,at).run();
+  const result=await runGroupCopyScheduled(env);
+  assert.equal(result.queued,1,JSON.stringify(result));
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0,
+   'a classificação de oferta antiga não reabre a captura do grupo');
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE status='ready'").first().n,1);
+ }finally{db.close();}
+});
+
 test('mensagem do grupo extrai De/Por com R$ riscado sem confundir parcelas',()=>{
  const terms=extractPromotionTerms('OFERTA! De: R$ ~363,18~ 🔥 Por: R$ 214,27 \n 5x no cartão');
  assert.equal(terms.price_cents,21427);
