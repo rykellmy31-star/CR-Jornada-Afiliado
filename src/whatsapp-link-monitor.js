@@ -692,6 +692,12 @@ export async function prepareMonitorBatch(env,body){
  if(rows.length!==ids.length)throw fail('Um produto já foi utilizado em lote. Atualize a lista.',409);
  if(rows.some(x=>x.category==='Geral'))throw fail('Defina a categoria dos produtos não reconhecidos antes de montar o lote.');
  const text=rows.map(x=>x.title.replace(/\|/g,' ')+' | '+x.source_url+' | '+x.category).join('\n');
+ // Migra registros antigos sem metadados; um item disponível sem esta
+ // linha causava rollback de TODO lote na criação automática.
+ await env.DB.prepare(
+  'INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) '+
+  'SELECT product_id,0 FROM ml_monitor_links WHERE id IN ('+ids.map(()=>'?').join(',')+')'
+ ).bind(...ids).run();
  const batch=await createLinkBatch(env,{text});
  const ops=[];
  for(const x of rows){
