@@ -1,8 +1,8 @@
 // Extração conservadora de condições informadas por terceiros nos grupos de ofertas.
 const AMOUNT='\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?';
 const rPrice=new RegExp('R\\$\\s*('+AMOUNT+')(?![\\d,.])','gi');
-const rDePor=new RegExp('\\bde\\s*[:=-]?\\s*R\\$\\s*('+AMOUNT+')[^A-Za-z0-9]{0,32}por\\s*[:=-]?\\s*R\\$\\s*('+AMOUNT+')','i');
-const rPor=new RegExp('\\b(?:por|agora|apenas|s[oó]\\s+hoje)\\s*(?:[:=-]\\s*)?R\\$\\s*('+AMOUNT+')','i');
+const rDePor=new RegExp('\\bde\\s*[:=-]?\\s*[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')\\s*[~*_]*[^\\p{L}\\d]{0,28}\\bpor\\s*[:=-]?\\s*[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')','iu');
+const rPor=new RegExp('\\b(?:por|agora|apenas|s[oó]\\s+hoje)\\s*(?:[:=-]\\s*)?[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')','i');
 // O preço condicionado a cupom prevalece sobre o preço normal anunciado.
 const rWithCoupon=new RegExp('\\bcom\\s+(?:o\\s+)?cupom\\b[^\\dA-Za-z]{0,24}R\\$\\s*('+AMOUNT+')','i');
 const rCouponAfter=new RegExp('R\\$\\s*('+AMOUNT+')\\s*(?:com\\s+(?:o\\s+)?cupom|usando\\s+(?:o\\s+)?cupom)\\b','i');
@@ -76,7 +76,7 @@ export function safePromotionTerms(value){
     typeof t.installments_no_interest!=='boolean'||
     (t.coupon_required!==undefined&&typeof t.coupon_required!=='boolean')||
     (t.coupon_code!==undefined&&t.coupon_code!==null&&!/^[A-Za-z0-9][A-Za-z0-9_-]{3,31}$/.test(t.coupon_code))||
-    (t.price_source!==undefined&&t.price_source!=='mercadolivre'))return null;
+    (t.price_source!==undefined&&!['mercadolivre','grupo'].includes(t.price_source)))return null;
  return t;
 }
 export function promotionDescription(value){

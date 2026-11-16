@@ -117,3 +117,21 @@ test('tela MODELOS DE MENSAGENS integrada à navegação, prévia e API protegid
   assert.equal(unauthorized.status,401);
  }finally{close();}
 });
+
+
+test('preço anunciado no grupo com cupom mostra condição no modelo sem alegar verificação oficial',()=>{
+ const t=Date.now(),offer=example(Math.floor(t/1000));
+ offer.promo_terms_json=JSON.stringify({
+  price_source:'grupo',price_cents:2990,old_price_cents:5990,
+  coupon_required:true,coupon_code:'OFERTA15',payment_mode:'unspecified',
+  installments:null,installment_cents:null,installments_no_interest:false,card_price_cents:null
+ });
+ const whatsapp=renderMessageTemplate(offer,MESSAGE_DEFAULT_TEXT,{network:'whatsapp',now:t});
+ assert.match(whatsapp,/R\$ 29,90/);
+ assert.match(whatsapp,/OFERTA15/);
+ assert.match(whatsapp,/grupo/i);
+ assert.ok(!whatsapp.includes('{CUPOM}'));
+ assert.ok(!whatsapp.includes('Parcelamento:'));
+ const telegram=renderMessageTemplate(offer,MESSAGE_DEFAULT_TEXT,{network:'telegram',now:t});
+ assert.match(telegram,/OFERTA15/);
+});
