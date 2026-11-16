@@ -240,16 +240,18 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
    "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
    "ORDER BY l.id LIMIT 120"
   ).all()).results;
+  let sawValidPrice=false;
   for(const item of rows){
    if(!categoryMatches(item.category,permitted))continue;
    if(item.last_queued_at&&at-item.last_queued_at<7*24*3600)continue;
+   const priceInfo=selectGroupCopyPrice(item,at);
+   if(!priceInfo)continue;
+   sawValidPrice=true;
+   const price=priceInfo.price;
    let preview;
    try{preview=await previewAffiliateLink(env,{product_url:checkedProductUrl(item)});}
    catch{continue;} // URLs não canônicas aguardam normalização/revisão, não inventamos IDs.
    if(item.title.length<5||item.title.length>180)continue;
-   const priceInfo=selectGroupCopyPrice(item,at);
-   if(!priceInfo)continue;
-   const price=priceInfo.price;
    // Se o mesmo destino já entrou manualmente na fila, não republicar.
    const duplicate=await env.DB.prepare("SELECT id FROM offers WHERE affiliate_url=? LIMIT 1").bind(preview.target_url).first();
    if(duplicate)continue;
@@ -315,7 +317,7 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
    }
   }
   await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET last_run_at=?,last_error=? WHERE id=1').bind(at,'').run();
-  return {skipped:rows.length?'no_eligible_product':'awaiting_verified_price'};
+  return {skipped:sawValidPrice?'no_eligible_product':'awaiting_verified_price'};
  }catch(error){
   const message=String(error?.message||error).slice(0,160);
   await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET last_run_at=?,last_error=? WHERE id=1').bind(at,message).run();
