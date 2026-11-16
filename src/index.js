@@ -364,18 +364,26 @@ async function runScheduled(env){
    const result=await publishWithManualTools(env,offer,settings,
      {origin:'automático',requirePhoto:true});
    if(result?.status==='awaiting_photo'){
-    // A primeira tentativa não enviou mensagem (PHOTO_NOT_READY).
-    // Buscar somente a foto real do produto principal, armazenar no cache
-    // e tentar UMA vez pelo mesmo publicador, sem duplicar envios.
+    // A primeira busca falhou ANTES de qualquer envio. O Cron agora tenta
+    // obter a foto real da vitrine e faz um segundo disparo IMEDIATO pelo
+    // MESMO publicador do botão manual, mesmo sem vitrine ou cache.
+    // Erros ambíguos de Telegram nunca entram neste bloco (sem duplicação).
     try{
-     const featured=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
-     if(featured){
-      await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).run();
-      const retry=await publishWithManualTools(env,offer,settings,
-       {origin:'automático',requirePhoto:true});
-      if(retry?.status!=='awaiting_photo')return retry;
-     }
+     await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
     }catch(error){console.warn('Foto adicional da vitrine:',String(error?.message||error).slice(0,110));}
+    const retried=await publishWithManualTools(env,offer,settings,
+     {origin:'automático',requirePhoto:true});
+    if(retried?.status!=='awaiting_photo')return retried;
+    // A oferta sem foto fica em fila para nova tentativa no próprio intervalo
+    // configurado, em vez do backoff progressivo de 5/15 minutos. O intervalo
+    // entre publicações efetivas continua protegido por shouldSend().
+    const nextAt=Math.floor(Date.now()/1000)+
+     Math.max(60,Math.min(1440,Number(settings.interval_minutes)||2)*60);
+    await env.DB.prepare(
+     'UPDATE telegram_photo_retries SET next_retry_at=? WHERE offer_id=?'
+    ).bind(nextAt,offer.id).run();
+    await log(env,'photo_retry_scheduled',
+     'Foto não recuperada após duas buscas imediatas; próxima tentativa no intervalo configurado.',offer.id);
     continue;
    }
    return result;
