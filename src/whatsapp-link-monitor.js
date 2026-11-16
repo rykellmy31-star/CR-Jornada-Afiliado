@@ -193,7 +193,7 @@ function productTitle(url,hint,id){
 export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limit=null}={}){
  await ensureMonitor(env);
  const now=epoch();
- const cap=Math.min(8,Math.max(1,Number.isInteger(limit)?limit:(allowEvolution?3:10)));
+ const cap=Math.min(12,Math.max(1,Number.isInteger(limit)?limit:(allowEvolution?8:10)));
  // Não abandonar produtos antigos: o limite anterior de 2 dias e o teto
  // de 3 tentativas deixavam históricos permanentemente sem pesquisa.
  // Aguardar mais entre falhas, sem requisitar mensagens continuamente.
@@ -212,16 +212,15 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
    WHERE (l.status='available' OR
     (l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links'
      AND i.affiliate_url IS NULL AND i.offer_id IS NULL))
-    AND l.message_id<>'' AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved'))
+    AND l.message_id<>'' AND g.authorized=1
     AND (m.last_seen_price_cents IS NULL OR m.last_seen_price_cents<=0)
     AND (r.product_id IS NULL OR r.last_attempt_at <= ? -
       CASE WHEN r.attempts<=1 THEN 120 WHEN r.attempts<=3 THEN 900
        WHEN r.attempts<=7 THEN 3600 ELSE 21600 END)
    ORDER BY COALESCE(r.last_attempt_at,0) ASC,l.created_at DESC LIMIT ?`;
  const records=(await env.DB.prepare(query).bind(now,cap).all()).results||[];
- let recovered=0,attempted=0,inspected=0;
- for(const row of records){
-  inspected++;
+ const perItem=await Promise.all(records.map(async row=>{
+  let recovered=0,attempted=0;
   let terms=safePromotionTerms(row.captured_deal_json)||extractPromotionTerms(row.saved_hint||'');
   if(!(Number.isSafeInteger(terms?.price_cents)&&terms.price_cents>0)&&allowEvolution){
    attempted++;
@@ -263,8 +262,10 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
     "last_attempt_at=excluded.last_attempt_at,attempts=attempts+1"
    ).bind(row.product_id,now).run();
   }
- }
- return {recovered,attempted,inspected};
+  return {recovered,attempted};
+ }));
+ return {recovered:perItem.reduce((sum,item)=>sum+item.recovered,0),
+  attempted:perItem.reduce((sum,item)=>sum+item.attempted,0),inspected:records.length};
 }
 // Consulta o preço público do anúncio validado sem modificar a condição do grupo.
 // Executado após a confirmação dos links, via agendador, também para URLs diretas.
