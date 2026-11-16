@@ -683,7 +683,7 @@ export async function bulkValidateMonitorShortlinks(env,{after_id=0,limit=3,now=
     const reason=String(result.reason||'Produto não confirmado').slice(0,220);
     await env.DB.prepare(
      'UPDATE ml_monitor_retry_schedule SET last_attempt_at=?,next_retry_at=?,auto_attempts=auto_attempts+1,lease_until=0 WHERE shortlink_id=?'
-    ).bind(t,t+monitorRetryDelaySeconds(Number(item.auto_attempts||0)+1),item.id).run();
+    ).bind(t,t+(/(?:HTTP\s*403|HTTP\s*429|limitou|negou|solicitou login)/i.test(reason)?300:monitorRetryDelaySeconds(Number(item.auto_attempts||0)+1)),item.id).run();
     outcome.results.push({id:item.id,status:'not_confirmed',reason});
    }
   }catch(error){
