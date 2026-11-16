@@ -123,3 +123,89 @@ test('sete falhas automáticas de foto NÃO colocam oferta em Revisar; após fot
    'não deve postar oferta publicada novamente no próximo Cron');
  }finally{globalThis.fetch=original;close();}
 });
+
+
+test('Cron lê foto REAL do cartão destacado da vitrine quando HTML do anúncio não fornece og:image',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ const SOCIAL='https://www.mercadolivre.com.br/social/perfil-oferta';
+ let delivered=0,scraped=0;
+ try{
+  env.BROWSER={async quickAction(kind,options){
+   if(kind==='content')return new Response('<html>vitrine hidratada sem meta tags</html>',{
+    headers:{'content-type':'text/html'}});
+   assert.equal(kind,'scrape');
+   scraped++;
+   assert.equal(options.url,SOCIAL);
+   return Response.json({result:[
+    {selector:'.rl-card-featured-wrapper a.poly-component__title[href]',
+     results:{text:'Produto destacado verdadeiro',
+      attributes:[{name:'href',value:SOURCE}]}},
+    {selector:'.rl-card-featured-wrapper img.poly-component__picture',
+     results:{attributes:[{name:'src',value:PREVIEW}]}},
+    {selector:'.rl-card-recommendations a.poly-component__title[href]',
+     results:{attributes:[{name:'href',
+      value:'https://www.mercadolivre.com.br/produto-recomendado/p/MLB99999999'}]}}
+   ]});
+  }};
+  globalThis.fetch=async(url,options={})=>{
+   const u=String(url);
+   if(u===SOURCE)return new Response('<html>anúncio sem metadados de foto nesta leitura</html>',{
+    headers:{'content-type':'text/html'}});
+   if(u===SHORT)return new Response(null,{status:302,headers:{location:SOCIAL}});
+   if(u===SOCIAL)return new Response('<html>vitrine sem produto estático</html>',{
+    headers:{'content-type':'text/html'}});
+   if(u===LARGE&&options.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'250000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){
+    assert.equal(JSON.parse(options.body).photo,LARGE);
+    delivered++;
+    return Response.json({ok:true,result:{message_id:45699}});
+   }
+   throw Error('URL inesperada: '+u);
+  };
+  const published=await runScheduled(env);
+  assert.equal(published.status,'published','automático usa foto real, sem clique manual');
+  assert.equal(published.format,'photo');
+  assert.equal(delivered,1);
+  assert.ok(scraped>0,'recuperou foto do destaque que está visível na vitrine');
+  assert.equal(await cachedProductImage(env,SHORT),LARGE);
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
+ }finally{globalThis.fetch=original;close();}
+});
+
+test('Cron NÃO copia a imagem de uma recomendação com MLB diferente do produto original',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ const SOCIAL='https://www.mercadolivre.com.br/social/perfil-oferta';
+ let delivered=0;
+ try{
+  env.BROWSER={async quickAction(kind){
+   if(kind==='content')return new Response('<html>sem imagem</html>',{
+    headers:{'content-type':'text/html'}});
+   return Response.json({result:[
+    {selector:'.rl-card-featured-wrapper a.poly-component__title[href]',
+     results:{attributes:[{name:'href',
+      value:'https://www.mercadolivre.com.br/outro/p/MLB99999999'}]}},
+    {selector:'.rl-card-featured-wrapper img.poly-component__picture',
+     results:{attributes:[{name:'src',value:PREVIEW}]}}
+   ]});
+  }};
+  globalThis.fetch=async(url,options={})=>{
+   const u=String(url);
+   if(u===SOURCE)return new Response('<html>foto indisponível</html>',{headers:{'content-type':'text/html'}});
+   if(u===SHORT)return new Response(null,{status:302,headers:{location:SOCIAL}});
+   if(u===SOCIAL)return new Response('<html>sem foto estática</html>',{
+    headers:{'content-type':'text/html'}});
+   if(u===LARGE&&options.method==='HEAD')
+    return new Response(null,{status:200,headers:{'content-type':'image/jpeg','content-length':'250000'}});
+   if(u.includes('/getChat?'))return Response.json({ok:true,result:{type:'channel'}});
+   if(u.endsWith('/sendPhoto')){delivered++;return Response.json({ok:true,result:{message_id:800}});}
+   throw Error('URL inesperada: '+u);
+  };
+  const state=await runScheduled(env);
+  assert.equal(state.skipped,'awaiting_photo');
+  assert.equal(delivered,0);
+  assert.equal(await cachedProductImage(env,SHORT),null);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
+ }finally{globalThis.fetch=original;close();}
+});
