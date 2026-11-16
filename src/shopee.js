@@ -1,3 +1,4 @@
+import {withActiveMessageTemplate} from './message-templates.js';
 import {parseOptionalBRL,localTimeParts,formatOfferMessage} from './logic.js';
 import {categoryMatches} from './multichannel.js';
 import {CREATE_COUPON_TABLE,normalizeCoupon} from './coupons.js';
@@ -172,7 +173,7 @@ async function attempt(env,config,offer){
     .bind(offer.id,config.id).run();
   if(claim.meta?.changes!==1)return {skipped:'claimed'};
   try{
-    const text=shopeeText(offer,config.network);
+    const text=shopeeText(await withActiveMessageTemplate(env,offer,'shopee'),config.network);
     const sent=await sendShopeeOwnText(env,config.network,config.target_id,text,{telegramHtml:config.network==='telegram'});
     await env.DB.prepare("UPDATE shopee_offers SET status='published',published_at=?,published_day=?,message_id=? WHERE id=? AND status='sending'")
       .bind(nowSec(),localTimeParts(new Date()).day,sent.message_id,offer.id).run();

@@ -2,6 +2,7 @@ import {CATEGORY_PAGE_HTML,CATEGORY_CSS,CATEGORY_CLIENT_JS} from './ui-categorie
 import {LINK_BATCH_HTML,LINK_BATCH_CSS,LINK_BATCH_CLIENT_JS} from './ui-link-batches.js';
 import {OVERVIEW_PAGE_HTML,OVERVIEW_CSS,OVERVIEW_CLIENT_JS} from './ui-overview.js';
 import {STORES_PAGE_HTML,STORES_CSS,STORES_CLIENT_JS} from './ui-stores.js';
+import {MESSAGE_TEMPLATES_HTML,MESSAGE_TEMPLATES_CSS,MESSAGE_TEMPLATES_CLIENT_JS} from './ui-message-templates.js';
 import {COPY_GROUPS_HTML,COPY_GROUPS_CSS,COPY_GROUPS_CLIENT_JS} from './ui-copy-groups.js';
 export function renderPage() {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"><meta name="theme-color" content="#0b1b35"><title>CR Jornada • Afiliados</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head><body>
@@ -19,6 +20,7 @@ export function renderPage() {
         <div class="platform-side-divider"></div>
         <div class="platform-nav-heading">GERENCIAMENTO</div>
         <button class="platform-nav-item" type="button" data-panel="stores"><span>🏬</span> LOJAS</button>
+        <button class="platform-nav-item" type="button" data-panel="templates"><span>✏️</span> MODELOS DE MENSAGENS</button>
         <button class="platform-nav-item" type="button" data-panel="copygroups"><span>📥</span> COPIAR DE GRUPOS</button>
         <button class="platform-nav-item" type="button" data-panel="linkbatches"><span>🔗</span> Conversão de Link em Lote</button>
         <button class="platform-nav-item" type="button" data-panel="categories"><span>📁</span> Categorias</button>
@@ -30,6 +32,7 @@ export function renderPage() {
       ${OVERVIEW_PAGE_HTML}
       ${CATEGORY_PAGE_HTML}
       ${STORES_PAGE_HTML}
+      ${MESSAGE_TEMPLATES_HTML}
       ${COPY_GROUPS_HTML}
       <section id="affiliate-page" class="card history hidden">
         <div class="section-header"><div><h2>🔐 Conexão de Afiliado • Mercado Livre</h2>
@@ -619,6 +622,7 @@ export function renderPage() {
 }
 
 export const CSS = `
+${MESSAGE_TEMPLATES_CSS}
 ${STORES_CSS}
 ${COPY_GROUPS_CSS}
 :root{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17233b;background:#f5f7fb;font-synthesis:none}
@@ -758,7 +762,7 @@ function restoreNavigationState(){
     const state=JSON.parse(sessionStorage.getItem(NAV_KEY)||'null');
     if(!state||typeof state!=='object')return;
     if(state.platform==='mercadolivre'||state.platform==='shopee')selectedPlatform=state.platform;
-    if(['overview','platform','categories','activity','affiliate','linkbatches','stores','copygroups'].includes(state.page))selectedPage=state.page;
+    if(['overview','platform','categories','activity','affiliate','linkbatches','stores','copygroups','templates'].includes(state.page))selectedPage=state.page;
     for(const platform of ['mercadolivre','shopee']){
       const network=state.lastNetwork?.[platform];
       if(network==='telegram'||network==='whatsapp')lastNetwork[platform]=network;
@@ -973,6 +977,7 @@ function applyPlatformView(){
     if(item.id==='overview-page'){item.classList.toggle('hidden',selectedPage!=='overview');continue;}
     if(item.id==='categories-page'){item.classList.toggle('hidden',selectedPage!=='categories');continue;}
     if(item.id==='stores-page'){item.classList.toggle('hidden',selectedPage!=='stores');continue;}
+    if(item.id==='message-templates-page'){item.classList.toggle('hidden',selectedPage!=='templates');continue;}
     if(item.id==='copy-groups-page'){item.classList.toggle('hidden',selectedPage!=='copygroups');continue;}
     if(item.id==='activity-page'){item.classList.toggle('hidden',selectedPage!=='activity');continue;}
     if(item.id==='ml-link-batches'){item.classList.toggle('hidden',selectedPage!=='linkbatches');continue;}
@@ -1813,6 +1818,7 @@ for(const button of document.querySelectorAll('[data-panel]')){
     if(selectedPage==='overview')await refreshOverview();
     if(selectedPage==='categories')await refreshCategories().catch(error=>notice(error.message,true,'category-feedback'));
     if(selectedPage==='stores')await refreshStores().catch(error=>notice(error.message,true,'stores-ml-feedback'));
+    if(selectedPage==='templates')await refreshMessageTemplates().catch(error=>notice(error.message,true,'mt-feedback'));
     if(selectedPage==='copygroups')await Promise.all([refreshCopyGroups(),refreshWhatsAppMonitor()]).catch(error=>notice(error.message,true,'copy-groups-feedback'))
     if(selectedPage==='activity')await refreshActivity().catch(error=>notice(error.message,true));
     if(selectedPage==='linkbatches')await refreshMLLinkBatches().catch(error=>notice(error.message,true,'ml-batch-feedback'));
@@ -2176,6 +2182,7 @@ ${LINK_BATCH_CLIENT_JS}
 ${CATEGORY_CLIENT_JS}
 ${OVERVIEW_CLIENT_JS}
 ${STORES_CLIENT_JS}
+${MESSAGE_TEMPLATES_CLIENT_JS}
 ${COPY_GROUPS_CLIENT_JS}
 // Abre a tela ao confirmar a sessão; dados e integrações carregam depois, sem bloquear.
 async function bootstrap(){
@@ -2194,6 +2201,7 @@ async function bootstrap(){
     if(selectedPage==='overview')tasks.push(refreshOverview());
     else if(selectedPage==='categories')tasks.push(refreshCategories());
     else if(selectedPage==='stores')tasks.push(refreshStores());
+    else if(selectedPage==='templates')tasks.push(refreshMessageTemplates());
     else if(selectedPage==='copygroups')tasks.push(refreshCopyGroups(),refreshWhatsAppMonitor());
     else if(selectedPage==='activity')tasks.push(refreshActivity());
     else if(selectedPage==='linkbatches')tasks.push(refreshMLLinkBatches());

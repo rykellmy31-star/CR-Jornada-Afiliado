@@ -1,4 +1,5 @@
 import { couponDescription } from './coupons.js';
+import {renderMessageTemplate} from './message-template-engine.js';
 import {publishedPromotionLines, safePromotionTerms, promotionDescription, moneyCents, MAX_AGE_MS} from './promotion-terms.js';
 export const BRAZIL_TIMEZONE = 'America/Bahia';
 
@@ -112,6 +113,12 @@ export function escapeTelegramHtml(value){return safeHtml(value);}
 export function formatOfferMessage(offer,{platform='mercadolivre',network='whatsapp',now=Date.now(),includeLink=false,maxLength}={}){
   if(!['mercadolivre','shopee'].includes(platform))throw new Error('Plataforma inválida.');
   if(!['whatsapp','telegram'].includes(network))throw new Error('Canal inválido.');
+  if(offer?.message_template){
+    const rendered=renderMessageTemplate(offer,offer.message_template,{
+      network,now,maxLength:maxLength??1024
+    });
+    if(rendered)return rendered;
+  }
   const tg=network==='telegram';
   const clean=value=>tg?safeHtml(value):safeWa(value);
   const bold=value=>tg?'<b>'+clean(value)+'</b>':'*'+clean(value)+'*';

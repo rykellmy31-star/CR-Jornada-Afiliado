@@ -1,3 +1,4 @@
+import {withActiveMessageTemplate} from './message-templates.js';
 import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import { normalizeOffer, shouldSend, localTimeParts, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
@@ -347,8 +348,9 @@ async function sendOfferWithImage(env,token,chat,offer){
   {retryOnMiss:true,sourceLookup:resolveOfferSource});
  if(!photo)throw Object.assign(new Error('Foto real do produto indisponível. Oferta não enviada.'),{code:'PHOTO_NOT_READY'});
  const outputOffer=await withGroupCopyPublicLink(env,offer);
- const payload=telegramPayload(outputOffer,chat,Date.now(),{includeLink:true});
- const caption=payload.text.length<=1024?payload.text:telegramPayload(outputOffer,chat).text;
+ const renderOffer=await withActiveMessageTemplate(env,outputOffer,'mercadolivre');
+ const payload=telegramPayload(renderOffer,chat,Date.now(),{includeLink:true});
+ const caption=payload.text.length<=1024?payload.text:telegramPayload(renderOffer,chat).text;
  const msg=await sendTelegramProductPhoto(token,chat,photo,{...payload,text:caption});
  try{await rememberTelegramSentPhoto(env,offer.affiliate_url,photo,msg.message_id);}
  catch(error){console.warn('Foto do canal Telegram não pôde ser registrada:',String(error?.message||error).slice(0,95));}
