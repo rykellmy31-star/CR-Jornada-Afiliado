@@ -11,7 +11,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto,cachedProductImage,rememberProductImage } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
-import {prewarmTelegramQueue} from './photo-preflight.js';
+import {prewarmTelegramQueue,resolveScheduledShowcasePhoto} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
 import {readTelegramForecast} from './publication-forecast.js';
@@ -319,6 +319,9 @@ async function prepareScheduledPhoto(env,offer){
  if(image)return image;
  image=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
   {retryOnMiss:true,sourceLookup:resolveOfferSource});
+ // Se o HTTP do anúncio falhar, o automático verifica a FOTO REAL do
+ // cartão principal da vitrine. Confirma o ID antes de usar a imagem.
+ if(!image)image=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
  if(!image)return null;
  await rememberProductImage(env,offer.affiliate_url,image);
  return image;
@@ -806,13 +809,15 @@ export default {
       ctx.waitUntil(task);
       return task;
     }
-    // Mantém os dois jobs do Cron, mas o publicador só começa depois da
-    // preparação de foto. Botão Publicar e envios manuais ficam intocados.
-    const photoPrepared=start(prewarmTelegramQueue,'Preparar fotos antecipadamente');
+    // Priorizar o envio devido: esperar o pré-carregamento de até 12 itens
+    // fazia o Cron perder a janela antes de chegar no publicador. Agora o
+    // publicador tenta o mesmo caminho manual primeiro e só depois aquece
+    // a foto da próxima oferta. Não mexe no botão manual nem nos intervalos.
+    const telegramPublished=start(runScheduled,'Telegram');
     start(async configured=>{
-      await photoPrepared;
-      return runScheduled(configured);
-    },'Telegram');
+      await telegramPublished;
+      return prewarmTelegramQueue(configured);
+    },'Preparar fotos antecipadamente');
     start(runWhatsAppScheduled,'WhatsApp');
     start(runMultiChannelScheduled,'Telegram multicanal');
     start(runManagedWhatsAppScheduled,'WhatsApp multigrupos');
