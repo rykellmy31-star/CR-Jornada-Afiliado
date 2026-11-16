@@ -1025,7 +1025,10 @@ export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false
    '.rl-card-featured-wrapper',
    '.rl-card-featured-wrapper a.poly-component__title[href]',
    '.rl-card-featured-wrapper a.poly-component__link--action-link[href]',
-   '[class*="card-featured"] a.poly-component__title[href]'
+   '[class*="card-featured"] a.poly-component__title[href]',
+   // Compatibilidade: instâncias antigas do navegador usam estes seletores.
+   '.rl-card-featured-wrapper a[href]',
+   '[class*="card-featured"] a[href]'
   ];
   const scraped=await env.BROWSER.quickAction('scrape',{
    ...opts,elements:selectors.map(selector=>({selector}))
