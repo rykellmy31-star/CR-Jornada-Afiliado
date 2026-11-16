@@ -15,7 +15,7 @@ import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
-import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,ensureGroupOriginalPhotos} from './group-original-photo.js';
+import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,ensureGroupOriginalPhotos,restoreGroupPhotosForQueue} from './group-original-photo.js';
 import {prewarmTelegramQueue,resolveScheduledShowcasePhoto} from './photo-preflight.js';
 import { ensureCouponTable, normalizeCoupon } from './coupons.js';
 import { normalizeOffer, localTimeParts, shouldSend, telegramPayload } from './logic.js';
@@ -999,6 +999,7 @@ export default {
       await telegramPublished;
       return fn(configured);
     },label,route);
+    afterTelegram(restoreGroupPhotosForQueue,'Recuperar fotos antigas dos grupos');
     afterTelegram(prewarmTelegramQueue,'Preparar fotos antecipadamente');
     afterTelegram(runWhatsAppScheduled,'WhatsApp');
     afterTelegram(runMultiChannelScheduled,'Telegram multicanal');
