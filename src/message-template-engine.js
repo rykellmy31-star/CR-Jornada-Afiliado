@@ -71,8 +71,11 @@ function dataForTemplate(offer,now){
  let coupon='';
  const messages=couponDescription(offer,localDay(now));
  if(messages.length)coupon=messages[0].replace(/^🎟️\s*/,'');
- else if(terms?.price_source==='mercadolivre'&&terms?.coupon_required&&terms?.coupon_code)
-  coupon='Cupom informado: '+terms.coupon_code+' (confirme as condições)';
+ else if(terms?.coupon_required){
+  const source=terms.price_source==='grupo'?'Cupom informado no grupo':'Cupom informado';
+  coupon=source+(terms.coupon_code?': '+terms.coupon_code:' — código não confirmado')+
+   ' (confirme as condições no anúncio)';
+ }
  let installments='';
  if(terms?.price_source==='mercadolivre'&&real(price)&&Number.isInteger(terms.installments)&&
   terms.installments>=2&&terms.installments<=24&&real(terms.installment_cents)){
