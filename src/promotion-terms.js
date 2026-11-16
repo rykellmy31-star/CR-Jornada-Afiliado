@@ -1,5 +1,5 @@
 // Extração conservadora de condições informadas por terceiros nos grupos de ofertas.
-const AMOUNT='(?:\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?|\\d{1,5}\\.\\d{2})';
+const AMOUNT='(?:\\d{1,5}\\.\\d{2}(?![\\d,.])|\\d{1,6}(?:\\.\\d{3})*(?:,\\d{2})?)';
 const rPrice=new RegExp('R\\$\\s*('+AMOUNT+')(?![\\d,.])','gi');
 const rDePor=new RegExp('\\bde\\s*[:=-]?\\s*[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')\\s*[~*_]*[^\\p{L}\\d]{0,28}\\bpor\\s*[:=-]?\\s*[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')','iu');
 const rPor=new RegExp('\\b(?:por|agora|apenas|s[oó]\\s+hoje)\\s*(?:[:=-]\\s*)?[~*_]*\\s*R\\$\\s*[~*_]*\\s*('+AMOUNT+')','i');
