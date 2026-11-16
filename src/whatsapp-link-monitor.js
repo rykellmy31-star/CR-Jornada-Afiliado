@@ -275,60 +275,96 @@ async function persistFeaturedMonitorPrice(env,productId,featured,at=epoch()){
  ).bind(productId,featured.price_cents,at,'vitrine oficial do produto principal').run();
  return true;
 }
-export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceRetry=false}={}){
+const PRICE_DEEP_SCAN="CREATE TABLE IF NOT EXISTS ml_monitor_price_deep_scan ("+
+ "product_id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,"+
+ "last_scan_at INTEGER NOT NULL DEFAULT 0,next_scan_at INTEGER NOT NULL DEFAULT 0,"+
+ "last_result TEXT NOT NULL DEFAULT '')";
+export async function ensureMonitorPriceDeepScan(env){
+ await env.DB.prepare(PRICE_DEEP_SCAN).run();
+}
+export async function monitorPriceDeepScanStats(env){
+ try{
+  await ensureMonitorPriceDeepScan(env);
+  const result=await env.DB.prepare(
+   "SELECT COUNT(*) AS checked,"+
+   "COALESCE(SUM(CASE WHEN last_result='confirmed' THEN 1 ELSE 0 END),0) AS confirmed,"+
+   "COALESCE(SUM(CASE WHEN last_result='unavailable' THEN 1 ELSE 0 END),0) AS unavailable,"+
+   "COALESCE(SUM(CASE WHEN last_result='unavailable' AND next_scan_at>unixepoch() THEN 1 ELSE 0 END),0) AS awaiting_retry "+
+   "FROM ml_monitor_price_deep_scan"
+  ).first();
+  return {checked:Number(result?.checked||0),confirmed:Number(result?.confirmed||0),
+   unavailable:Number(result?.unavailable||0),awaiting_retry:Number(result?.awaiting_retry||0)};
+ }catch{return {checked:0,confirmed:0,unavailable:0,awaiting_retry:0};}
+}
+export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceRetry=false,deepScan=false}={}){
  await ensureMonitor(env);
  const now=epoch();
  const cap=Math.max(1,Math.min(5,Number.isSafeInteger(limit)?limit:3));
- const rows=(await env.DB.prepare(
+ if(deepScan)await ensureMonitorPriceDeepScan(env);
+ const select=
   "SELECT l.product_id,l.source_url,"+
   "(SELECT s.short_url FROM ml_monitor_shortlinks s "+
   "WHERE s.group_id=l.group_id AND s.message_id=l.message_id "+
   "AND s.status='resolved' ORDER BY s.id DESC LIMIT 1) AS source_short_url "+
+  (deepScan?",COALESCE(ds.attempts,0) AS scan_attempts ":" ")+
   "FROM ml_monitor_links l "+
   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
   "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+  (deepScan?"LEFT JOIN ml_monitor_price_deep_scan ds ON ds.product_id=l.product_id "+
+   "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ":"")+
   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
   "WHERE g.enabled=1 AND g.authorized=1 AND "+
   "(l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
-  "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
+  "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) ";
+ const where=deepScan?
+  "AND (sp.product_id IS NULL OR sp.status<>'ok' OR sp.checked_at<?) "+
+  "AND (sp.product_id IS NULL OR sp.checked_at<=?) "+
+  "AND (ds.product_id IS NULL OR ds.next_scan_at<=?) "+
+  "AND NOT (m.last_seen_price_cents>=1000 AND m.last_seen_at BETWEEN ? AND ? "+
+  "AND m.last_seen_deal_json IS NOT NULL) "+
+  "ORDER BY COALESCE(ds.last_scan_at,0) ASC,l.id ASC LIMIT ?":
   "AND (sp.product_id IS NULL "+
   "OR (sp.status='ok' AND sp.checked_at<=?) "+
   "OR (sp.status='unavailable' AND (sp.checked_at<=?-(CASE WHEN sp.tries<=1 THEN 900 WHEN sp.tries=2 THEN 3600 ELSE 21600 END) "+
   "OR (?=1 AND sp.checked_at<=?-90)))) "+
-  "ORDER BY (sp.product_id IS NULL) DESC,COALESCE(sp.checked_at,0) ASC,l.created_at DESC LIMIT ?"
- ).bind(now-21600,now,Number(forceRetry===true),now,cap).all()).results;
+  "ORDER BY (sp.product_id IS NULL) DESC,COALESCE(sp.checked_at,0) ASC,l.created_at DESC LIMIT ?";
+ const binds=deepScan?[now-21600,now-90,now,now-21600,now,cap]:
+  [now-21600,now,Number(forceRetry===true),now,cap];
+ const rows=(await env.DB.prepare(select+where).bind(...binds).all()).results||[];
  let checked=0,found=0;
  for(const item of rows){
   let site=null;
-  try{site=await fetchMercadoLivrePrice(item.source_url,fetcher);}
-  catch{/* Página bloqueada ou indisponível: tente a API pública oficial. */}
-  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
-    try{site=await fetchMercadoLivrePublicPrice(item.source_url,fetcher);}
-    catch{/* O ML pode exigir autenticação para alguns anúncios. Nunca inventar preço. */}
+  // A API pública é muito mais rápida quando o HTML do ML bloqueia.
+  // Auditoria profunda tenta API antes, sem mudar as consultas normais.
+  if(deepScan){
+   try{site=await fetchMercadoLivrePublicPrice(item.source_url,fetcher);}catch{}
   }
-  // Fallback: alguns links copiados vêm de vitrines /social oficiais que
-  // mostram o valor atualizado no cartão destacado, ainda que a página do
-  // anúncio e a API pública estejam bloqueadas.
-  // A extração exige o MESMO produto_id da oferta, jamais o primeiro
-  // recomendado e jamais um preço oriundo de outro encurtador.
+  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
+   try{site=await fetchMercadoLivrePrice(item.source_url,fetcher);}
+   catch{/* Página bloqueada ou indisponível: tentar outras fontes. */}
+  }
+  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)&&!deepScan){
+   try{site=await fetchMercadoLivrePublicPrice(item.source_url,fetcher);}
+   catch{/* API pública pode exigir autorização. */}
+  }
+  // A vitrine só é fonte válida quando corresponde ao MESMO produto.
   if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)&&item.source_short_url){
-    try{
-      const inspected=await inspectMonitorShortlink(item.source_short_url,{fetcher});
-      const featured=inspected?.featured_price;
-      if(inspected?.kind==='featured_product'&&
-       inspected.product?.product_id===item.product_id&&
-       Number.isSafeInteger(featured?.price_cents)&&featured.price_cents>0){
-        site={...featured,source:'vitrine oficial do produto principal confirmado'};
-      }
-    }catch{/* Vitrine pública indisponível: manter oferta pendente. */}
+   try{
+    const inspected=await inspectMonitorShortlink(item.source_short_url,{fetcher});
+    const featured=inspected?.featured_price;
+    if(inspected?.kind==='featured_product'&&
+     inspected.product?.product_id===item.product_id&&
+     Number.isSafeInteger(featured?.price_cents)&&featured.price_cents>0){
+      site={...featured,source:'vitrine oficial do produto principal confirmado'};
+    }
+   }catch{/* Vitrine indisponível: manter anúncio sem preço verificado. */}
   }
-  // Última alternativa: navegador da Cloudflare para páginas oficiais
-  // renderizadas por JavaScript. Mesmo ID, mesma URL, sem preço estimado.
   if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
-    site=await fetchRenderedMonitorPrice(env,item.source_url);
+   site=await fetchRenderedMonitorPrice(env,item.source_url);
   }
-  const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0;
+  const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0&&
+   site.price_cents<=100_000_000;
   await env.DB.prepare(
    "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,?,?,?,?,?) "+
    "ON CONFLICT(product_id) DO UPDATE SET "+
@@ -336,6 +372,18 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceR
    "status=excluded.status,checked_at=excluded.checked_at,"+
    "tries=CASE WHEN excluded.status='ok' THEN 0 ELSE MIN(ml_monitor_site_prices.tries+1,3) END,method=excluded.method"
   ).bind(item.product_id,valid?site.price_cents:null,valid?'ok':'unavailable',epoch(),valid?0:1,valid?site.source:'').run();
+  if(deepScan){
+   const attempts=Number(item.scan_attempts||0)+1;
+   // Todos são examinados pelo menos uma vez. Depois, respeitar limites do
+   // Mercado Livre: 15m, 1h, 3h e 6h, nunca abandonar definitivamente.
+   const delay=valid?21600:attempts<=1?900:attempts===2?3600:attempts===3?10800:21600;
+   await env.DB.prepare(
+    "INSERT INTO ml_monitor_price_deep_scan(product_id,attempts,last_scan_at,next_scan_at,last_result) "+
+    "VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET "+
+    "attempts=excluded.attempts,last_scan_at=excluded.last_scan_at,"+
+    "next_scan_at=excluded.next_scan_at,last_result=excluded.last_result"
+   ).bind(item.product_id,attempts,now,now+delay,valid?'confirmed':'unavailable').run();
+  }
   checked++;if(valid)found++;
  }
  return {checked,found};
