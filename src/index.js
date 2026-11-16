@@ -446,24 +446,23 @@ async function runScheduled(env){
     // obter a foto real da vitrine e faz um segundo disparo IMEDIATO pelo
     // MESMO publicador do botão manual, mesmo sem vitrine ou cache.
     // Erros ambíguos de Telegram nunca entram neste bloco (sem duplicação).
-    let recoveredPhoto=null;
     try{
-     recoveredPhoto=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
+     await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
     }catch(error){console.warn('Foto adicional da vitrine:',String(error?.message||error).slice(0,110));}
-    // Evitar uma segunda publicação custosa se nenhuma fonte confirmou foto.
-    // Só repete o MESMO publicador quando surgiu uma imagem validada.
-    if(recoveredPhoto){
-     const retried=await publishUsingManualButton(env,offer.id,{origin:'automático'});
-     if(retried?.status!=='awaiting_photo')return retried;
-    }
-    // O Cron avança na fila; o próximo pulso tenta o item novamente.
-    // Intervalos de PUBLICAÇÃO continuam controlados por shouldSend().
+    const retried=await publishUsingManualButton(env,offer.id,{origin:'automático'});
+    if(retried?.status!=='awaiting_photo')return retried;
+    // Rechecagem da FOTO em um ciclo independente de 60 segundos.
+    // Não altera interval_minutes: os intervalos de PUBLICAÇÕES seguem
+    // exclusivamente a verificação shouldSend() já existente.
     const nextAt=Math.floor(Date.now()/1000)+60;
+    // Duas buscas dentro do mesmo ciclo equivalem a UMA tentativa
+    // agendada para o contador histórico de falhas, preservando métricas.
     await env.DB.prepare(
-     'UPDATE telegram_photo_retries SET next_retry_at=? WHERE offer_id=?'
+     'UPDATE telegram_photo_retries SET next_retry_at=?, '+
+     'attempts=CASE WHEN attempts>1 THEN attempts-1 ELSE 1 END WHERE offer_id=?'
     ).bind(nextAt,offer.id).run();
     await log(env,'photo_retry_scheduled',
-     'Foto ainda não confirmada; o publicador avançou para a próxima oferta.',offer.id);
+     'Foto não recuperada após duas buscas imediatas; rechecagem da foto em até 60 segundos.',offer.id);
     continue;
    }
    return result;
