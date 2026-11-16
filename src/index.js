@@ -227,26 +227,14 @@ async function sendOffer(env, offer, settings, {requirePhoto=true,keepQueuedOnPh
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
-  // A execução Cron pode terminar enquanto o Mercado Livre ainda responde:
-  // NÃO marque como 'sending' durante busca/retries de foto. Só entra no estado
-  // ambíguo quando já existe mídia real e estamos prestes a chamar o Telegram.
-  let preparedPhoto=null;
-  if(keepQueuedOnPhotoMiss){
-   try{
-    preparedPhoto=await resolvePhotoForManualPublisher(env,offer);
-   }catch(error){
-    if(error?.code!=='PHOTO_NOT_READY')throw error;
-    const current=await env.DB.prepare('SELECT status FROM offers WHERE id=?').bind(offer.id).first();
-    if(current?.status!=='ready')return {status:'already_claimed'};
-    const retry=await recordTelegramPhotoRetry(env,offer,error,{keepQueued:true,preClaim:true});
-    await log(env,retry.status,'Foto ainda não disponível antes de iniciar envio Telegram • tentativa '+retry.attempts,offer.id);
-    return retry;
-   }
-  }
+  // O Cron executa a mesma sequência do botão Publicar:
+  // reivindica a oferta e usa o mesmo sendOfferWithImage, sem uma segunda
+  // etapa de pré-validação de foto exclusiva do agendador. A reivindicação
+  // atômica impede que outro Cron ou clique manual envie a mesma oferta.
   const claim = await env.DB.prepare("UPDATE offers SET status='sending', last_error=NULL WHERE id=? AND status='ready'").bind(offer.id).run();
   if (claim.meta?.changes !== 1) return { status: 'already_claimed' };
   try {
-    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer,preparedPhoto);
+    const { message, format } = await sendOfferWithImage(env, settings.telegram_chat_id, offer);
     const timestamp = Math.floor(Date.now() / 1000);
     const localDay = localTimeParts(new Date()).day;
     await env.DB.prepare("UPDATE offers SET status='published', published_at=?, published_day=?, telegram_message_id=? WHERE id=? AND status='sending'")
