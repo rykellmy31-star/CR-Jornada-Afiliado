@@ -5,6 +5,7 @@ import {ensureMonitor} from './whatsapp-link-monitor.js';
 import {affiliateStoreState,previewAffiliateLink} from './affiliate-stores.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
 import {ensureLinkBatches} from './link-batches.js';
+import {officialCategoryStats} from './monitor-official-categories.js';
 
 const SETTINGS="CREATE TABLE IF NOT EXISTS ml_group_copy_auto_settings ("+
  "id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,"+
@@ -24,7 +25,7 @@ export async function ensureGroupCopyAutomation(env){
 export async function groupCopyState(env){
  await ensureMonitor(env);await ensureGroupCopyAutomation(env);
  const at=epoch();
- const [row,monitor,groups,account,recent,waiting,readiness]=await Promise.all([
+ const [row,monitor,groups,account,recent,waiting,readiness,official_categories]=await Promise.all([
   env.DB.prepare('SELECT enabled,experimental_acknowledged,last_run_at,last_error,queued_count FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first(),
   env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').first(),
@@ -42,7 +43,8 @@ export async function groupCopyState(env){
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
    "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1")
-  .bind(at-6*3600,at,at-6*3600,at).first()
+  .bind(at-6*3600,at,at-6*3600,at).first(),
+  officialCategoryStats(env)
  ]);
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
   last_run_at:Number(row?.last_run_at||0),last_error:String(row?.last_error||''),
@@ -51,7 +53,7 @@ export async function groupCopyState(env){
   label:account.mercadolivre.label||null,waiting:Number(waiting?.total||0),
   readiness:{needs_category:Number(readiness?.needs_category||0),
    needs_price:Number(readiness?.needs_price||0),with_price:Number(readiness?.with_price||0)},
-  recent:(recent?.results||[]),commission_verified:false};
+  official_categories,recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
  await ensureGroupCopyAutomation(env);
