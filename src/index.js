@@ -575,15 +575,17 @@ async function router(request, env, ctx=null) {
   if (u.pathname === '/api/logout' && method === 'POST') return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
   if (u.pathname === '/api/state' && method === 'GET') {
     await ensureCouponTable(env);
-    const [settings, offers, counts, logs] = await Promise.all([
+    const [settings, offers, counts, logs, cronHealth] = await Promise.all([
       readSettings(env),
       env.DB.prepare(OFFER_WITH_COUPON + ' ORDER BY o.created_at DESC, o.id DESC LIMIT 100').all(),
       env.DB.prepare('SELECT status, COUNT(*) AS total FROM offers GROUP BY status').all(),
-      env.DB.prepare('SELECT event,detail,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 20').all()
+      env.DB.prepare('SELECT event,detail,created_at,offer_id FROM logs ORDER BY id DESC LIMIT 20').all(),
+      env.DB.prepare('SELECT last_checked_at,last_result,last_error FROM affiliate_telegram_cron_health WHERE id=1').first().catch(()=>null)
     ]);
     const forecast=await readTelegramForecast(env,{settings});
     return json({ settings, offers: offers.results, counts: counts.results, logs: logs.results,
-      publication_forecast:forecast, telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
+      publication_forecast:forecast, cron_health:cronHealth,
+      telegram_token_configured: !!env.TELEGRAM_BOT_TOKEN });
   }
   // Conta e credenciais Shopee independentes: não usar o perfil Mercado Livre.
   if(u.pathname==='/api/shopee/account'&&method==='GET')
@@ -877,21 +879,62 @@ async function router(request, env, ctx=null) {
   return fail('Rota inexistente.', 404);
 }
 
+// O tick do Cron não deve fazer criação/semeadura de categorias antes de
+// tentar o envio principal. O botão manual também independe dessa inicialização.
+async function readMasterForScheduled(env){
+ if(!env?.DB)return {enabled:null};
+ try{
+  const row=await env.DB.prepare('SELECT enabled FROM automation_master WHERE id=1').first();
+  return {enabled:row?Boolean(row.enabled):null};
+ }catch(error){
+  // Instalações anteriores ao painel mestre não possuem essa tabela.
+  // Ausência da tabela equivale ao comportamento legado (sem bloqueio).
+  if(/no such table:\\s*automation_master/i.test(String(error?.message||error)))
+   return {enabled:null};
+  throw error;
+ }
+}
+const CRON_HEALTH_TABLE="CREATE TABLE IF NOT EXISTS affiliate_telegram_cron_health ("+
+ "id INTEGER PRIMARY KEY CHECK(id=1),last_checked_at INTEGER NOT NULL,"+
+ "last_result TEXT NOT NULL,last_error TEXT NOT NULL DEFAULT '')";
+async function recordTelegramCronOutcome(env,result,error=null){
+ if(!env?.DB)return;
+ const status=error?'error':String(result?.status||result?.skipped||'unknown').slice(0,70);
+ const detail=error?String(error?.message||error).slice(0,180):'';
+ try{
+  await env.DB.prepare(CRON_HEALTH_TABLE).run();
+  await env.DB.prepare(
+   "INSERT INTO affiliate_telegram_cron_health (id,last_checked_at,last_result,last_error) "+
+   "VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET "+
+   "last_checked_at=excluded.last_checked_at,last_result=excluded.last_result,"+
+   "last_error=excluded.last_error"
+  ).bind(Math.floor(Date.now()/1000),status,detail).run();
+ }catch(saveError){
+  console.warn('Diagnóstico Cron:',String(saveError?.message||saveError).slice(0,120));
+ }
+}
 export default {
   async fetch(request, env, ctx) {
     try { return await router(request, env, ctx); }
     catch (error) { console.error('CR Jornada Afiliados:', error?.message); return fail(error?.message || 'Falha interna.', error?.status || (error instanceof SyntaxError ? 400 : 500)); }
   },
   async scheduled(_controller, env, ctx) {
-    const master=env.DB?masterState(env):Promise.resolve({enabled:null});
+    const master=readMasterForScheduled(env);
     function start(fn,label,route=false){
       const task=(async()=>{
         const state=await master;
-        if(state.enabled===false)return;
+        if(state.enabled===false){
+          if(label==='Telegram')await recordTelegramCronOutcome(env,{skipped:'master_off'});
+          return;
+        }
         const configured={...env,MASTER_SCHEDULE_ENABLED:state.enabled};
-        await fn(configured);
+        const outcome=await fn(configured);
+        if(label==='Telegram')await recordTelegramCronOutcome(env,outcome);
         if(route&&state.enabled===true)await runCategoryRoutingScheduled(configured);
-      })().catch(error=>console.error(label+':',error?.message));
+      })().catch(async error=>{
+        if(label==='Telegram')await recordTelegramCronOutcome(env,null,error);
+        console.error(label+':',error?.message);
+      });
       ctx.waitUntil(task);
       return task;
     }
@@ -967,4 +1010,4 @@ export default {
     }
   }
 };
-export { runScheduled, router };
+export { runScheduled, router, readMasterForScheduled, recordTelegramCronOutcome };
