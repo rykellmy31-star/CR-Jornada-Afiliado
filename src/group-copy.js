@@ -1,7 +1,7 @@
 // Importação automática dos produtos de grupos WhatsApp AUTORIZADOS.
 // Os parâmetros matt_word/matt_tool não representam geração oficial de ref ou garantia de comissão.
 // Nunca reutiliza o link nem a etiqueta de quem compartilhou o anúncio.
-import {ensureMonitor} from './whatsapp-link-monitor.js';
+import {ensureMonitor,monitorPriceDeepScanStats} from './whatsapp-link-monitor.js';
 import {affiliateStoreState,previewAffiliateLink,parseMercadoLivreProduct} from './affiliate-stores.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
 import {ensureLinkBatches,productId} from './link-batches.js';
@@ -175,6 +175,7 @@ export async function groupCopyState(env){
     "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL").first()
  ]);
  const eligibility=await groupCopyEligibility(env,{now:at});
+ const price_search=await monitorPriceDeepScanStats(env);
 
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
   last_run_at:Number(row?.last_run_at||0),last_error:String(row?.last_error||''),
@@ -190,7 +191,7 @@ export async function groupCopyState(env){
    with_price:Number(readiness?.with_price||0),
    with_group_price:Number(readiness?.with_group_price||0)},
   official_categories:{...official_categories,waiting:Number(readiness?.needs_category||0)},
-  eligibility,
+  eligibility,price_search,
   recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
