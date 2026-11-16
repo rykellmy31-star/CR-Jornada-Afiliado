@@ -165,3 +165,39 @@ test('tarefa sem avanço por cooldown continua pendente em vez de anunciar concl
   assert.equal(later.status,'pending','não encerrar enquanto houver Geral sem classificação');
  }finally{db.close();}
 });
+
+
+test('mensagem consultada sem valor não diminui contador dos preços pendentes',async()=>{
+ const {env,db}=setup(),original=globalThis.fetch;
+ try{
+  await seed(env,2,{category:'Ferramentas e Peças Automotivas',classification:'selected'});
+  env.EVOLUTION_API_URL='https://evo.example.com';
+  env.EVOLUTION_API_KEY='valid-test-key';
+  const first=await requestManualGroupCheck(env,'prices');
+  assert.equal(first.remaining,2);
+  let calls=0;
+  globalThis.fetch=async(url,options)=>{
+   calls++;
+   const key=JSON.parse(options.body).where.key;
+   assert.match(String(url),/\/chat\/findMessages\/cr-jornada-afiliados$/);
+   return Response.json({messages:{records:[{
+    key:{remoteJid:'120363000111222333@g.us',id:key.id,fromMe:false},
+    message:{conversation:'Furadeira sem preço '+
+      'https://www.mercadolivre.com.br/furadeira-de-impacto/p/MLB12345678'}
+   }]}});
+  };
+  const attempted=await executeManualGroupCheck(env,'prices');
+  assert.equal(attempted.status,'pending');
+  assert.equal(attempted.remaining,2,'não pode reduzir total só porque consultou mensagem');
+  assert.equal(attempted.checked,2);
+  assert.equal(attempted.found,0);
+  assert.match(attempted.last_error,/sem valor confirmado/i);
+  assert.ok(calls>=1);
+  const persisted=await readManualGroupCheck(env,'prices');
+  assert.equal(persisted.remaining,2);
+ }finally{globalThis.fetch=original;db.close();}
+});
+test('interface mostra preços realmente pendentes mesmo quando o job não recuperou nenhum',()=>{
+ assert.match(CLIENT_JS,/pendentes reais/);
+ assert.match(CLIENT_JS,/Nenhum preço recuperado nas mensagens analisadas/);
+});
