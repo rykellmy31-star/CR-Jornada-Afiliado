@@ -1091,16 +1091,21 @@ export default {
           return result;
         })().catch(error=>console.error('Segunda revisão automática:',String(error?.message||error).slice(0,120))));
       }
-      ctx.waitUntil((async()=>{
-        await Promise.all([telegramPublished,manualPriceChecks]);
-        // Grupos pausados bloqueiam captura NOVA, nunca o backlog autorizado.
-        // Priorizar preço da mensagem de origem, sem consultas ao site do ML.
-        const result=await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:10});
-        if(result.recovered>0)await runGroupCopyBatch(env,{limit:3});
-        return result;
-      })().catch(error=>
-        console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
     }
+    // O backlog JÁ recebido não depende da existência de webhook ativo.
+    // Antes, a rotina ficava dentro de monitorWebhookReady(), portanto
+    // nenhuma mensagem antiga era recuperada quando o webhook era pausado.
+    if(env.DB)ctx.waitUntil((async()=>{
+      await Promise.all([telegramPublished,manualPriceChecks]);
+      const settings=await env.DB.prepare(
+       'SELECT enabled FROM ml_group_copy_auto_settings WHERE id=1'
+      ).first();
+      if(!settings?.enabled)return {skipped:'copy_off'};
+      const result=await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:10});
+      if(result.recovered>0)await runGroupCopyBatch(env,{limit:3});
+      return result;
+    })().catch(error=>
+      console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
   }
 };
 export { runScheduled, router, readMasterForScheduled, recordTelegramCronOutcome };

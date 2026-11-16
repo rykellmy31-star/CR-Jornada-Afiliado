@@ -84,7 +84,8 @@ test('teste importa produto realmente apto e informa diagnóstico posterior sem 
 test('painel sempre explica restrições e exibe resultado antes da atualização secundária',()=>{
  const html=renderPage();
  assert.match(html,/id="copy-groups-eligibility"/);
- assert.match(CLIENT_JS,/categoria diferente da permitida no canal principal/);
+ assert.match(CLIENT_JS,/preço registrado, porém vencido/);
+ assert.match(CLIENT_JS,/Sem importação em execução/);
  assert.match(CLIENT_JS,/Motivo encontrado:/);
  const posResult=CLIENT_JS.indexOf("const result=data.result||{}");
  const posRefresh=CLIENT_JS.indexOf("try{await refreshCopyGroups();}",posResult);

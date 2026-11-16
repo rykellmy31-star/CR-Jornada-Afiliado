@@ -116,5 +116,6 @@ test('painel mostra total capturado e unidades aguardando sem ocultar lotes anti
  const ui=renderPage();
  assert.match(ui,/Produtos identificados \(todos os estados\)/);
  assert.match(ui,/id="copy-groups-flow-status"/);
- assert.match(CLIENT_JS,/awaiting_manual_batch/);
+ assert.match(CLIENT_JS,/state\.waiting/);
+ assert.match(CLIENT_JS,/copyGroupsShowBlockers/);
 });

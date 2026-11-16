@@ -397,10 +397,23 @@ export async function runGroupCopyBatch(env,{limit=4,now=null,preferRecent=false
 }
 /** Leitura leve para o painel ao vivo; NÃO faz consultas externas,
  * classificações, conversões ou alterações de status. */
+// Consulta rápida que explica o bloqueio da fila sem chamar a API ML,
+// a Evolution, o gerador de links ou o diagnóstico pesado de elegibilidade.
 export async function groupCopyLiveState(env){
  await ensureGroupCopyAutomation(env);
- const [settings,diagnostics,counts,groups]=await Promise.all([
-  env.DB.prepare('SELECT enabled,queued_count,last_run_at,last_error FROM ml_group_copy_auto_settings WHERE id=1').first(),
+ const now=epoch();
+ const site="(COALESCE(sp.status,'')='ok' AND COALESCE(sp.price_cents,0)>0 "+
+  "AND COALESCE(sp.checked_at,0) BETWEEN ? AND ?)";
+ const group="(COALESCE(m.last_seen_price_cents,0)>=1000 "+
+  "AND COALESCE(m.last_seen_at,0) BETWEEN ? AND ? "+
+  "AND COALESCE(l.message_id,'')<>'' "+
+  "AND json_valid(COALESCE(m.last_seen_deal_json,'')) "+
+  "AND CAST(json_extract(CASE WHEN json_valid(COALESCE(m.last_seen_deal_json,'')) "+
+  "THEN m.last_seen_deal_json ELSE '{}' END,'$.price_cents') AS INTEGER)=m.last_seen_price_cents)";
+ // Este SQL é somente leitura. Categorias, preço vencido e preço ausente
+ // são contados no MESMO conjunto dos produtos aguardando importação.
+ const [settings,diagnostics,counts,groups,blockers]=await Promise.all([
+  env.DB.prepare('SELECT enabled,queued_count,last_run_at,last_error,lease_until FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT last_event_at FROM ml_monitor_diagnostics WHERE id=1').first(),
   env.DB.prepare("SELECT COUNT(*) AS total,"+
    "COALESCE(SUM(CASE WHEN l.status='available' OR (l.status='batched' AND b.status='awaiting_links') THEN 1 ELSE 0 END),0) AS waiting,"+
@@ -409,7 +422,33 @@ export async function groupCopyLiveState(env){
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.authorized=1").first(),
   env.DB.prepare("SELECT COUNT(*) AS total,"+
    "COALESCE(SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END),0) AS active "+
-   "FROM ml_monitor_groups WHERE authorized=1").first()
+   "FROM ml_monitor_groups WHERE authorized=1").first(),
+  env.DB.prepare("SELECT COUNT(DISTINCT l.id) AS considered,"+
+   "COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review' "+
+    "OR TRIM(COALESCE(l.category,''))='' THEN 1 ELSE 0 END),0) AS needs_category,"+
+   "COALESCE(SUM(CASE WHEN NOT ("+site+" OR "+group+") "+
+    "AND (COALESCE(sp.price_cents,0)>0 OR COALESCE(m.last_seen_price_cents,0)>0) "+
+    "THEN 1 ELSE 0 END),0) AS price_expired,"+
+   "COALESCE(SUM(CASE WHEN COALESCE(sp.price_cents,0)<=0 "+
+    "AND COALESCE(m.last_seen_price_cents,0)<=0 THEN 1 ELSE 0 END),0) AS price_missing,"+
+   "COALESCE(SUM(CASE WHEN ("+site+" OR "+group+") "+
+    "AND l.category<>'Geral' AND l.classification<>'needs_review' "+
+    "THEN 1 ELSE 0 END),0) AS price_and_category_ready,"+
+   "COALESCE(SUM(CASE WHEN l.message_id IS NULL OR l.message_id='' THEN 1 ELSE 0 END),0) AS no_message_id "+
+   "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+   "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+   "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
+   "LEFT JOIN ml_group_copy_auto_history h ON h.product_id=l.product_id "+
+   "WHERE g.authorized=1 AND h.product_id IS NULL "+
+   "AND (l.status='available' OR "+
+   "(l.status='batched' AND b.status='awaiting_links' "+
+   "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))"
+  ).bind(
+   now-SIX_HOURS,now,now-GROUP_PRICE_MAX_AGE,now,
+   now-SIX_HOURS,now,now-GROUP_PRICE_MAX_AGE,now
+  ).first()
  ]);
  return {enabled:!!settings?.enabled,total_identified:Number(counts?.total||0),
   saved_groups:Number(groups?.total||0),active_groups:Number(groups?.active||0),
@@ -417,5 +456,13 @@ export async function groupCopyLiveState(env){
   waiting:Number(counts?.waiting||0),imported:Number(counts?.imported||0),
   queued_count:Number(settings?.queued_count||0),last_run_at:Number(settings?.last_run_at||0),
   last_event_at:Number(diagnostics?.last_event_at||0),
-  last_error:String(settings?.last_error||'')};
+  lease_active:Number(settings?.lease_until||0)>now,
+  last_error:String(settings?.last_error||''),
+  blockers:{considered:Number(blockers?.considered||0),
+   needs_category:Number(blockers?.needs_category||0),
+   price_expired:Number(blockers?.price_expired||0),
+   price_missing:Number(blockers?.price_missing||0),
+   price_and_category_ready:Number(blockers?.price_and_category_ready||0),
+   no_message_id:Number(blockers?.no_message_id||0)}
+ };
 }
