@@ -128,8 +128,10 @@ export async function groupCopyState(env){
  // Contar preços conhecidos do grupo, não apenas os retornados pelo site.
  // A interface antiga subtraía apenas os primeiros 120 itens avaliados e
  // mostrava dezenas de produtos como "sem preço" de forma enganosa.
- const siteRecent="(sp.status='ok' AND sp.price_cents>0 AND sp.checked_at BETWEEN unixepoch()-21600 AND unixepoch())";
- const groupRecent="(m.last_seen_price_cents>=1000 AND m.last_seen_at BETWEEN unixepoch()-21600 AND unixepoch() "+
+ const siteRecent="(COALESCE(sp.status,'')='ok' AND COALESCE(sp.price_cents,0)>0 "+
+  "AND COALESCE(sp.checked_at,0) BETWEEN unixepoch()-21600 AND unixepoch())";
+ const groupRecent="(COALESCE(m.last_seen_price_cents,0)>=1000 "+
+  "AND COALESCE(m.last_seen_at,0) BETWEEN unixepoch()-21600 AND unixepoch() "+
   "AND l.message_id<>'' AND json_valid(COALESCE(m.last_seen_deal_json,'')) "+
   "AND CAST(json_extract(CASE WHEN json_valid(COALESCE(m.last_seen_deal_json,'')) "+
   "THEN m.last_seen_deal_json ELSE '{}' END,'$.price_cents') AS INTEGER)=m.last_seen_price_cents)";
