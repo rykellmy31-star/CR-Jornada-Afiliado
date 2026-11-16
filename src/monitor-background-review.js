@@ -134,7 +134,12 @@ export async function runBackgroundReview(env,{now=null}={}){
    return {skipped:'monitor_off'};
   }
   // Não deixe links sem confirmação bloquearem o lote dos produtos prontos.
-  const earlyConversion=await prepareConfirmedForConversion(env);
+  // Só antecipe um lote CHEIO. Se houver 1-49 produtos e a revisão ainda
+  // estiver processando mais itens, espere a passagem acabar para não
+  // abrir um lote pequeno que bloqueia o restante.
+  const readyForBatch=await currentConversion(env);
+  const earlyConversion=readyForBatch.eligible_waiting>=50
+   ?await prepareConfirmedForConversion(env):null;
   const result=await bulkValidateMonitorShortlinks(env,{
    after_id:Number(row.cursor||0),limit:1,now:at
   });
