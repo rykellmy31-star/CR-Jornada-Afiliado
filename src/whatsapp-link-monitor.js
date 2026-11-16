@@ -3,7 +3,7 @@ import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './l
 import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
-import {fetchMercadoLivrePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
+import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 import {monitorWebhookReady} from './monitor-webhook-setup.js';
 
 const SCHEMA=[
@@ -239,7 +239,11 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
  for(const item of rows){
   let site=null;
   try{site=await fetchMercadoLivrePrice(item.source_url,fetcher);}
-  catch{/* O site pode limitar o acesso; não altera o preço informado pelo grupo. */}
+  catch{/* Página bloqueada ou indisponível: tente a API pública oficial. */}
+  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
+    try{site=await fetchMercadoLivrePublicPrice(item.source_url,fetcher);}
+    catch{/* O ML pode exigir autenticação para alguns anúncios. Nunca inventar preço. */}
+  }
   const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0;
   await env.DB.prepare(
    "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,?,?,?,?,?) "+
