@@ -46,8 +46,8 @@ test('último resultado automático é persistido sem interromper o publicador',
 test('Cron usa leitura leve antes do publicador manual e conserva intervalos',()=>{
  const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
  const scheduled=source.slice(source.indexOf('async scheduled('));
- assert.match(scheduled,/const master=readMasterForScheduled\\(env\\)/);
- assert.match(scheduled,/const telegramPublished=start\\(runScheduled,'Telegram'\\)/);
- assert.match(source,/shouldSend\\(settings,now,total,latest/);
- assert.doesNotMatch(scheduled,/const master=env.DB\\?masterState/);
+ assert.match(scheduled,/const master=readMasterForScheduled\(env\)/);
+ assert.match(scheduled,/const telegramPublished=start\(runScheduled,'Telegram'\)/);
+ assert.match(source,/shouldSend\(settings,now,total,latest/);
+ assert.doesNotMatch(scheduled,/const master=env.DB\?masterState/);
 });
