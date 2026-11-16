@@ -966,13 +966,14 @@ export default {
     // Importação experimental depende de consentimento e grupos autorizados.
     // Não altera o publicador nem os intervalos programados.
     if(env.DB)ctx.waitUntil((async()=>{
+      // Enfileirar ofertas captadas exige apenas D1 e não deve esperar as
+      // consultas demoradas de foto do Telegram ou categorias do ML.
+      await runGroupCopyScheduled(env);
       await telegramPublished;
-      // As verificações manuais ficam em D1; o Cron processa sem bloquear o painel.
+      // Classificação em segundo plano continua sem bloquear novas filas.
       await executeManualGroupCheck(env,'categories');
-      // Consultar categorias oficiais para novos produtos, mesmo sem a tela aberta.
       try{await classifyMonitorMissingCategories(env,{limit:4});}
       catch(error){console.error('Categorias oficiais:',String(error?.message||error).slice(0,140));}
-      await runGroupCopyScheduled(env);
     })().catch(error=>console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
     // Tarefa persistente de validação em massa: não depende da página aberta.
     if(env.DB)ctx.waitUntil((async()=>{

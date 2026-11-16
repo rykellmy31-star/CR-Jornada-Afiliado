@@ -1,4 +1,5 @@
 import { trustedProductImage, trustedProductPage, extractProductImage, validatedProductPhoto } from './images.js';
+import {fetchOfficialProductPhoto} from './official-product-photo.js';
 
 // A URL é a chave porque a mesma oferta pode ser divulgada em canais diferentes.
 // Só guarda a URL pública da foto, nunca dados do comprador ou credenciais.
@@ -184,7 +185,8 @@ export async function resolveProductImageWithRetry(env,affiliateUrl,lookup,{retr
  }
  if(original){
   try{
-   const recovered=await lookup(original);
+   let recovered=await lookup(original);
+   if(!trustedProductImage(recovered))recovered=await fetchOfficialProductPhoto(original);
    if(trustedProductImage(recovered)){
     await rememberProductImage(env,original,recovered);
     await rememberProductImage(env,affiliateUrl,recovered);
@@ -224,6 +226,10 @@ export async function resolveProductImage(env,affiliateUrl,lookup){
    try{image=await lookup(source);}catch(error){
     console.warn('Foto do anúncio original:',String(error?.message||error).slice(0,100));
    }
+  }
+  // API pública do MESMO MLB/MLBU: recupera foto quando HTML/og:image falha.
+  if(!trustedProductImage(image)){
+   try{image=await fetchOfficialProductPhoto(source);}catch{}
   }
   if(!trustedProductImage(image))image=await photoFromRenderedPage(env,source);
   if(trustedProductImage(image)){
