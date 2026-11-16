@@ -25,5 +25,6 @@ export async function photoForWhatsApp(url,{fetcher=fetch}={}){
  if(limit>MAX_BYTES)throw new Error('Imagem convertida muito grande.');
  const buffer=new Uint8Array(await response.arrayBuffer());
  if(!buffer.length||buffer.length>MAX_BYTES)throw new Error('Foto convertida vazia ou muito grande.');
- return {media:'data:image/jpeg;base64,'+encodeBase64(buffer),mimetype:'image/jpeg',filename:'produto.jpg'};
+ // Evolution v2 recebe Base64 cru, sem o prefixo data:image/jpeg;base64,.
+ return {media:encodeBase64(buffer),mimetype:'image/jpeg',filename:'produto.jpg'};
 }
