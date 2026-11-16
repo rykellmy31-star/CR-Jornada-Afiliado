@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto}
+import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,restoreGroupPhotosForQueue}
  from '../src/group-original-photo.js';
 import {runScheduled} from '../src/index.js';
 import {readFileSync} from 'node:fs';
@@ -117,4 +117,34 @@ test('Cron publica oferta com foto do grupo, sem baixar mídia do Mercado Livre 
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
   assert.equal((await runScheduled(env)).skipped,'interval_or_schedule');
  }finally{globalThis.fetch=old;close();}
+});
+
+
+test('recupera foto histórica de oferta na fila usando somente mensagem do grupo autorizado',async()=>{
+ const {env,DB,close}=setup({full:true});
+ let searches=0,images=0;
+ try{
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,price_cents,created_at) VALUES(?,?,'Geral','ready',7990,?)")
+   .bind('Perfume sem foto na fila',AFF,Math.floor(Date.now()/1000)).run();
+  const fetcher=async(url,options)=>{
+   const u=String(url);
+   if(u.endsWith('/chat/findMessages/'+INST)){
+    searches++;
+    assert.equal(JSON.parse(options.body).where.key.id,'MSG_IMAGE_2026_01');
+    return Response.json({messages:{records:[entry()]}});
+   }
+   if(u.endsWith('/chat/getBase64FromMediaMessage/'+INST)){
+    images++;
+    return Response.json({base64:fakeImage,mimetype:'image/jpeg'});
+   }
+   throw Error('URL não prevista '+u);
+  };
+  const restored=await restoreGroupPhotosForQueue(env,{fetcher});
+  assert.equal(restored.restored,1);
+  assert.equal(searches,1);
+  assert.equal(images,1);
+  assert.equal((await groupOriginalPhotoForOffer(env,AFF)).image_b64,fakeImage);
+  assert.equal((await restoreGroupPhotosForQueue(env,{fetcher})).skipped,'no_pending_images');
+  assert.equal(searches,1,'nenhuma tentativa duplicada da mesma mensagem');
+ }finally{close();}
 });
