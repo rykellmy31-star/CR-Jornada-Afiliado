@@ -4,6 +4,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {captureGroupOriginalPhotos,groupOriginalPhotoForOffer,sendTelegramOriginalPhoto,restoreGroupPhotosForQueue}
  from '../src/group-original-photo.js';
 import {runScheduled} from '../src/index.js';
+import {runWhatsAppScheduled,updateWhatsAppSettings} from '../src/whatsapp.js';
+import {photoForWhatsApp} from '../src/whatsapp-photo.js';
 import {readFileSync} from 'node:fs';
 
 const INST='grupo-captura';
@@ -147,4 +149,57 @@ test('recupera foto histórica de oferta na fila usando somente mensagem do grup
   assert.equal((await restoreGroupPhotosForQueue(env,{fetcher})).skipped,'no_pending_images');
   assert.equal(searches,1,'nenhuma tentativa duplicada da mesma mensagem');
  }finally{close();}
+});
+
+
+test('Evolution envia imagem copiada do grupo como Base64 puro, sem prefixo data URI',async()=>{
+ const {env,DB,close}=setup({full:true}),previous=globalThis.fetch;
+ const GROUP_TARGET='120363888777555@g.us';
+ let media=0,txt=0;
+ try{
+  globalThis.fetch=async(url,opts={})=>{
+   const u=String(url);
+   if(u.includes('/group/fetchAllGroups/'))
+    return Response.json([{id:GROUP_TARGET,subject:'Grupo teste'}]);
+   if(u.endsWith('/message/sendMedia/'+INST)){
+    const payload=JSON.parse(opts.body);
+    media++;
+    assert.equal(payload.mediatype,'image');
+    assert.equal(payload.mimetype,'image/jpeg');
+    assert.equal(payload.media,fakeImage,'Evolution deve receber a string Base64 sem prefixo HTML');
+    assert.ok(!payload.media.startsWith('data:'),'data: URI provocou HTTP 400 em produção');
+    assert.equal(payload.number,GROUP_TARGET);
+    assert.match(payload.caption,/Publicidade/);
+    assert.match(payload.caption,/meli\.la/);
+    return Response.json({key:{id:'EVOLUTION_CONFIRMED'}});
+   }
+   if(u.includes('/message/sendText/')){txt++;throw Error('Não usar texto');}
+   throw Error('fetch inesperado '+u);
+  };
+  const cfg={instance_name:INST,group_jid:GROUP_TARGET,public_registered:false,enabled:false,interval_minutes:2};
+  await updateWhatsAppSettings(env,cfg);
+  await updateWhatsAppSettings(env,{...cfg,public_registered:true,enabled:true});
+  const time=Math.floor(Date.now()/1000);
+  DB.prepare("INSERT INTO offers(title,affiliate_url,category,status,price_cents,created_at,published_at,published_day) VALUES(?,?,'Geral','published',7990,?,?,?)")
+   .bind('Perfume original com foto',AFF,time,time,new Date().toISOString().slice(0,10)).run();
+  const captured=await captureGroupOriginalPhotos(env,event(entry()),{fetcher:async()=>Response.json({base64:fakeImage,mimetype:'image/jpeg'})});
+  assert.equal(captured.captured,1);
+  const result=await runWhatsAppScheduled(env);
+  assert.equal(result.status,'sent');
+  assert.equal(media,1);
+  assert.equal(txt,0);
+  assert.equal(DB.prepare("SELECT status FROM whatsapp_deliveries WHERE offer_id=1").first().status,'sent');
+ }finally{globalThis.fetch=previous;close();}
+});
+test('WebP convertido usa Base64 cru no sendMedia, preserva JPG oficial sem alteração',async()=>{
+ const imageUrl='https://http2.mlstatic.com/D_NQ_NP_99811-MLB88899-P.webp';
+ const image=Uint8Array.from(atob(fakeImage),x=>x.charCodeAt(0));
+ const result=await photoForWhatsApp(imageUrl,{fetcher:async(url,options)=>{
+  assert.equal(url,imageUrl);
+  assert.equal(options.cf.image.format,'jpeg');
+  return new Response(image,{headers:{'content-type':'image/jpeg'}});
+ }});
+ assert.equal(result.media,fakeImage);
+ assert.equal(result.mimetype,'image/jpeg');
+ assert.equal(result.filename,'produto.jpg');
 });

@@ -73,7 +73,7 @@ test('vitrine CR DIVULGA recupera foto VONDER apesar de MLB 403, sem pegar recom
   assert.equal(track.some(x=>x.url===WRONG),false);
   const wa=await photoForWhatsApp(image);
   assert.equal(wa.mimetype,'image/jpeg');
-  assert.equal(Buffer.from(wa.media.split(',')[1],'base64').toString(),'JPG-convertido-da-foto-original');
+  assert.equal(Buffer.from(wa.media,'base64').toString(),'JPG-convertido-da-foto-original');
   const tg=await sendTelegramProductPhoto('TEST_BOT_TOKEN','@achadinhosmlcr',image,{text:'Jogo Vonder\n'+SHORT});
   assert.equal(tg.message_id,101);
  }finally{globalThis.fetch=original;DB.close();}

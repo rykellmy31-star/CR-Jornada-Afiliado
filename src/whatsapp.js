@@ -404,7 +404,8 @@ async function sendOfferWhatsApp(env,cfg,offer,{imageUrl=null,originalPhoto=null
  if(!image&&!sourcePhoto)throw Object.assign(new Error('Foto do produto indisponível; publicação sem imagem bloqueada.'),{code:'PHOTO_NOT_FOUND'});
  const photo=sourcePhoto?{
   mimetype:sourcePhoto.mime,
-  media:'data:'+sourcePhoto.mime+';base64,'+sourcePhoto.image_b64,
+  // Evolution /message/sendMedia aceita Base64 puro: o prefixo data:... causa HTTP 400.
+  media:sourcePhoto.image_b64,
   filename:sourcePhoto.mime==='image/png'?'oferta.png':'oferta.jpg'
  }:await photoForWhatsApp(image);
  const body={number:cfg.group_jid,mediatype:'image',mimetype:photo.mimetype,
