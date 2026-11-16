@@ -321,7 +321,7 @@ test('salvar não depende do diagnóstico completo, lento ou indisponível',asyn
   await seed(env);
   const normalPrepare=env.DB.prepare.bind(env.DB);
   env.DB.prepare=sql=>{
-   if(String(sql).includes("COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review'"))
+   if(String(sql).includes("l.classification='needs_review' THEN 1 ELSE 0 END),0) AS needs_category"))
     throw new Error('diagnóstico completo temporariamente indisponível');
    return normalPrepare(sql);
   };
