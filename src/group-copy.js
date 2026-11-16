@@ -209,24 +209,41 @@ export async function groupCopyState(env){
 }
 export async function saveGroupCopySettings(env,body){
  await ensureGroupCopyAutomation(env);
- if(typeof body?.enabled!=='boolean')throw fail('Informe se a importação automática está ligada ou desligada.');
+ if(typeof body?.enabled!=='boolean')
+  throw fail('Informe se a importação automática está ligada ou desligada.');
  if(body.enabled){
-  const state=await groupCopyState(env);
-  if(!state.store_configured)throw fail('Cadastre antes sua etiqueta em LOJAS.');
-  if(!state.monitor_enabled)throw fail('Ative a captura de grupos na aba COPIAR DE GRUPOS.');
-  if(!state.authorized_groups&&!state.waiting)
-   throw fail('Selecione ao menos um grupo autorizado ou mantenha uma fila já capturada para processar.');
+  // O antigo groupCopyState executava um diagnóstico completo de preços,
+  // categorias e lotes ANTES de salvar, e outro DEPOIS de salvar. Um timeout
+  // podia impedir o POST ou fazer o painel parecer desligado.
+  // Verificar só os pré-requisitos de importação, sem consultar anúncios.
+  const [account,authorized]=await Promise.all([
+   affiliateStoreState(env),
+   env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_groups WHERE authorized=1').first()
+  ]);
+  if(!account.mercadolivre.configured)throw fail('Cadastre antes sua etiqueta em LOJAS.');
+  if(Number(authorized?.total||0)===0)
+   throw fail('Cadastre pelo menos um grupo autorizado para copiar ofertas.');
+  // O usuário pode PAUSAR a captura sem desativar a fila já capturada.
  }
- await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET enabled=?,experimental_acknowledged=?,updated_at=?,last_error=? WHERE id=1')
-  .bind(Number(body.enabled),Number(body.enabled),epoch(),'').run();
- return {ok:true,...await groupCopyState(env)};
+ const now=epoch();
+ const changed=await env.DB.prepare(
+  'UPDATE ml_group_copy_auto_settings SET enabled=?,experimental_acknowledged=?,updated_at=?,last_error=? WHERE id=1'
+ ).bind(Number(body.enabled),Number(body.enabled),now,'').run();
+ if(changed.meta?.changes!==1)throw fail('Não foi possível gravar a preferência de importação.',503);
+ // Confirmar o valor realmente persistido no D1, em vez de depender de
+ // uma requisição cara ao diagnóstico que não faz parte do salvamento.
+ const persisted=await env.DB.prepare(
+  'SELECT enabled,updated_at FROM ml_group_copy_auto_settings WHERE id=1'
+ ).first();
+ if(!persisted||Boolean(persisted.enabled)!==body.enabled)
+  throw fail('A preferência não foi confirmada no banco. Tente salvar novamente.',503);
+ return {ok:true,enabled:persisted.enabled===1,updated_at:Number(persisted.updated_at||now)};
 }
 // Ação de teste explícita: importa no máximo uma oferta elegível para a fila,
 // sem chamar APIs de envio nem alterar horários de publicação.
 export async function testGroupCopyImport(env){
  const state=await groupCopyState(env);
  if(!state.enabled)throw fail('Ative e salve a importação automática antes de testar.');
- if(!state.monitor_enabled)throw fail('Ative o monitor de grupos para continuar o teste.');
  if(!state.store_configured||(!state.authorized_groups&&!state.waiting))
   throw fail('Cadastre sua loja e escolha pelo menos um grupo autorizado.');
  const result=await runGroupCopyScheduled(env);
@@ -249,8 +266,8 @@ export async function runGroupCopyScheduled(env,{now=null,preferRecent=false}={}
  if(claimed.meta?.changes!==1)return {skipped:'disabled_or_busy'};
  try{
   await ensureMonitor(env);
-  const monitor=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
-  if(!monitor?.enabled)return {skipped:'monitor_off'};
+  // O monitor controla NOVAS capturas, não os itens já persistidos.
+  // O filtro da consulta abaixo continua exigindo grupos autorizados.
   const account=await affiliateStoreState(env);
   if(!account.mercadolivre.configured)return {skipped:'missing_store'};
   await ensureLinkBatches(env);
