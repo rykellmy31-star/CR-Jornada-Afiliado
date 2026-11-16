@@ -321,8 +321,9 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceR
   "AND (sp.product_id IS NULL OR sp.status<>'ok' OR sp.checked_at<?) "+
   "AND (sp.product_id IS NULL OR sp.checked_at<=?) "+
   "AND (ds.product_id IS NULL OR ds.next_scan_at<=?) "+
-  "AND NOT (m.last_seen_price_cents>=1000 AND m.last_seen_at BETWEEN ? AND ? "+
-  "AND m.last_seen_deal_json IS NOT NULL) "+
+  "AND NOT (COALESCE(m.last_seen_price_cents,0)>=1000 "+
+  "AND COALESCE(m.last_seen_at,0) BETWEEN ? AND ? "+
+  "AND COALESCE(m.last_seen_deal_json,'')<>'') "+
   "ORDER BY COALESCE(ds.last_scan_at,0) ASC,l.id ASC LIMIT ?":
   "AND (sp.product_id IS NULL "+
   "OR (sp.status='ok' AND sp.checked_at<=?) "+
