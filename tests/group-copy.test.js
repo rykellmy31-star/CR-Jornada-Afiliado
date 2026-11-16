@@ -59,8 +59,11 @@ test('importação automática começa desligada, exige loja e monitor, sem exig
   await seed(env);
   const active=await saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true});
   assert.equal(active.enabled,true);
-  assert.equal(active.authorized_groups,1);
-  assert.equal(active.store_configured,true);
+  assert.equal(active.ok,true);
+  assert.ok(active.updated_at>0,'o D1 confirmou o salvamento');
+  const detailed=await groupCopyState(env);
+  assert.equal(detailed.authorized_groups,1);
+  assert.equal(detailed.store_configured,true);
   const off=await saveGroupCopySettings(env,{enabled:false,experimental_acknowledged:false});
   assert.equal(off.enabled,false);
  }finally{db.close();}
@@ -279,4 +282,63 @@ test('produto direto já capturado entra na fila mesmo com grupo pausado e sem e
   assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
   assert.equal((await runGroupCopyScheduled(env)).queued,undefined,'sem duplicações');
  }finally{db.close();}
+});
+
+
+test('importação salva e persiste após recarregar, mesmo com grupos e monitor pausados',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  const item=env.DB.prepare('SELECT product_id FROM ml_monitor_links').first();
+  const t=Math.floor(Date.now()/1000);
+  env.DB.prepare(
+   "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,5490,'ok',?,0,'test')"
+  ).bind(item.product_id,t).run();
+  await saveMonitorSettings(env,{enabled:false});
+  env.DB.prepare('UPDATE ml_monitor_groups SET enabled=0').run();
+  const saved=await saveGroupCopySettings(env,{enabled:true});
+  assert.equal(saved.ok,true);
+  assert.equal(saved.enabled,true);
+  assert.equal((await groupCopyLiveState(env)).enabled,true,'consulta rápida restaura o checkbox');
+  const afterReload=await groupCopyState(env);
+  assert.equal(afterReload.enabled,true,'mesmo estado persistido no banco');
+  assert.equal(afterReload.monitor_enabled,false,'captura permanece desligada');
+  assert.equal(afterReload.authorized_groups,0,'grupos continuam pausados');
+  const run=await runGroupCopyScheduled(env);
+  assert.equal(run.queued,1,JSON.stringify(run));
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,1);
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_settings').first().enabled,0);
+  const disabled=await saveGroupCopySettings(env,{enabled:false});
+  assert.equal(disabled.enabled,false);
+  assert.equal((await groupCopyLiveState(env)).enabled,false);
+ }finally{db.close();}
+});
+
+test('salvar não depende do diagnóstico completo, lento ou indisponível',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  const normalPrepare=env.DB.prepare.bind(env.DB);
+  env.DB.prepare=sql=>{
+   if(String(sql).includes('LEFT JOIN ml_monitor_site_prices sp'))
+    throw new Error('diagnóstico completo temporariamente indisponível');
+   return normalPrepare(sql);
+  };
+  const saved=await saveGroupCopySettings(env,{enabled:true});
+  assert.equal(saved.enabled,true);
+  assert.equal((await groupCopyLiveState(env)).enabled,true);
+  await assert.rejects(groupCopyState(env),/diagnóstico completo/);
+  const off=await saveGroupCopySettings(env,{enabled:false});
+  assert.equal(off.enabled,false,'desligar também independe de diagnóstico');
+ }finally{db.close();}
+});
+
+test('interface mantém checkbox sincronizado sem respostas antigas do diagnóstico sobrescreverem o salvamento',()=>{
+ assert.match(CLIENT_JS,/applyCopyGroupsPreference\(saved\.enabled\)/);
+ assert.match(CLIENT_JS,/copyGroupsSaveEpoch\+\+/);
+ assert.match(CLIENT_JS,/expectedEpoch===copyGroupsSaveEpoch/);
+ assert.match(CLIENT_JS,/copyGroupsTouched=true/);
+ assert.match(CLIENT_JS,/saved\?\.ok!==true\|\|saved\.enabled!==desired/);
+ assert.match(CLIENT_JS,/const saved=await call\('\/api\/copy-groups\/live'/);
 });
