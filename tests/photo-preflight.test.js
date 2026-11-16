@@ -446,7 +446,7 @@ test('manual e cron acionam a mesma operação, sem modificar intervalo',()=>{
 });
 
 
-test('Cron busca foto ANTES de marcar Envio em andamento, sem alterar relógio',async()=>{
+test('Cron reivindica oferta como o botão manual durante leitura lenta de foto, sem alterar relógio',async()=>{
  const {DB,env,close}=setup(),original=globalThis.fetch;
  let release,started,photos=0;
  const gate=new Promise(resolve=>release=resolve);
@@ -475,8 +475,8 @@ test('Cron busca foto ANTES de marcar Envio em andamento, sem alterar relógio',
   const task=runScheduled(env);
   await Promise.race([entered,new Promise((_,reject)=>setTimeout(
    ()=>reject(Error('Cron não iniciou a leitura da foto')),3000))]);
-  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready',
-   'o Cron não pode marcar envio durante leitura lenta da foto');
+  assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'sending',
+   'o Cron deve reivindicar a oferta como o botão manual, impedindo concorrência');
   release();
   assert.equal((await task).status,'published');
   assert.equal(photos,1);
