@@ -224,7 +224,10 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
    // Exigir o mesmo produto OU seu encurtador salvo na mesma mensagem.
    if(msg){
     const urls=msg.urls||[];
-    const original=urls.some(url=>url===row.source_url);
+    const original=urls.some(url=>{
+     const candidate=urlCandidate(url);
+     return candidate?.kind==='product'&&candidate.product_id===row.product_id;
+    });
     const short=await env.DB.prepare(
      "SELECT short_url FROM ml_monitor_shortlinks "+
      "WHERE group_id=? AND message_id=? AND status='resolved' LIMIT 1"
