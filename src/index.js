@@ -403,16 +403,6 @@ async function runScheduled(env){
    "AND reason<>'Aguardando foto real na preparação automática' "+
    "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).run();
-  // Os retries antigos podiam impor 5/15 minutos de espera mesmo depois
-  // de chegar o próximo horário válido de publicação. Encurtar SOMENTE
-  // esperas de foto confirmadamente seguras; não alterar intervalo de
-  // publicação nem rever envios de status ambíguo.
-  const photoNow=Math.floor(Date.now()/1000);
-  await env.DB.prepare(
-   "UPDATE telegram_photo_retries SET next_retry_at=? "+
-   "WHERE reason='Aguardando foto real na preparação automática' "+
-   "AND next_retry_at>? AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
-  ).bind(photoNow+60,photoNow+60).run();
   // Sem foto confirmada, respeite o backoff de cada oferta.
   // A versão anterior ignorava o campo next_retry_at e reconsultava a
   // MESMA mídia de anúncios falhos a cada Cron, mantendo o lease ocupado.
@@ -453,7 +443,13 @@ async function runScheduled(env){
     .bind(...bindBase,cursor).first();
    if(!offer)offer=await env.DB.prepare(base+" ORDER BY o.id ASC LIMIT 1")
     .bind(...bindBase).first();
-   if(!offer)return {skipped:checkedOffers.length?'awaiting_photo':'photo_backoff_or_empty'};
+   if(!offer){
+    if(checkedOffers.length)return {skipped:'awaiting_photo',checked:checkedOffers.length};
+    const ready=await env.DB.prepare(
+     "SELECT id FROM offers WHERE status='ready' AND (?='Geral' OR lower(category)=lower(?)) LIMIT 1"
+    ).bind(settings.category,settings.category).first();
+    return {skipped:ready?'photo_backoff':'empty'};
+   }
    checkedOffers.push(offer.id);
    cursor=offer.id;
    await env.DB.prepare(
