@@ -218,8 +218,8 @@ test('API mestre exige login; agendador desligado mantém cinco filas intactas',
     try{
       const tasks=[];
       await worker.scheduled({},env,{waitUntil:p=>tasks.push(p)});
-      // Seis publicadores + revisão independente + importador de grupos desligado por padrão.
-      assert.equal(tasks.length,8);
+      // Seis publicadores + revisão independente + importador e checagem de preços manuais no Cron.
+      assert.equal(tasks.length,9);
       await Promise.all(tasks);
       assert.equal(calls.length,0);
     }finally{globalThis.fetch=original;}
