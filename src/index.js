@@ -5,6 +5,7 @@ import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLin
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled} from './group-copy.js';
+import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto,cachedProductImage,rememberProductImage } from './offer-images.js';
@@ -200,8 +201,9 @@ async function sendOfferWithImage(env, chat, offer) {
  const imageUrl=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
   {retryOnMiss:true,sourceLookup:resolveOfferSource});
  if(!imageUrl)throw photoRequiredError('Foto real não encontrada no anúncio; não foi enviada publicação sem imagem.');
- const payload=telegramPayload(offer,chat,Date.now(),{includeLink:true});
- const caption=payload.text.length<=1024?payload.text:telegramPayload(offer,chat).text;
+ const outputOffer=await withGroupCopyPublicLink(env,offer);
+ const payload=telegramPayload(outputOffer,chat,Date.now(),{includeLink:true});
+ const caption=payload.text.length<=1024?payload.text:telegramPayload(outputOffer,chat).text;
  const message=await sendTelegramProductPhoto(env.TELEGRAM_BOT_TOKEN,chat,imageUrl,{...payload,text:caption});
  try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
  catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
