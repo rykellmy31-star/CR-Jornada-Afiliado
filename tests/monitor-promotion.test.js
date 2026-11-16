@@ -217,7 +217,7 @@ test('preço ausente sem legenda salva: recupera somente mensagem original na Ev
   };
   const result=await recoverMissingMonitorPrices(env,{allowEvolution:true});
   assert.equal(result.recovered,1);
-  assert.equal(calls,1);
+  assert.equal(calls,0,'preço estruturado da mensagem já capturado evita uma nova chamada à Evolution');
   const state=await monitorState(env);
   assert.equal(state.links[0].last_seen_price_cents,9110);
   assert.match(state.links[0].promotion.join(' '),/de R\$ 149,99 por R\$ 91,10/);
