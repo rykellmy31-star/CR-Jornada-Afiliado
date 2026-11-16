@@ -614,7 +614,7 @@ export function renderPage() {
           <p id="coupon-feedback" class="feedback" role="status" aria-live="polite"></p>
         </form>
       </section>
-      <section class="card list-panel"><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p><p class="hint">Horários previstos calculados pela ordem da fila, intervalo, limite diário e janela de publicação da Bahia. Uma pausa, publicação manual ou falha pode alterar a previsão.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Próxima publicação (previsão)</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="5">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
+      <section class="card list-panel"><p id="cron-health" class="hint">Última execução automática: aguardando registro do Cron.</p><div class="section-header"><div><h2>Fila de ofertas</h2><p>Histórico e status de até 100 ofertas recentes.</p><p class="hint">Horários previstos calculados pela ordem da fila, intervalo, limite diário e janela de publicação da Bahia. Uma pausa, publicação manual ou falha pode alterar a previsão.</p></div><button id="refresh" class="outline" type="button">Atualizar</button></div><div class="table-scroll"><table><thead><tr><th>Produto</th><th>Status</th><th>Próxima publicação (previsão)</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody id="offers-rows"><tr><td colspan="5">Nenhuma oferta cadastrada.</td></tr></tbody></table></div></section>
       <section id="activity-page" class="card history hidden"><div class="section-header"><div><h2>📋 Atividade recente</h2><p>Registros de tentativas, publicações e mudanças.</p></div><button id="activity-refresh" type="button" class="outline">Atualizar</button></div><div id="log-list" class="logs">Ainda não há eventos.</div></section>
       <footer>Desenvolvido por Carlos Rykellmy Santos Correia • CR Jornada<br>Telegram, WhatsApp, Cupons e Automação • Geração automática de links depende de integração autorizada.</footer>
     </section>
@@ -1465,6 +1465,19 @@ async function refresh(){
       :(s.bot_mode==='shared'
         ?(data.telegram_token_configured?'✓ Usando o bot principal.':'⚠ O bot principal ainda não tem token.')
         :(data.telegram_token_configured?'✓ Token exclusivo criptografado e disponível.':'⚠ Cadastre o token exclusivo do BotFather.'));
+    const cron=data.cron_health;
+    const cronLabels={
+      published:'oferta publicada',awaiting_photo:'foto indisponível; será tentada novamente',
+      interval_or_schedule:'aguardando horário ou intervalo configurado',
+      master_off:'robô geral desligado',disabled:'automação ou canal desativado',
+      empty:'sem ofertas prontas',busy:'outra execução ainda em andamento',
+      needs_review:'envio precisa de revisão',already_claimed:'oferta já em processamento',
+      error:'erro na execução automática'
+    };
+    $('cron-health').textContent=cron
+      ?'Último ciclo automático: '+toDate(cron.last_checked_at)+' • '+(cronLabels[cron.last_result]||cron.last_result)+
+       (cron.last_error?' • '+cron.last_error:'')
+      :'Última execução automática: nenhum ciclo registrado nesta versão.';
     const counts=Object.fromEntries(data.counts.map(x=>[x.status,x.total]));
     for(const k of ['ready','published','needs_review']) $('count-'+k).textContent=counts[k]||0;
     $('count-total').textContent=Object.values(counts).reduce((a,b)=>a+b,0);
