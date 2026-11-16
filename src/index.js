@@ -4,7 +4,8 @@ import {affiliateStoreState,connectAffiliateStore,previewAffiliateLink,createAff
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLinkBatchDuplicates} from './link-batches.js';
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,bulkCategorizeMonitorLinks,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
-import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport} from './group-copy.js';
+import {groupCopyState,groupCopyLiveState,saveGroupCopySettings,runGroupCopyScheduled,runGroupCopyBatch,testGroupCopyImport} from './group-copy.js';
+import {processCapturedGroupOffers} from './copy-groups-realtime.js';
 import {classifyMonitorMissingCategories} from './monitor-official-categories.js';
 import {requestManualGroupCheck,readManualGroupCheck,executeManualGroupCheck} from './copy-groups-manual-checks.js';
 import {installMonitorWebhook,deriveMonitorWebhookToken,monitorWebhookReady,monitorInstanceValid} from './monitor-webhook-setup.js';
@@ -531,7 +532,14 @@ async function router(request, env, ctx=null) {
     if(!request.headers.get('content-type')?.startsWith('application/json'))return fail('Envie JSON.',415);
     const event=await getMonitorWebhookBody(request);
     if(event?.instance!==autoReceiver[1])return fail('Instância do evento não corresponde ao webhook.',403);
-    return json(await ingestMonitorEvent(env,event));
+    const result=await ingestMonitorEvent(env,event);
+    if(ctx?.waitUntil){
+      ctx.waitUntil(captureGroupOriginalPhotos(env,event).catch(error=>
+       console.warn('Foto original do grupo:',String(error?.message||error).slice(0,100))));
+      ctx.waitUntil(processCapturedGroupOffers(env,result).catch(error=>
+       console.warn('Importação imediata:',String(error?.message||error).slice(0,100))));
+    }
+    return json(result);
   }
   // Rota de entrada restrita para eventos da Evolution. Não modifica webhooks nem instâncias.
   const receiver=u.pathname.match(/^\/hooks\/wa-links\/([A-Za-z0-9_-]{24,128})$/);
@@ -543,8 +551,12 @@ async function router(request, env, ctx=null) {
     const result=await ingestMonitorEvent(env,event);
     // Somente imagens anexadas à oferta do grupo autorizado. Falha de mídia
     // não atrasa o recebimento dos links nem interrompe o webhook.
-    if(ctx?.waitUntil)ctx.waitUntil(captureGroupOriginalPhotos(env,event).catch(error=>
-     console.warn('Foto do grupo não recuperada:',String(error?.message||error).slice(0,100))));
+    if(ctx?.waitUntil){
+      ctx.waitUntil(captureGroupOriginalPhotos(env,event).catch(error=>
+       console.warn('Foto do grupo não recuperada:',String(error?.message||error).slice(0,100))));
+      ctx.waitUntil(processCapturedGroupOffers(env,result).catch(error=>
+       console.warn('Importação imediata:',String(error?.message||error).slice(0,100))));
+    }
     return json(result);
   }
   if (!u.pathname.startsWith('/api/')) return fail('Não encontrado.', 404);
@@ -575,6 +587,7 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/stores/mercadolivre/preview'&&method==='POST')return json(await previewAffiliateLink(env,await getBody(request)));
   if(u.pathname==='/api/stores/mercadolivre/shorten'&&method==='POST')return json(await createAffiliateShortlink(env,await getBody(request),u.origin),201);
   if(u.pathname==='/api/copy-groups'&&method==='GET')return json(await groupCopyState(env));
+  if(u.pathname==='/api/copy-groups/live'&&method==='GET')return json(await groupCopyLiveState(env));
   if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
   if(u.pathname==='/api/copy-groups/test'&&method==='POST')return json(await testGroupCopyImport(env));
   if(u.pathname==='/api/copy-groups/categorize'&&method==='POST')return json(await requestManualGroupCheck(env,'categories'),202);
@@ -1011,12 +1024,16 @@ export default {
     if(env.DB)ctx.waitUntil((async()=>{
       // Enfileirar ofertas captadas exige apenas D1 e não deve esperar as
       // consultas demoradas de foto do Telegram ou categorias do ML.
-      await runGroupCopyScheduled(env);
+      await runGroupCopyBatch(env,{limit:3});
       await telegramPublished;
       // Classificação em segundo plano continua sem bloquear novas filas.
       await executeManualGroupCheck(env,'categories');
-      try{await classifyMonitorMissingCategories(env,{limit:4});}
-      catch(error){console.error('Categorias oficiais:',String(error?.message||error).slice(0,140));}
+      try{
+        await classifyMonitorMissingCategories(env,{limit:8});
+        // Também importar os produtos que acabaram de receber categoria
+        // neste próprio ciclo, sem aguardar mais um minuto.
+        await runGroupCopyBatch(env,{limit:3});
+      }catch(error){console.error('Categorias oficiais:',String(error?.message||error).slice(0,140));}
     })().catch(error=>console.error('Copiar de grupos:',String(error?.message||error).slice(0,140))));
     // Tarefa persistente de validação em massa: não depende da página aberta.
     if(env.DB)ctx.waitUntil((async()=>{

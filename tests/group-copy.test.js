@@ -5,7 +5,8 @@ import {readFileSync} from 'node:fs';
 import {renderPage,CLIENT_JS} from '../src/ui.js';
 import {ensureMonitor,addMonitorGroup,saveMonitorSettings,ingestMonitorEvent} from '../src/whatsapp-link-monitor.js';
 import {connectAffiliateStore} from '../src/affiliate-stores.js';
-import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport,selectGroupCopyPrice} from '../src/group-copy.js';
+import {groupCopyState,groupCopyLiveState,saveGroupCopySettings,runGroupCopyScheduled,runGroupCopyBatch,testGroupCopyImport,selectGroupCopyPrice} from '../src/group-copy.js';
+import {processCapturedGroupOffers} from '../src/copy-groups-realtime.js';
 import {extractPromotionTerms,safePromotionTerms} from '../src/promotion-terms.js';
 import worker from '../src/index.js';
 
@@ -47,13 +48,13 @@ test('COPIAR DE GRUPOS usa monitor único, aparece no menu e conserva conversão
  assert.match(CLIENT_JS,/selectedPage==='copygroups'/);
  assert.match(CLIENT_JS,/runCopyGroupsScheduled|refreshCopyGroups/);
 });
-test('importação experimental começa desligada e requer confirmação, loja e monitor',async()=>{
+test('importação automática começa desligada, exige loja e monitor, sem exigir confirmação repetida',async()=>{
  const {env,db}=setup();
  try{
   const initial=await groupCopyState(env);
   assert.equal(initial.enabled,false);
   await assert.rejects(testGroupCopyImport(env),/Ative e salve a importação/);
-  await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:false}),/Confirme/);
+  await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:false}),/Cadastre antes/);
   await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true}),/Cadastre antes/);
   await seed(env);
   const active=await saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true});
@@ -173,4 +174,58 @@ test('COPIAR DE GRUPOS importa preço recuperado da própria mensagem sem consul
   assert.equal((await runGroupCopyScheduled(env)).queued,undefined,'não duplicar oferta');
   assert.equal(env.DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,1);
  }finally{db.close();}
+});
+
+
+test('webhook processa link novo, classifica, capta preço e importa sem esperar Cron ou enviar mensagens',async()=>{
+ const {env,db}=setup(),old=globalThis.fetch;let categoryCalls=0;
+ try{
+  await ensureMonitor(env);
+  await connectAffiliateStore(env,{official_url:'https://meli.la/2XzEMvr'},
+    async()=>new Response(null,{status:302,headers:{location:'https://www.mercadolivre.com.br/social/rykellmy_007?matt_word=rykellmy_007&matt_tool=33321398'}}));
+  await addMonitorGroup(env,{instance_name:'cr-jornada-afiliados',group_jid:GROUP,
+    group_name:'Grupo autorizado',permission_confirmed:true});
+  await saveMonitorSettings(env,{enabled:true});
+  const enabled=await saveGroupCopySettings(env,{enabled:true});
+  assert.equal(enabled.enabled,true,'configuração definitiva não exige confirmação experimental');
+  const unauthed=await worker.fetch(new Request('https://app.example.com/api/copy-groups/live'),env);
+  assert.equal(unauthed.status,401,'contadores ao vivo são restritos ao painel');
+  globalThis.fetch=async(url)=>{
+   const u=String(url);
+   if(u.startsWith('https://api.mercadolibre.com/sites/MLB/domain_discovery/search?')){
+    categoryCalls++;
+    return Response.json([{category_id:'MLB12345',domain_id:'MLB-FERRAMENTAS',
+      domain_name:'Ferramentas e ferramentas manuais',category_name:'Ferramentas'}]);
+   }
+   throw Error('Webhook jamais pode publicar, mandar mídia ou consultar endpoint não autorizado: '+u);
+  };
+  const event=await ingestMonitorEvent(env,{event:'messages.upsert',instance:'cr-jornada-afiliados',
+   data:{key:{remoteJid:GROUP,fromMe:false,id:'NEW-DEAL-9087'},
+    message:{conversation:'Furadeira para oficina De: R$ ~149,90~ Por: R$ 79,90 '+PRODUCT}}});
+  assert.equal(event.captured,1);
+  const processed=await processCapturedGroupOffers(env,event);
+  assert.equal(categoryCalls,1);
+  assert.equal(processed.imported.queued,1,JSON.stringify(processed));
+  const live=await groupCopyLiveState(env);
+  assert.equal(live.queued_count,1);
+  assert.equal(live.imported,1);
+  const offer=env.DB.prepare('SELECT * FROM offers LIMIT 1').first();
+  assert.equal(offer.status,'ready','não publicou no Telegram nem WhatsApp');
+  assert.equal(offer.price_cents,7990);
+  assert.equal(offer.old_price_cents,14990);
+  const again=await runGroupCopyBatch(env,{limit:4});
+  assert.equal(again.queued,0,'mesmo produto nunca é importado duas vezes');
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS n FROM offers').first().n,1);
+ }finally{globalThis.fetch=old;db.close();}
+});
+test('página de Copiar Grupos mostra painel definitivo, polling leve e aviso correto de comissão',()=>{
+ const html=renderPage();
+ assert.match(html,/Importador automático de ofertas/);
+ assert.match(html,/copy-groups-live/);
+ assert.doesNotMatch(html,/copy-groups-ack/);
+ assert.match(CLIENT_JS,/refreshCopyGroupsLive/);
+ assert.match(CLIENT_JS,/copy-groups\/live/);
+ assert.match(CLIENT_JS,/setInterval\(refreshCopyGroupsLive,3000\)/);
+ assert.match(CLIENT_JS,/Importação automática ativa/);
+ assert.match(html,/comissão ainda não está comprovada/);
 });

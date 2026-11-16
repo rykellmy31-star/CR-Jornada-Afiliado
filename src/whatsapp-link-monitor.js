@@ -1151,7 +1151,7 @@ export function monitorRetryDelaySeconds(attempts){
  // Desacelerar 403/429 separadamente para respeitar o Mercado Livre.
  return attempts<=8?30:60;
 }
-export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
+export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch,limit=6,preferRecent=false,allowBrowser=true}={}){
  await ensureMonitor(env);
  const state=await env.DB.prepare('SELECT enabled FROM ml_monitor_settings WHERE id=1').first();
  if(!state?.enabled)return {skipped:'disabled'};
@@ -1206,9 +1206,9 @@ export async function resolveMonitorShortlinks(env,{now=null,fetcher=fetch}={}){
   // Não permitir que os links mais recentes e os retries ruins deixem os
   // antigos permanentemente para trás. Toda linha recebe seu próprio lease.
   "ORDER BY CASE WHEN s.status='pending' THEN 0 ELSE 1 END, "+
-  "COALESCE(rs.next_retry_at,0),s.created_at ASC,s.id ASC LIMIT 6";
- const items=(await env.DB.prepare(query).bind(at,at).all()).results;
- let browserBudget=1;
+  "COALESCE(rs.next_retry_at,0),s.created_at "+(preferRecent?"DESC":"ASC")+",s.id "+(preferRecent?"DESC":"ASC")+" LIMIT ?";
+ const items=(await env.DB.prepare(query).bind(at,at,Math.min(6,Math.max(1,limit))).all()).results;
+ let browserBudget=allowBrowser?1:0;
  const outcomes=await Promise.allSettled(items.map(async item=>{
   let claimed=false;
   try{
