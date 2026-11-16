@@ -388,8 +388,11 @@ async function runScheduled(env){
     // Não altera interval_minutes: os intervalos de PUBLICAÇÕES seguem
     // exclusivamente a verificação shouldSend() já existente.
     const nextAt=Math.floor(Date.now()/1000)+60;
+    // Duas buscas dentro do mesmo ciclo equivalem a UMA tentativa
+    // agendada para o contador histórico de falhas, preservando métricas.
     await env.DB.prepare(
-     'UPDATE telegram_photo_retries SET next_retry_at=? WHERE offer_id=?'
+     'UPDATE telegram_photo_retries SET next_retry_at=?, '+
+     'attempts=CASE WHEN attempts>1 THEN attempts-1 ELSE 1 END WHERE offer_id=?'
     ).bind(nextAt,offer.id).run();
     await log(env,'photo_retry_scheduled',
      'Foto não recuperada após duas buscas imediatas; rechecagem da foto em até 60 segundos.',offer.id);
