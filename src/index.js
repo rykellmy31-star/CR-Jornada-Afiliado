@@ -7,6 +7,7 @@ import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from '.
 import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport} from './group-copy.js';
 import {installMonitorWebhook,deriveMonitorWebhookToken,monitorWebhookReady,monitorInstanceValid} from './monitor-webhook-setup.js';
 import {withGroupCopyPublicLink} from './group-copy-public-links.js';
+import {listMessageTemplates,saveMessageTemplate,saveMessageTemplateSettings,deleteMessageTemplate,previewMessageTemplate,withActiveMessageTemplate} from './message-templates.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
 import { resolveProductImageWithRetry,rememberTelegramSentPhoto,cachedProductImage,rememberProductImage } from './offer-images.js';
@@ -203,8 +204,9 @@ async function sendOfferWithImage(env, chat, offer) {
   {retryOnMiss:true,sourceLookup:resolveOfferSource});
  if(!imageUrl)throw photoRequiredError('Foto real não encontrada no anúncio; não foi enviada publicação sem imagem.');
  const outputOffer=await withGroupCopyPublicLink(env,offer);
- const payload=telegramPayload(outputOffer,chat,Date.now(),{includeLink:true});
- const caption=payload.text.length<=1024?payload.text:telegramPayload(outputOffer,chat).text;
+ const renderOffer=await withActiveMessageTemplate(env,outputOffer,'mercadolivre');
+ const payload=telegramPayload(renderOffer,chat,Date.now(),{includeLink:true});
+ const caption=payload.text.length<=1024?payload.text:telegramPayload(renderOffer,chat).text;
  const message=await sendTelegramProductPhoto(env.TELEGRAM_BOT_TOKEN,chat,imageUrl,{...payload,text:caption});
  try{await rememberTelegramSentPhoto(env,offer.affiliate_url,imageUrl,message.message_id);}
  catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
@@ -459,6 +461,11 @@ async function router(request, env, ctx=null) {
   // Verifica a sessão sem consultar o D1: a interface pode abrir antes dos dados secundários.
   if(u.pathname==='/api/session'&&method==='GET')return json({authenticated:true});
   if(u.pathname==='/api/overview'&&method==='GET')return json(await overviewState(env));
+  if(u.pathname==='/api/message-templates'&&method==='GET')return json(await listMessageTemplates(env,u.searchParams.get('platform')||'mercadolivre'));
+  if(u.pathname==='/api/message-templates/save'&&method==='POST')return json(await saveMessageTemplate(env,await getBody(request)));
+  if(u.pathname==='/api/message-templates/settings'&&method==='POST')return json(await saveMessageTemplateSettings(env,await getBody(request)));
+  if(u.pathname==='/api/message-templates/delete'&&method==='POST')return json(await deleteMessageTemplate(env,await getBody(request)));
+  if(u.pathname==='/api/message-templates/preview'&&method==='POST')return json(previewMessageTemplate(await getBody(request)));
   if(u.pathname==='/api/stores/mercadolivre'&&method==='GET')return json(await affiliateStoreState(env));
   if(u.pathname==='/api/stores/mercadolivre/connect'&&method==='POST')return json(await connectAffiliateStore(env,await getBody(request)));
   if(u.pathname==='/api/stores/mercadolivre/preview'&&method==='POST')return json(await previewAffiliateLink(env,await getBody(request)));
