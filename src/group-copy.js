@@ -37,6 +37,8 @@ export async function groupCopyState(env){
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
    "AND (sp.product_id IS NULL OR sp.status<>'ok' OR sp.price_cents<=0 OR sp.checked_at<? OR sp.checked_at>?) "+
    "THEN 1 ELSE 0 END),0) AS needs_price,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' AND sp.product_id IS NULL THEN 1 ELSE 0 END),0) AS price_never_checked,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' AND sp.status='unavailable' THEN 1 ELSE 0 END),0) AS price_lookup_failed,"+
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
    "AND sp.status='ok' AND sp.price_cents>0 AND sp.checked_at>=? AND sp.checked_at<=? "+
    "THEN 1 ELSE 0 END),0) AS with_price "+
@@ -52,8 +54,12 @@ export async function groupCopyState(env){
   authorized_groups:Number(groups?.total||0),store_configured:account.mercadolivre.configured,
   label:account.mercadolivre.label||null,waiting:Number(waiting?.total||0),
   readiness:{needs_category:Number(readiness?.needs_category||0),
-   needs_price:Number(readiness?.needs_price||0),with_price:Number(readiness?.with_price||0)},
-  official_categories,recent:(recent?.results||[]),commission_verified:false};
+   needs_price:Number(readiness?.needs_price||0),
+   price_never_checked:Number(readiness?.price_never_checked||0),
+   price_lookup_failed:Number(readiness?.price_lookup_failed||0),
+   with_price:Number(readiness?.with_price||0)},
+  official_categories:{...official_categories,waiting:Number(readiness?.needs_category||0)},
+  recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
  await ensureGroupCopyAutomation(env);
