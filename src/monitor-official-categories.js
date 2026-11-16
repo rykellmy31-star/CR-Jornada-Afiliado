@@ -138,18 +138,25 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    if(!cat){failed++;errors.push('A categoria oficial não pôde ser salva');continue;}
    await env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_official_category_map(ml_category_id,domain_id,official_label,group_category_id,created_at) VALUES(?,?,?,?,?)')
     .bind(prediction.category_id,prediction.domain_id,prediction.official_label,cat.id,stamp).run();
-   // Registrar a categoria identificada mesmo se o administrador desabilitou
-   // o destino correspondente. Não reativar categorias manualmente.
+   // Nunca reabilitar categorias que o proprietário desativou. Quando ele
+   // decidir ativar novamente, a tarefa reusa o mesmo mapeamento, sem criar outra.
+   if(cat.enabled!==1){
+    failed++;
+    const reason='Categoria existente desativada: '+cat.name;
+    errors.push(reason);
+    await env.DB.prepare('INSERT INTO ml_monitor_official_category_retry(product_id,attempts,next_retry_at,last_error) VALUES(?,1,?,?) '+
+     'ON CONFLICT(product_id) DO UPDATE SET attempts=attempts+1,next_retry_at=excluded.next_retry_at,last_error=excluded.last_error')
+     .bind(row.product_id,stamp+600,reason).run();
+    continue;
+   }
    await env.DB.prepare('INSERT INTO ml_monitor_official_category_items(product_id,ml_category_id,domain_id,official_label,group_category_id,classified_at) VALUES(?,?,?,?,?,?) '+
     'ON CONFLICT(product_id) DO UPDATE SET ml_category_id=excluded.ml_category_id,domain_id=excluded.domain_id,official_label=excluded.official_label,group_category_id=excluded.group_category_id,classified_at=excluded.classified_at')
     .bind(row.product_id,prediction.category_id,prediction.domain_id,prediction.official_label,cat.id,stamp).run();
-   if(cat.enabled===1){
-    const updated=await env.DB.prepare(
-     "UPDATE ml_monitor_links SET category=?,classification='mercadolivre' "+
-     "WHERE id=? AND status='available' AND classification<>'selected'"
-    ).bind(cat.name,row.id).run();
-    classified+=Number(updated.meta?.changes||0);
-   }else errors.push('Categoria existente desativada: '+cat.name);
+   const updated=await env.DB.prepare(
+    "UPDATE ml_monitor_links SET category=?,classification='mercadolivre' "+
+    "WHERE id=? AND status='available' AND classification<>'selected'"
+   ).bind(cat.name,row.id).run();
+   classified+=Number(updated.meta?.changes||0);
    await env.DB.prepare('DELETE FROM ml_monitor_official_category_retry WHERE product_id=?').bind(row.product_id).run();
   }
   const lastError=errors[0]||'';
