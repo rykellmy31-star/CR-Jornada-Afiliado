@@ -99,7 +99,7 @@ test('captura produto de terceiro, elimina rastreio antigo, exige preço oficial
   assert.equal(unauthorized.status,401);
  }finally{db.close();}
 });
-test('sem grupo autorizado ativo ou sem preço recente não há publicação',async()=>{
+test('preço vencido não entra, mas grupo pausado processa backlog autorizado já capturado',async()=>{
  const {env,db}=setup();
  try{
   await seed(env);
@@ -110,8 +110,10 @@ test('sem grupo autorizado ativo ou sem preço recente não há publicação',as
   assert.equal(env.DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
   env.DB.prepare('UPDATE ml_monitor_groups SET enabled=0').run();
   env.DB.prepare("UPDATE ml_monitor_site_prices SET checked_at=?").bind(Math.floor(Date.now()/1000)).run();
-  assert.equal((await runGroupCopyScheduled(env)).queued,undefined);
-  assert.equal(env.DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
+  const imported=await runGroupCopyScheduled(env);
+  assert.equal(imported.queued,1,JSON.stringify(imported));
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,1);
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
  }finally{db.close();}
 });
 
@@ -150,7 +152,7 @@ test('mensagem do grupo extrai De/Por com R$ riscado sem confundir parcelas',()=
  assert.equal(other.old_price_cents,4900);
  assert.equal(extractPromotionTerms('Só parcelamento em 8x sem juros').price_cents,null);
 });
-test('preço do grupo é usado apenas com origem, valor consistente e prazo de seis horas',()=>{
+test('preço do grupo é usado apenas com origem, valor consistente e prazo de 24 horas',()=>{
  const at=1794800000;
  const terms=extractPromotionTerms('De: R$ ~199,90~ Por: R$ 79,90');
  const item={product_id:'MLB12345678',message_id:'msg-price',site_status:'unavailable',
@@ -161,7 +163,7 @@ test('preço do grupo é usado apenas com origem, valor consistente e prazo de s
  assert.equal(result.terms.price_source,'grupo');
  assert.equal(safePromotionTerms(result.terms).old_price_cents,19990);
  assert.equal(selectGroupCopyPrice({...item,group_price_cents:2990},at),null,'preço não corresponde à mensagem');
- assert.equal(selectGroupCopyPrice({...item,group_checked_at:at-7*3600},at),null,'preço antigo não pode virar promoção nova');
+ assert.equal(selectGroupCopyPrice({...item,group_checked_at:at-25*3600},at),null,'preço com mais de 24 horas não pode virar promoção nova');
  assert.equal(selectGroupCopyPrice({...item,message_id:''},at),null,'sem mensagem original não usar preço');
  assert.equal(selectGroupCopyPrice({...item,group_price_cents:300,group_deal_json:JSON.stringify({...terms,price_cents:300})},at),null,'valor suspeito requer revisão');
  const site=selectGroupCopyPrice({...item,price_cents:8490,checked_at:at-120,site_status:'ok'},at);
@@ -251,4 +253,30 @@ test('página de Copiar Grupos mostra painel definitivo, polling leve e aviso co
  assert.match(CLIENT_JS,/setInterval\(refreshCopyGroupsLive,3000\)/);
  assert.match(CLIENT_JS,/Importação automática ativa/);
  assert.match(html,/comissão ainda não está comprovada/);
+});
+
+
+test('produto direto já capturado entra na fila mesmo com grupo pausado e sem encurtador',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  await saveGroupCopySettings(env,{enabled:true});
+  const row=env.DB.prepare('SELECT product_id,message_id FROM ml_monitor_links').first();
+  const t=Math.floor(Date.now()/1000);
+  const terms=extractPromotionTerms('De: R$ 149,90 Por: R$ 59,90');
+  env.DB.prepare(
+   'UPDATE ml_monitor_product_meta SET last_seen_price_cents=?,last_seen_deal_json=?,last_seen_at=? WHERE product_id=?'
+  ).bind(5990,JSON.stringify(terms),t,row.product_id).run();
+  env.DB.prepare('UPDATE ml_monitor_groups SET enabled=0 WHERE authorized=1').run();
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS n FROM ml_monitor_shortlinks').first().n,0);
+  const state=await groupCopyState(env);
+  assert.equal(state.authorized_groups,0,'pausa deve continuar respeitada');
+  assert.equal(state.waiting,1,'fila antiga permanece elegível');
+  assert.equal(state.readiness.with_group_price,1);
+  const result=await runGroupCopyScheduled(env);
+  assert.equal(result.queued,1,JSON.stringify(result));
+  assert.equal(env.DB.prepare('SELECT status FROM offers').first().status,'ready');
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
+  assert.equal((await runGroupCopyScheduled(env)).queued,undefined,'sem duplicações');
+ }finally{db.close();}
 });
