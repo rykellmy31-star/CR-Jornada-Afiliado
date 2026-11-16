@@ -10,7 +10,7 @@ import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import {listMessageTemplates,saveMessageTemplate,saveMessageTemplateSettings,deleteMessageTemplate,previewMessageTemplate,withActiveMessageTemplate} from './message-templates.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
-import { resolveProductImageWithRetry,rememberTelegramSentPhoto,cachedProductImage,rememberProductImage } from './offer-images.js';
+import { resolveProductImageWithRetry,rememberTelegramSentPhoto } from './offer-images.js';
 import { resolveOfferSource } from './automatic-price.js';
 import {sendTelegramProductPhoto} from './telegram-photo.js';
 import {prewarmTelegramQueue,resolveScheduledShowcasePhoto} from './photo-preflight.js';
@@ -176,26 +176,28 @@ async function ensureTelegramPhotoRetries(env){
 function photoRequiredError(reason){
  return Object.assign(new Error(reason),{code:'PHOTO_NOT_READY'});
 }
-async function recordTelegramPhotoRetry(env,offer,error){
+async function recordTelegramPhotoRetry(env,offer,error,{keepQueued=false}={}){
  const now=Math.floor(Date.now()/1000);
  await ensureTelegramPhotoRetries(env);
  await env.DB.prepare(
   "INSERT INTO telegram_photo_retries(offer_id,attempts,next_retry_at,reason,updated_at) VALUES(?,1,?,?,?) "+
-  "ON CONFLICT(offer_id) DO UPDATE SET attempts=attempts+1,"+
+  "ON CONFLICT(offer_id) DO UPDATE SET attempts=CASE WHEN attempts<999 THEN attempts+1 ELSE 999 END,"+
   "next_retry_at=excluded.next_retry_at,reason=excluded.reason,updated_at=excluded.updated_at"
- ).bind(offer.id,now+120,String(error?.message||error).slice(0,160),now).run();
+ ).bind(offer.id,now+120,keepQueued?'Aguardando foto real na preparação automática':
+  String(error?.message||error).slice(0,160),now).run();
  const state=await env.DB.prepare('SELECT attempts FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).first();
  const attempts=Number(state?.attempts||1);
  const nextAt=now+(attempts<=2?120:attempts<=4?300:900);
  await env.DB.prepare('UPDATE telegram_photo_retries SET next_retry_at=? WHERE offer_id=?')
   .bind(nextAt,offer.id).run();
- if(attempts>=PHOTO_RETRY_LIMIT){
+ if(!keepQueued&&attempts>=PHOTO_RETRY_LIMIT){
   await env.DB.prepare("UPDATE offers SET status='needs_review',last_error=? WHERE id=? AND status='sending'")
    .bind('Foto real indisponível após seis tentativas automáticas. Nenhum texto foi enviado.',offer.id).run();
   return {status:'needs_review',reason:'photo_not_found',attempts};
  }
  await env.DB.prepare("UPDATE offers SET status='ready',last_error=? WHERE id=? AND status='sending'")
-  .bind('Aguardando foto do produto. Próxima tentativa automática programada.',offer.id).run();
+  .bind(keepQueued?'Aguardando foto real do produto. Nova tentativa automática agendada.':
+   'Aguardando foto do produto. Próxima tentativa automática programada.',offer.id).run();
  return {status:'awaiting_photo',attempts,next_retry_at:nextAt};
 }
 async function sendOfferWithImage(env, chat, offer) {
@@ -212,7 +214,7 @@ async function sendOfferWithImage(env, chat, offer) {
  catch(error){console.warn('Foto confirmada no Telegram não pôde ser registrada:',String(error?.message||error).slice(0,100));}
  return {message,format:'photo'};
 }
-async function sendOffer(env, offer, settings, {requirePhoto=true}={}) {
+async function sendOffer(env, offer, settings, {requirePhoto=true,keepQueuedOnPhotoMiss=false}={}) {
   await validateChannel(env, settings);
   if (!settings.channel_registered || !settings.telegram_enabled) throw new Error('Canal Telegram não está habilitado e confirmado.');
   if(!categoryMatches(offer.category,settings.category))throw new Error('Esta oferta não pertence à categoria permitida neste canal.');
@@ -231,7 +233,7 @@ async function sendOffer(env, offer, settings, {requirePhoto=true}={}) {
     // Ausência/recusa EXPLÍCITA de foto é segura para tentar novamente:
     // nenhuma publicação foi confirmada. Falha ambígua continua em revisão.
     if(requirePhoto && error?.code==='PHOTO_NOT_READY'){
-      const retry=await recordTelegramPhotoRetry(env,offer,error);
+      const retry=await recordTelegramPhotoRetry(env,offer,error,{keepQueued:keepQueuedOnPhotoMiss});
       await log(env,retry.status,'Telegram aguardando foto real do produto • tentativa '+retry.attempts,offer.id);
       return retry;
     }
@@ -245,7 +247,7 @@ async function sendOffer(env, offer, settings, {requirePhoto=true}={}) {
 // a confirmação do Telegram e o espelhamento WhatsApp são compartilhados.
 // O automático difere apenas pelo relógio; não cria outra exigência de preço/foto.
 async function publishWithManualTools(env,offer,settings,{ctx=null,origin='manual',requirePhoto=true}={}){
- const result=await sendOffer(env,offer,settings,{requirePhoto});
+ const result=await sendOffer(env,offer,settings,{requirePhoto,keepQueuedOnPhotoMiss:origin==='automático'});
  if(result?.status!=='published')return result;
  const dispatch=async()=>{
   const wa=await dispatchPublishedOfferToWhatsApp(env,offer.id);
@@ -301,41 +303,6 @@ async function recoverReviewedPhoto(env,now){
 }
 // Só o envio AGENDADO aguarda foto sem cair em revisão após seis falhas.
 // Não toca no botão manual, no envio de mídia ou nos intervalos.
-async function deferScheduledPhoto(env,offer){
- const now=Math.floor(Date.now()/1000);
- await ensureTelegramPhotoRetries(env);
- const old=await env.DB.prepare('SELECT attempts FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).first();
- const attempts=Math.min(999,Number(old?.attempts||0)+1);
- const next=now+(attempts<=2?120:attempts<=4?300:900);
- await env.DB.prepare(
-  'INSERT INTO telegram_photo_retries(offer_id,attempts,next_retry_at,reason,updated_at) VALUES(?,?,?,?,?) '+
-  'ON CONFLICT(offer_id) DO UPDATE SET attempts=excluded.attempts,'+
-  'next_retry_at=excluded.next_retry_at,reason=excluded.reason,updated_at=excluded.updated_at'
- ).bind(offer.id,attempts,next,'Aguardando foto real na preparação automática',now).run();
- await env.DB.prepare("UPDATE offers SET last_error=? WHERE id=? AND status='ready'")
-  .bind('Aguardando foto real do produto. Nova tentativa automática agendada.',offer.id).run();
- await log(env,'awaiting_photo','Preparação de foto automática • tentativa '+attempts,offer.id);
- return {status:'awaiting_photo',attempts,next_retry_at:next};
-}
-async function prepareScheduledPhoto(env,offer){
- let image=await cachedProductImage(env,offer.affiliate_url);
- if(image)return image;
- // Se o item JÁ foi adiado por foto, a primeira coisa a fazer no próximo
- // Cron é buscar a imagem visível na vitrine. Não repetir antes várias
- // leituras HTTP que já falharam e consomem a janela do agendador.
- const awaitingPhoto=/^Aguardando foto real do produto\./.test(String(offer.last_error||''));
- if(awaitingPhoto){
-  try{image=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);}
-  catch(error){console.warn('Foto da vitrine programada:',String(error?.message||error).slice(0,100));}
- }
- if(!image)image=await resolveProductImageWithRetry(env,offer.affiliate_url,findProductImage,
-  {retryOnMiss:true,sourceLookup:resolveOfferSource});
- // Nova oferta: se o HTTP do anúncio falhar, verificar o cartão principal.
- if(!image&&!awaitingPhoto)image=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
- if(!image)return null;
- await rememberProductImage(env,offer.affiliate_url,image);
- return image;
-}
 async function runScheduled(env){
  if(!env.DB||env.MASTER_SCHEDULE_ENABLED===false)return {skipped:'master_off'};
  const settings=await readSettings(env);
@@ -390,19 +357,26 @@ async function runScheduled(env){
      ).bind(Math.floor(Date.now()/1000)).first();
      return {skipped:waiting?.total?'awaiting_photo':'empty'};
    }
-   // A foto precisa estar preparada antes de usar o MESMO publicador manual.
-   // Caso contrário, apenas reagenda a busca sem alterar o status "Na fila".
-   let preparedPhoto=null;
-   try{preparedPhoto=await prepareScheduledPhoto(env,offer);}
-   catch(error){console.warn('Foto automática:',String(error?.message||error).slice(0,100));}
-   if(!preparedPhoto){
-    await deferScheduledPhoto(env,offer);
-    continue;
-   }
-   await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).run();
+   // PRIMEIRO: usar exatamente o publicador do botão manual.
+   // O antigo preflight era uma barreira extra que bloqueava ofertas que
+   // a própria publicação compartilhada conseguia enviar com foto.
    const result=await publishWithManualTools(env,offer,settings,
      {origin:'automático',requirePhoto:true});
-   if(result?.status==='awaiting_photo')continue;
+   if(result?.status==='awaiting_photo'){
+    // A primeira tentativa não enviou mensagem (PHOTO_NOT_READY).
+    // Buscar somente a foto real do produto principal, armazenar no cache
+    // e tentar UMA vez pelo mesmo publicador, sem duplicar envios.
+    try{
+     const featured=await resolveScheduledShowcasePhoto(env,offer.affiliate_url);
+     if(featured){
+      await env.DB.prepare('DELETE FROM telegram_photo_retries WHERE offer_id=?').bind(offer.id).run();
+      const retry=await publishWithManualTools(env,offer,settings,
+       {origin:'automático',requirePhoto:true});
+      if(retry?.status!=='awaiting_photo')return retry;
+     }
+    }catch(error){console.warn('Foto adicional da vitrine:',String(error?.message||error).slice(0,110));}
+    continue;
+   }
    return result;
   }
   return {skipped:'awaiting_photo',checked:5};

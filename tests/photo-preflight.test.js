@@ -66,7 +66,7 @@ test('foto recuperada reabilita apenas falha explícita segura e limpa retries',
 });
 
 
-test('Cron publica por método compartilhado e reaproveita a foto em cache, sem alterar o botão manual',async()=>{
+test('Cron publica pela MESMA rotina do botão manual e reaproveita foto em cache',async()=>{
  const {DB,env,close}=setup(),original=globalThis.fetch;
  const counter={reads:0,photos:0,sourceReads:0};
  const mock=mockImageFetch(counter);
@@ -84,7 +84,7 @@ test('Cron publica por método compartilhado e reaproveita a foto em cache, sem 
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
   assert.equal(counter.photos,1,'Cron precisa enviar FOTO real do mesmo publicador manual');
   assert.equal(counter.sourceReads,1,
-   'não deve disparar duas consultas simultâneas ao anúncio: preflight vem ANTES do envio');
+   'não deve duplicar consultas ao anúncio antes de publicar');
   assert.equal(counter.reads,0,'não consulta vitrine encurtada se a origem já foi confirmada');
  }finally{globalThis.fetch=original;close();}
 });
@@ -92,7 +92,7 @@ test('Cron publica por método compartilhado e reaproveita a foto em cache, sem 
 test('sete falhas automáticas de foto NÃO colocam oferta em Revisar; após foto recuperar o Cron publica',async()=>{
  const {DB,env,close}=setup(),original=globalThis.fetch;
  const counter={reads:0,photos:0};
- let ready=false;
+ let ready=false,channelChecks=0;
  const success=mockImageFetch(counter);
  try{
   globalThis.fetch=async(url,options={})=>{
@@ -100,6 +100,7 @@ test('sete falhas automáticas de foto NÃO colocam oferta em Revisar; após fot
    const u=String(url);
    if(u===SOURCE||u===SHORT)return new Response('<html><head></head></html>',{
     headers:{'content-type':'text/html'}});
+   if(u.includes('/getChat?')){channelChecks++;return Response.json({ok:true,result:{type:'channel'}});}
    if(u.includes('/sendPhoto')||u.includes('/sendMessage'))
     throw Error('Tentou enviar sem foto confirmada');
    throw Error('Link inesperado durante preparação: '+u);
@@ -112,6 +113,8 @@ test('sete falhas automáticas de foto NÃO colocam oferta em Revisar; após fot
    assert.equal(DB.prepare("SELECT attempts FROM telegram_photo_retries WHERE offer_id=1").first().attempts,i);
    DB.prepare('UPDATE telegram_photo_retries SET next_retry_at=0 WHERE offer_id=1').run();
   }
+  assert.ok(channelChecks>=7,
+   'Cada rodada deve chegar ao MESMO publicador manual, sem bloqueio de preflight');
   ready=true;
   const dispatched=await runScheduled(env);
   assert.equal(dispatched.status,'published');
@@ -246,7 +249,19 @@ test('oferta Na fila com Aguardando foto prioriza vitrine e publica, sem repetir
   const result=await runScheduled(env);
   assert.equal(result.status,'published');
   assert.equal(photoPosts,1);
-  assert.equal(originalReads,0,'não perde tempo repetindo GET do anúncio já falhado');
+  assert.ok(originalReads>=1,'Cron entra primeiro no resolvedor do publicador manual antes da recuperação da vitrine');
   assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'published');
  }finally{globalThis.fetch=previous;close();}
+});
+
+
+test('agendador não possui barreira de foto extra antes do publicador manual',()=>{
+ const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
+ const start=source.indexOf('async function runScheduled(env){');
+ const end=source.indexOf('\nexport ',start);
+ const cron=source.slice(start,end);
+ assert.ok(cron.includes('publishWithManualTools(env,offer,settings'),
+  'Cron chama diretamente o MESMO publicador manual');
+ assert.ok(!cron.includes('prepareScheduledPhoto(env,offer)'),'Cron não deve exigir segundo pré-validador');
+ assert.ok(!cron.includes('deferScheduledPhoto(env,offer)'),'Cron nunca adia a foto antes de tentar o publicador');
 });
