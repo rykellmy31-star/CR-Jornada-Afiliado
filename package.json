@@ -10,5 +10,8 @@
     "db:local": "wrangler d1 migrations apply cr-jornada-afiliados-db --local",
     "db:remote": "wrangler d1 migrations apply cr-jornada-afiliados-db --remote"
   },
-  "devDependencies": {"wrangler": "^4.0.0"}
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "@cloudflare/puppeteer": "^2.0.0"
+  }
 }
