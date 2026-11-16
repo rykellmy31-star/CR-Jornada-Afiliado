@@ -1070,7 +1070,7 @@ async function claimMonitorItemBrowserAttempt(env,shortlinkId,at){
 // o botão só depois, use scrape com seletores restritos à vitrine principal.
 // Nunca seleciona um link de "Quem viu este produto também comprou".
 export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false,launchBrowser=null}={}){
- if(typeof env?.BROWSER?.quickAction!=='function')return null;
+ if(!env?.BROWSER)return null;
  let u;
  try{u=new URL(socialUrl);}catch{return null;}
  if(u.protocol!=='https:'||!REDIRECT_HOSTS.has(u.hostname.toLowerCase())||
