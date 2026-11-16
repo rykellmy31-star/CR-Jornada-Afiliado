@@ -343,6 +343,16 @@ async function runScheduled(env){
    "AND reason<>'Aguardando foto real na preparação automática' "+
    "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).run();
+  // Os retries antigos podiam impor 5/15 minutos de espera mesmo depois
+  // de chegar o próximo horário válido de publicação. Encurtar SOMENTE
+  // esperas de foto confirmadamente seguras; não alterar intervalo de
+  // publicação nem rever envios de status ambíguo.
+  const photoNow=Math.floor(Date.now()/1000);
+  await env.DB.prepare(
+   "UPDATE telegram_photo_retries SET next_retry_at=? "+
+   "WHERE reason='Aguardando foto real na preparação automática' "+
+   "AND next_retry_at>? AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
+  ).bind(photoNow+60,photoNow+60).run();
   for(let checked=0;checked<5;checked++){
    const offer=await env.DB.prepare(OFFER_WITH_COUPON+
      " LEFT JOIN telegram_photo_retries tpr ON tpr.offer_id=o.id "+
@@ -374,16 +384,15 @@ async function runScheduled(env){
     const retried=await publishWithManualTools(env,offer,settings,
      {origin:'automático',requirePhoto:true});
     if(retried?.status!=='awaiting_photo')return retried;
-    // A oferta sem foto fica em fila para nova tentativa no próprio intervalo
-    // configurado, em vez do backoff progressivo de 5/15 minutos. O intervalo
-    // entre publicações efetivas continua protegido por shouldSend().
-    const nextAt=Math.floor(Date.now()/1000)+
-     Math.max(60,Math.min(1440,Number(settings.interval_minutes)||2)*60);
+    // Rechecagem da FOTO em um ciclo independente de 60 segundos.
+    // Não altera interval_minutes: os intervalos de PUBLICAÇÕES seguem
+    // exclusivamente a verificação shouldSend() já existente.
+    const nextAt=Math.floor(Date.now()/1000)+60;
     await env.DB.prepare(
      'UPDATE telegram_photo_retries SET next_retry_at=? WHERE offer_id=?'
     ).bind(nextAt,offer.id).run();
     await log(env,'photo_retry_scheduled',
-     'Foto não recuperada após duas buscas imediatas; próxima tentativa no intervalo configurado.',offer.id);
+     'Foto não recuperada após duas buscas imediatas; rechecagem da foto em até 60 segundos.',offer.id);
     continue;
    }
    return result;
