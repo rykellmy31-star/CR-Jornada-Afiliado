@@ -4,6 +4,7 @@ import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
 import {fetchMercadoLivrePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
+import {monitorWebhookReady} from './monitor-webhook-setup.js';
 
 const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)",
@@ -303,7 +304,7 @@ export async function monitorState(env){
  });
  const perGroupMap=new Map(perGroup.results.map(x=>[x.group_id,normalizedCounts(x)]));
  const deliveryMap=new Map(delivery.results.map(x=>[x.group_id,x]));
- return {enabled:!!settings?.enabled,webhook_secret_configured:typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24,
+ return {enabled:!!settings?.enabled,webhook_secret_configured:await monitorWebhookReady(env),
    counts:normalizedCounts(counts),
    diagnostics:diagnostics||{},
    ignored_coupon_links:Number(ignoredCoupons?.total||0),
@@ -331,8 +332,8 @@ export async function saveMonitorSettings(env,body){
  await ensureMonitor(env);
  if(typeof body?.enabled!=='boolean')throw fail('Informe se o monitoramento deve ficar ativo ou desativado.');
  if(body.enabled){
-   if(!env.MONITOR_WEBHOOK_TOKEN||env.MONITOR_WEBHOOK_TOKEN.length<24)
-     throw fail('Antes de ativar, configure o Secret MONITOR_WEBHOOK_TOKEN no Worker da Cloudflare.');
+   if(!await monitorWebhookReady(env))
+     throw fail('Antes de ativar, clique em Configurar recepção automaticamente e confirme o webhook da Evolution.');
    const count=await env.DB.prepare('SELECT COUNT(*) AS total FROM ml_monitor_groups WHERE enabled=1 AND authorized=1').first();
    if(!count?.total)throw fail('Cadastre ao menos um grupo autorizado antes de ativar.');
  }

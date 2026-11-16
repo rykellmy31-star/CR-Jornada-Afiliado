@@ -4,7 +4,8 @@ import {affiliateStoreState,connectAffiliateStore,previewAffiliateLink,createAff
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLinkBatchDuplicates} from './link-batches.js';
 import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,bulkCategorizeMonitorLinks,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
-import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled} from './group-copy.js';
+import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport} from './group-copy.js';
+import {installMonitorWebhook,deriveMonitorWebhookToken,monitorWebhookReady,monitorInstanceValid} from './monitor-webhook-setup.js';
 import {withGroupCopyPublicLink} from './group-copy-public-links.js';
 import { listActivity } from './activity.js';
 import { findProductImage } from './images.js';
@@ -409,6 +410,19 @@ async function router(request, env, ctx=null) {
   // Links curtos públicos: apenas destinos Mercado Livre previamente validados e salvos.
   const shortAffiliate=u.pathname.match(/^\/l\/([A-Za-z0-9_-]{12})$/);
   if(method==='GET'&&shortAffiliate)return followAffiliateShortlink(env,shortAffiliate[1]);
+  // Webhook de grupos com assinatura derivada do segredo privado do Worker.
+  // A assinatura é validada ANTES de ler o corpo do evento.
+  const autoReceiver=u.pathname.match(/^\/hooks\/wa-links\/auto\/([A-Za-z0-9_-]{2,80})\/([A-Za-z0-9_-]{43})$/);
+  if(autoReceiver&&method==='POST'){
+    if(!monitorInstanceValid(autoReceiver[1]))return fail('Não encontrado.',404);
+    let token;
+    try{token=await deriveMonitorWebhookToken(env,autoReceiver[1]);}catch{return fail('Não encontrado.',404);}
+    if(!await secureEqual(autoReceiver[2],token))return fail('Não encontrado.',404);
+    if(!request.headers.get('content-type')?.startsWith('application/json'))return fail('Envie JSON.',415);
+    const event=await getMonitorWebhookBody(request);
+    if(event?.instance!==autoReceiver[1])return fail('Instância do evento não corresponde ao webhook.',403);
+    return json(await ingestMonitorEvent(env,event));
+  }
   // Rota de entrada restrita para eventos da Evolution. Não modifica webhooks nem instâncias.
   const receiver=u.pathname.match(/^\/hooks\/wa-links\/([A-Za-z0-9_-]{24,128})$/);
   if(receiver&&method==='POST'){
@@ -441,10 +455,12 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/stores/mercadolivre/shorten'&&method==='POST')return json(await createAffiliateShortlink(env,await getBody(request),u.origin),201);
   if(u.pathname==='/api/copy-groups'&&method==='GET')return json(await groupCopyState(env));
   if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
+  if(u.pathname==='/api/copy-groups/test'&&method==='POST')return json(await testGroupCopyImport(env));
   if(u.pathname==='/api/monitor/state'&&method==='GET'){
     const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
     return json({...state,background_review:backgroundReview});
   }
+  if(u.pathname==='/api/monitor/webhook/install'&&method==='POST')return json(await installMonitorWebhook(env,await getBody(request)));
   if(u.pathname==='/api/monitor/settings'&&method==='POST')return json(await saveMonitorSettings(env,await getBody(request)));
   if(u.pathname==='/api/monitor/evolution-groups'&&method==='GET')return json(await monitorEvolutionGroups(env,u.searchParams.get('instance')));
   if(u.pathname==='/api/monitor/groups'&&method==='POST')return json(await addMonitorGroup(env,await getBody(request)),201);
@@ -824,7 +840,7 @@ export default {
     // Tarefa persistente de validação em massa: não depende da página aberta.
     if(env.DB)ctx.waitUntil(runBackgroundReview(env).catch(error=>
       console.error('Validação em massa no Cron:',String(error?.message||error).slice(0,140))));
-    if(env.DB&&typeof env.MONITOR_WEBHOOK_TOKEN==='string'&&env.MONITOR_WEBHOOK_TOKEN.length>=24){
+    if(env.DB&&await monitorWebhookReady(env)){
       // O Cron nativo dispara a cada minuto. Nas execuções Cloudflare,
       // scheduler.wait mantém a própria invocação Cron ativa até a segunda
       // pulsação ~30s depois (Cron aceita até 15min); nada depende do painel.

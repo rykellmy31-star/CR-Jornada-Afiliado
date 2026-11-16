@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {renderPage,CLIENT_JS} from '../src/ui.js';
 import {ensureMonitor,addMonitorGroup,saveMonitorSettings,ingestMonitorEvent} from '../src/whatsapp-link-monitor.js';
 import {connectAffiliateStore} from '../src/affiliate-stores.js';
-import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled} from '../src/group-copy.js';
+import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled,testGroupCopyImport} from '../src/group-copy.js';
 import worker from '../src/index.js';
 
 const TOKEN='test-monitor-webhook-token-1234567890';
@@ -51,6 +51,7 @@ test('importação experimental começa desligada e requer confirmação, loja e
  try{
   const initial=await groupCopyState(env);
   assert.equal(initial.enabled,false);
+  await assert.rejects(testGroupCopyImport(env),/Ative e salve a importação/);
   await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:false}),/Confirme/);
   await assert.rejects(saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true}),/Cadastre antes/);
   await seed(env);
@@ -67,6 +68,9 @@ test('captura produto de terceiro, elimina rastreio antigo, exige preço oficial
  try{
   await seed(env);
   await saveGroupCopySettings(env,{enabled:true,experimental_acknowledged:true});
+  const dry=await testGroupCopyImport(env);
+  assert.equal(dry.result.skipped,'awaiting_verified_price');
+  assert.equal(dry.state.readiness.with_price,0);
   let result=await runGroupCopyScheduled(env);
   assert.equal(result.skipped,'awaiting_verified_price');
   assert.equal(env.DB.prepare('SELECT COUNT(*) AS total FROM offers').first().total,0);
