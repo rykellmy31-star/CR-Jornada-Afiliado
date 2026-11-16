@@ -368,7 +368,13 @@ async function runScheduled(env){
  const acquired=await env.DB.prepare(
   "UPDATE affiliate_telegram_schedule_lease SET lease_until=? WHERE id=1 AND lease_until<=?"
  ).bind(leaseUntil,stamp).run();
- if(acquired.meta?.changes!==1)return {skipped:'busy'};
+ if(acquired.meta?.changes!==1){
+  // Acompanhar envios antigos mesmo que outro Cron tenha mantido lease.
+  // Nunca reenviar automaticamente uma operação com resultado ambíguo.
+  await quarantineStaleSending(env).catch(error=>
+   console.warn('Verificação de envio antigo:',String(error?.message||error).slice(0,90)));
+  return {skipped:'busy'};
+ }
  try{
   await quarantineStaleSending(env);
   // Limpar mensagens de preço herdadas da antiga validação bloqueante.
@@ -397,21 +403,13 @@ async function runScheduled(env){
    "AND reason<>'Aguardando foto real na preparação automática' "+
    "AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
   ).run();
-  // Os retries antigos podiam impor 5/15 minutos de espera mesmo depois
-  // de chegar o próximo horário válido de publicação. Encurtar SOMENTE
-  // esperas de foto confirmadamente seguras; não alterar intervalo de
-  // publicação nem rever envios de status ambíguo.
-  const photoNow=Math.floor(Date.now()/1000);
-  await env.DB.prepare(
-   "UPDATE telegram_photo_retries SET next_retry_at=? "+
-   "WHERE reason='Aguardando foto real na preparação automática' "+
-   "AND next_retry_at>? AND offer_id IN (SELECT id FROM offers WHERE status='ready')"
-  ).bind(photoNow+60,photoNow+60).run();
-  // A espera de FOTO não deve bloquear um horário válido: o botão
-  // manual nunca usa telegram_photo_retries para selecionar uma oferta.
-  // Ignorar esse filtro apenas na seleção, mantendo os intervalos em shouldSend.
-  // Rotacionar a fila: até cinco anúncios antigos sem foto não podem
-  // bloquear indefinidamente outros anúncios que já tenham imagem válida.
+  // Sem foto confirmada, respeite o backoff de cada oferta.
+  // A versão anterior ignorava o campo next_retry_at e reconsultava a
+  // MESMA mídia de anúncios falhos a cada Cron, mantendo o lease ocupado.
+  // Um produto com foto já guardada pode ultrapassar a fila de falhas.
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS affiliate_product_images ("+
+   "affiliate_url TEXT PRIMARY KEY,image_url TEXT NOT NULL,updated_at INTEGER NOT NULL)").run();
+  // Rotação de produtos sem foto, sem bloquear outras ofertas prontas.
   // O cursor registra tentativas, nunca um envio confirmado.
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS affiliate_telegram_schedule_cursor ("+
    "id INTEGER PRIMARY KEY CHECK(id=1),last_offer_id INTEGER NOT NULL DEFAULT 0)").run();
@@ -422,18 +420,36 @@ async function runScheduled(env){
    "SELECT last_offer_id FROM affiliate_telegram_schedule_cursor WHERE id=1"
   ).first())?.last_offer_id||0);
   const checkedOffers=[];
-  for(let checked=0;checked<5;checked++){
+  const due=Math.floor(Date.now()/1000);
+  const photoCacheCutoff=due-7*24*3600;
+  // No máximo dois anúncios SEM foto por minuto. Evita estouro do ciclo
+  // de 60 segundos e mantém os demais robôs responsivos.
+  for(let checked=0;checked<2;checked++){
    const exclude=checkedOffers.length?
     ' AND o.id NOT IN ('+checkedOffers.map(()=>'?').join(',')+')':'';
    const base=OFFER_WITH_COUPON+
-    " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+exclude;
-   // Continua da última tentativa, volta ao começo ao final da fila
-   // e jamais repete a mesma oferta durante a execução corrente.
-   let offer=await env.DB.prepare(base+" AND o.id>? ORDER BY o.id ASC LIMIT 1")
-    .bind(settings.category,settings.category,...checkedOffers,cursor).first();
+    " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+
+    "AND NOT EXISTS (SELECT 1 FROM telegram_photo_retries photo "+
+    "WHERE photo.offer_id=o.id AND photo.next_retry_at>?) "+exclude;
+   const bindBase=[settings.category,settings.category,due,...checkedOffers];
+   const cacheCondition=" AND EXISTS (SELECT 1 FROM affiliate_product_images img "+
+    "WHERE img.affiliate_url=o.affiliate_url AND img.updated_at>=?)";
+   // Foto já aprovada pela CDN sai primeiro, mesmo quando existam ofertas
+   // mais antigas com fotos temporariamente bloqueadas.
+   let offer=await env.DB.prepare(base+cacheCondition+" ORDER BY o.id ASC LIMIT 1")
+    .bind(...bindBase,photoCacheCutoff).first();
+   // Continua da última tentativa, volta ao começo ao final da fila.
+   if(!offer)offer=await env.DB.prepare(base+" AND o.id>? ORDER BY o.id ASC LIMIT 1")
+    .bind(...bindBase,cursor).first();
    if(!offer)offer=await env.DB.prepare(base+" ORDER BY o.id ASC LIMIT 1")
-    .bind(settings.category,settings.category,...checkedOffers).first();
-   if(!offer)return {skipped:checkedOffers.length?'awaiting_photo':'empty'};
+    .bind(...bindBase).first();
+   if(!offer){
+    if(checkedOffers.length)return {skipped:'awaiting_photo',checked:checkedOffers.length};
+    const ready=await env.DB.prepare(
+     "SELECT id FROM offers WHERE status='ready' AND (?='Geral' OR lower(category)=lower(?)) LIMIT 1"
+    ).bind(settings.category,settings.category).first();
+    return {skipped:ready?'photo_backoff':'empty'};
+   }
    checkedOffers.push(offer.id);
    cursor=offer.id;
    await env.DB.prepare(
@@ -454,7 +470,7 @@ async function runScheduled(env){
     // Rechecagem da FOTO em um ciclo independente de 60 segundos.
     // Não altera interval_minutes: os intervalos de PUBLICAÇÕES seguem
     // exclusivamente a verificação shouldSend() já existente.
-    const nextAt=Math.floor(Date.now()/1000)+60;
+    const nextAt=Math.floor(Date.now()/1000)+300;
     // Duas buscas dentro do mesmo ciclo equivalem a UMA tentativa
     // agendada para o contador histórico de falhas, preservando métricas.
     await env.DB.prepare(
@@ -462,12 +478,12 @@ async function runScheduled(env){
      'attempts=CASE WHEN attempts>1 THEN attempts-1 ELSE 1 END WHERE offer_id=?'
     ).bind(nextAt,offer.id).run();
     await log(env,'photo_retry_scheduled',
-     'Foto não recuperada após duas buscas imediatas; rechecagem da foto em até 60 segundos.',offer.id);
+     'Foto não recuperada; novo exame em cinco minutos sem bloquear outros anúncios.',offer.id);
     continue;
    }
    return result;
   }
-  return {skipped:'awaiting_photo',checked:5};
+  return {skipped:'awaiting_photo',checked:2};
  }finally{
   await env.DB.prepare(
    "UPDATE affiliate_telegram_schedule_lease SET lease_until=0 WHERE id=1 AND lease_until=?"

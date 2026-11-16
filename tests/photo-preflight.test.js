@@ -405,7 +405,7 @@ test('nova tentativa de FOTO não altera o intervalo entre PUBLICAÇÕES',async(
   const response=await runScheduled(env);
   assert.equal(response.skipped,'awaiting_photo');
   const row=DB.prepare('SELECT next_retry_at FROM telegram_photo_retries WHERE offer_id=1').first();
-  assert.ok(row.next_retry_at>=before+60&&row.next_retry_at<=before+65,
+  assert.ok(row.next_retry_at>=before+300&&row.next_retry_at<=before+305,
    'a nova tentativa de foto deve ser independente do intervalo de 77 minutos');
   assert.equal(DB.prepare('SELECT interval_minutes FROM settings WHERE id=1').first().interval_minutes,77);
   assert.equal(DB.prepare('SELECT status FROM offers WHERE id=1').first().status,'ready');
@@ -414,7 +414,7 @@ test('nova tentativa de FOTO não altera o intervalo entre PUBLICAÇÕES',async(
 });
 
 
-test('Cron aciona o publicador manual mesmo com retry de foto no futuro',async()=>{
+test('Cron respeita backoff de foto e volta ao publicador manual quando a foto fica elegível',async()=>{
  const {DB,env,close}=setup(),previous=globalThis.fetch;
  const counter={reads:0,photos:0};
  try{
@@ -422,9 +422,12 @@ test('Cron aciona o publicador manual mesmo com retry de foto no futuro',async()
   DB.prepare('INSERT INTO telegram_photo_retries VALUES(1,5,2147483647,?,1)')
    .bind('Aguardando foto real na preparação automática').run();
   globalThis.fetch=mockImageFetch(counter);
+  const paused=await runScheduled(env);
+  assert.equal(paused.skipped,'photo_backoff','não repetir uma foto bloqueada antes da próxima tentativa');
+  assert.equal(counter.photos,0);
+  DB.prepare('UPDATE telegram_photo_retries SET next_retry_at=0 WHERE offer_id=1').run();
   const published=await runScheduled(env);
-  assert.equal(published.status,'published',
-   'o relógio deve publicar como o botão manual, sem bloquear por next_retry_at');
+  assert.equal(published.status,'published','ao vencer o retry o relógio usa publicador manual');
   assert.equal(counter.photos,1);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
   assert.equal(DB.prepare('SELECT COUNT(*) AS n FROM telegram_photo_retries').first().n,0);
@@ -441,7 +444,7 @@ test('manual e cron acionam a mesma operação, sem modificar intervalo',()=>{
  assert.match(manual,/publishUsingManualButton\(env,Number\(publish\[1\]\)/);
  assert.match(cron,/publishUsingManualButton\(env,offer\.id/);
  assert.match(cron,/shouldSend\(settings,now,total,latest/);
- assert.doesNotMatch(cron,/tpr\.next_retry_at<=/);
+ assert.match(cron,/photo\.next_retry_at>\?/);
  assert.doesNotMatch(cron,/UPDATE settings SET interval_minutes/);
 });
 

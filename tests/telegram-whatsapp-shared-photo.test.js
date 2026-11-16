@@ -156,7 +156,8 @@ test('automático sem foto mantém oferta na fila, sem Telegram ou WhatsApp de t
   assert.equal(waText,0);
   assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'ready');
   assert.equal(DB.prepare('SELECT attempts FROM telegram_photo_retries').first().attempts,1);
-  assert.equal((await runScheduled(env)).skipped,'awaiting_photo');
+  assert.equal((await runScheduled(env)).skipped,'photo_backoff',
+   'não deve reconsultar a mesma foto antes do prazo da próxima tentativa');
   assert.equal(DB.prepare("SELECT COUNT(*) AS n FROM offers WHERE status='published'").first().n,0);
  }finally{globalThis.fetch=old;DB.close();}
 });
