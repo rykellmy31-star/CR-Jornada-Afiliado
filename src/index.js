@@ -1067,12 +1067,20 @@ export default {
       }
       ctx.waitUntil((async()=>{
         await manualPriceChecks;
-        return refreshMonitorSitePrices(env);
+        // Investigar toda a fila histórica: API oficial, HTML, vitrine e
+        // navegador renderizado, com espera própria entre tentativas.
+        const result=await refreshMonitorSitePrices(env,{deepScan:true,limit:3});
+        if(result.found>0)await runGroupCopyBatch(env,{limit:3});
+        return result;
       })().catch(error=>
-        console.error('Monitor preços:',String(error?.message||error).slice(0,120))));
+        console.error('Pesquisa profunda de preços:',String(error?.message||error).slice(0,120))));
       ctx.waitUntil((async()=>{
         await telegramPublished;
-        return recoverMissingMonitorPrices(env,{allowEvolution:true});
+        // Consultar novamente as mensagens antigas na Evolution, inclusive
+        // produtos com mais de 2 dias. Sem tocar no publicador Telegram/WA.
+        const result=await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:4});
+        if(result.recovered>0)await runGroupCopyBatch(env,{limit:3});
+        return result;
       })().catch(error=>
         console.error('Recuperar preços do monitor:',String(error?.message||error).slice(0,120))));
     }
