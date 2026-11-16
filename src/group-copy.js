@@ -4,7 +4,7 @@
 import {ensureMonitor} from './whatsapp-link-monitor.js';
 import {affiliateStoreState,previewAffiliateLink} from './affiliate-stores.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
-import {ensureLinkBatches} from './link-batches.js';
+import {ensureLinkBatches,productId} from './link-batches.js';
 import {officialCategoryStats} from './monitor-official-categories.js';
 
 const SETTINGS="CREATE TABLE IF NOT EXISTS ml_group_copy_auto_settings ("+
@@ -17,6 +17,15 @@ const HISTORY="CREATE TABLE IF NOT EXISTS ml_group_copy_auto_history ("+
  "short_url TEXT NOT NULL,source_url TEXT NOT NULL,target_url TEXT NOT NULL,queued_at INTEGER NOT NULL)";
 const epoch=()=>Math.floor(Date.now()/1000);
 const fail=(text,status=400)=>Object.assign(new Error(text),{status});
+// O anúncio já foi reconhecido pela captura do grupo. Mesmo assim,
+// exigir que o ID no link original seja idêntico ao ID persistido no banco.
+function checkedProductUrl(item){
+ let source;
+ try{source=new URL(item.source_url);}catch{throw fail('Link original inválido.');}
+ if(productId(source.pathname)!==item.product_id)
+   throw fail('O identificador do anúncio não corresponde ao produto reconhecido.');
+ return source.href;
+}
 export async function ensureGroupCopyAutomation(env){
  await env.DB.prepare(SETTINGS).run();
  await env.DB.prepare(HISTORY).run();
@@ -60,7 +69,7 @@ export async function groupCopyEligibility(env,{now=null}={}){
    reason='lote_incompleto';description='O lote antigo não possui um item correspondente.';
   }else{
    try{
-    const preview=await previewAffiliateLink(env,{product_url:item.source_url});
+    const preview=await previewAffiliateLink(env,{product_url:checkedProductUrl(item)});
     const duplicate=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=? LIMIT 1').bind(preview.target_url).first();
     if(duplicate){reason='duplicado';description='Este anúncio já consta da fila ou do histórico de ofertas.';}
    }catch(error){
@@ -200,7 +209,7 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
    if(!categoryMatches(item.category,permitted))continue;
    if(item.last_queued_at&&at-item.last_queued_at<7*24*3600)continue;
    let preview;
-   try{preview=await previewAffiliateLink(env,{product_url:item.source_url});}
+   try{preview=await previewAffiliateLink(env,{product_url:checkedProductUrl(item)});}
    catch{continue;} // URLs não canônicas aguardam normalização/revisão, não inventamos IDs.
    if(item.title.length<5||item.title.length>180)continue;
    const price=Number(item.price_cents);
