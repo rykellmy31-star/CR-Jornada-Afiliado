@@ -877,6 +877,14 @@ export default {
       return runBackgroundReview(env);
     })().catch(error=>
       console.error('Validação em massa no Cron:',String(error?.message||error).slice(0,140))));
+    // O pedido de checagem manual de preços pode ser feito mesmo quando
+    // a captura Evolution não estiver conectada. Executá-lo de maneira
+    // persistente e independente evita tarefas presas em "Agendada".
+    const manualPriceChecks=env.DB?(async()=>{
+      await telegramPublished;
+      return executeManualGroupCheck(env,'prices');
+    })().catch(error=>console.error('Checagem manual de preços:',String(error?.message||error).slice(0,130))):Promise.resolve();
+    if(env.DB)ctx.waitUntil(manualPriceChecks);
     if(env.DB&&await monitorWebhookReady(env)){
       // O Cron nativo dispara a cada minuto. Nas execuções Cloudflare,
       // scheduler.wait mantém a própria invocação Cron ativa até a segunda
@@ -894,8 +902,7 @@ export default {
         })().catch(error=>console.error('Segunda revisão automática:',String(error?.message||error).slice(0,120))));
       }
       ctx.waitUntil((async()=>{
-        await telegramPublished;
-        await executeManualGroupCheck(env,'prices');
+        await manualPriceChecks;
         return refreshMonitorSitePrices(env);
       })().catch(error=>
         console.error('Monitor preços:',String(error?.message||error).slice(0,120))));
