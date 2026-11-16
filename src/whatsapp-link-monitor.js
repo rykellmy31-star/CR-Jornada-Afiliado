@@ -978,29 +978,47 @@ export async function browserFeaturedProduct(env,socialUrl,{includeDetails=false
   }else console.warn('Browser Run vitrine HTML:',rendered?.status||'sem resposta');
  }catch(error){console.warn('Browser Run vitrine HTML:',String(error?.message||error).slice(0,130));}
  try{
+  // Cloudflare /scrape retorna o primeiro elemento de cada seletor.
+  // O primeiro <a> costuma ser o título da oferta, NÃO o botão "Ir para
+  // produto". Aceitar também o título, sempre dentro do cartão destacado.
+  const selectors=[
+   '.rl-card-featured-wrapper',
+   '.rl-card-featured-wrapper a.poly-component__title[href]',
+   '.rl-card-featured-wrapper a.poly-component__link--action-link[href]',
+   '[class*="card-featured"] a.poly-component__title[href]'
+  ];
   const scraped=await env.BROWSER.quickAction('scrape',{
-   ...opts,elements:[
-    {selector:'.rl-card-featured-wrapper a[href]'},
-    {selector:'[class*="card-featured"] a[href]'}
-   ]
+   ...opts,elements:selectors.map(selector=>({selector}))
   });
   if(!scraped?.ok||typeof scraped.json!=='function')return null;
   const payload=await scraped.json();
-  const sections=Array.isArray(payload)?payload:Array.isArray(payload?.result)?payload.result:[];
+  const sections=Array.isArray(payload)?payload:
+   Array.isArray(payload?.result)?payload.result:
+   Array.isArray(payload?.results)?payload.results:[];
   const identified=new Map();
   for(const section of sections){
-   if(!['.rl-card-featured-wrapper a[href]','[class*="card-featured"] a[href]'].includes(section?.selector))continue;
-   // Cloudflare /scrape retorna results como OBJETO por selector;
-   // alguns modos retornam array. Suportar ambos sem lançar TypeError.
-   const elements=Array.isArray(section?.results)?section.results:
-     (section?.results&&typeof section.results==='object'?[section.results]:[]);
-   for(const element of elements.slice(0,25)){
-    if(!/ir\s+para\s+(?:o\s+)?produto/i.test(String(element?.text||'')))continue;
+   if(!selectors.includes(section?.selector))continue;
+   const elements=Array.isArray(section.results)?section.results:
+    (section.results&&typeof section.results==='object'?[section.results]:[]);
+   for(const element of elements.slice(0,5)){
+    if(section.selector==='.rl-card-featured-wrapper'){
+     const html=String(element.html||'').slice(0,350000);
+     if(html){
+      const scoped=/<(?:section|div)\b[^>]*\brl-card-featured-wrapper\b/i.test(html)
+       ?html:'<div class="rl-card-featured-wrapper">'+html+'</div>';
+      const candidate=await featuredProductWithOfficialRedirect(scoped,u.href);
+      if(candidate?.kind==='product')identified.set(candidate.product_id,candidate);
+     }
+     continue;
+    }
+    // O link do título principal tem escopo de card e serve como destino
+    // seguro quando a vitrine não expõe o CTA nos resultados do scraper.
     const href=(element.attributes||[]).find(x=>x.name==='href')?.value;
     let absolute;try{absolute=new URL(href,u.href).href;}catch{continue;}
     const candidate=await resolveFeaturedActionLink(absolute);
     if(candidate?.kind==='product')identified.set(candidate.product_id,candidate);
    }
+   if(identified.size>1)return null; // nunca escolher entre produtos distintos
   }
   return identified.size===1?[...identified.values()][0]:null;
  }catch(error){console.warn('Browser Run vitrine scrape:',String(error?.message||error).slice(0,130));}
