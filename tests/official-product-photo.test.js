@@ -76,7 +76,7 @@ test('publicador manual e agendado reutilizam foto da API quando página está v
 test('Cron importa ofertas prontas sem esperar o envio de imagem do Telegram',async()=>{
  const code=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
  const block=code.slice(code.indexOf('// Importação experimental depende'));
- assert.ok(block.indexOf('await runGroupCopyScheduled(env)')>=0);
- assert.ok(block.indexOf('await runGroupCopyScheduled(env)')<
+ assert.ok(block.indexOf('await runGroupCopyBatch(env,{limit:3})')>=0);
+ assert.ok(block.indexOf('await runGroupCopyBatch(env,{limit:3})')<
    block.indexOf('await telegramPublished'));
 });
