@@ -567,9 +567,9 @@ export async function reviewMonitorShortlink(env,id,body){
  if(!short)throw fail('Link não encontrado.',404);
  if(short.status!=='review')throw fail('Este link não está mais em revisão. Atualize a lista.',409);
  if(!short.authorized)throw fail('Grupo sem autorização para revisar o link.',403);
- let candidate;
+ let candidate,inspected=null;
  if(action==='retry'){
-  let inspected=await inspectMonitorShortlink(short.short_url);
+  inspected=await inspectMonitorShortlink(short.short_url);
   candidate=inspected.product;
   // O botão em massa e o Cron exigem o produto principal identificado;
   // nunca aprovar o primeiro anúncio recomendado na vitrine.
