@@ -151,6 +151,14 @@ export async function groupCopyState(env){
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
    "AND NOT ("+siteRecent+" OR "+groupRecent+") THEN 1 ELSE 0 END),0) AS needs_price,"+
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND NOT ("+siteRecent+" OR "+groupRecent+") "+
+   "AND (COALESCE(m.last_seen_price_cents,0)>0 OR COALESCE(sp.price_cents,0)>0) "+
+   "THEN 1 ELSE 0 END),0) AS price_record_expired,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
+   "AND NOT ("+siteRecent+" OR "+groupRecent+") "+
+   "AND COALESCE(m.last_seen_price_cents,0)<=0 AND COALESCE(sp.price_cents,0)<=0 "+
+   "THEN 1 ELSE 0 END),0) AS price_never_extracted,"+
+   "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
    "AND sp.product_id IS NULL AND NOT "+groupRecent+" THEN 1 ELSE 0 END),0) AS price_never_checked,"+
    "COALESCE(SUM(CASE WHEN l.category<>'Geral' AND l.classification<>'needs_review' "+
    "AND sp.status='unavailable' AND NOT "+groupRecent+" THEN 1 ELSE 0 END),0) AS price_lookup_failed,"+
@@ -186,6 +194,8 @@ export async function groupCopyState(env){
   awaiting_manual_batch:Number(manualPending?.total||0),
   readiness:{needs_category:Number(readiness?.needs_category||0),
    needs_price:Number(readiness?.needs_price||0),
+   price_record_expired:Number(readiness?.price_record_expired||0),
+   price_never_extracted:Number(readiness?.price_never_extracted||0),
    price_never_checked:Number(readiness?.price_never_checked||0),
    price_lookup_failed:Number(readiness?.price_lookup_failed||0),
    with_price:Number(readiness?.with_price||0),
