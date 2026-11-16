@@ -2,7 +2,7 @@ import { renderPage, CSS, CLIENT_JS } from './ui.js';
 import { overviewState } from './overview.js';
 import {affiliateStoreState,connectAffiliateStore,previewAffiliateLink,createAffiliateShortlink,followAffiliateShortlink} from './affiliate-stores.js';
 import {listLinkBatches,readLinkBatch,createLinkBatch,importLinkBatch,previewLinkBatchDuplicates} from './link-batches.js';
-import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
+import {monitorState,saveMonitorSettings,monitorEvolutionGroups,addMonitorGroup,updateMonitorGroup,ingestMonitorEvent,updateMonitorLinkCategory,bulkCategorizeMonitorLinks,prepareMonitorBatch,resolveMonitorShortlinks,recoverMissingMonitorPrices,refreshMonitorSitePrices,reviewMonitorShortlink} from './whatsapp-link-monitor.js';
 import {backgroundReviewState,queueBackgroundReview,runBackgroundReview} from './monitor-background-review.js';
 import {groupCopyState,saveGroupCopySettings,runGroupCopyScheduled} from './group-copy.js';
 import { listActivity } from './activity.js';
@@ -450,6 +450,8 @@ async function router(request, env, ctx=null) {
   if(monitorGroup&&method==='POST')return json(await updateMonitorGroup(env,monitorGroup[1],await getBody(request)));
   const monitorCategory=u.pathname.match(/^\/api\/monitor\/links\/(\d+)\/category$/);
   if(monitorCategory&&method==='POST')return json(await updateMonitorLinkCategory(env,monitorCategory[1],await getBody(request)));
+  if(u.pathname==='/api/monitor/categories/bulk'&&method==='POST')
+   return json(await bulkCategorizeMonitorLinks(env,await getBody(request)));
   if(u.pathname==='/api/monitor/review-all'&&method==='POST')return json(await queueBackgroundReview(env));
   const monitorShortlinkReview=u.pathname.match(/^\/api\/monitor\/shortlinks\/(\d+)\/review$/);
   if(monitorShortlinkReview&&method==='POST')
