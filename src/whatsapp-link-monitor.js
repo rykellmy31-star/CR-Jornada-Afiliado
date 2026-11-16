@@ -3,7 +3,7 @@ import {createLinkBatch,productId,validateSourceUrl,ensureLinkBatches} from './l
 import {listWhatsAppGroups,evolutionOrigin} from './whatsapp.js';
 import {canRequeueProduct} from './monitor-repeat-policy.js';
 import {extractPromotionTerms,promotionDescription} from './promotion-terms.js';
-import {fetchMercadoLivrePrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
+import {fetchMercadoLivrePrice,fetchMercadoLivrePublicPrice,extractFeaturedShowcasePrice} from './mercado-livre-price.js';
 import {monitorWebhookReady} from './monitor-webhook-setup.js';
 
 const SCHEMA=[
@@ -224,22 +224,29 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false}={})
 }
 // Consulta o preço público do anúncio validado sem modificar a condição do grupo.
 // Executado após a confirmação dos links, via agendador, também para URLs diretas.
-export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3}={}){
+export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceRetry=false}={}){
  await ensureMonitor(env);
  const now=epoch();
  const cap=Math.max(1,Math.min(5,Number.isSafeInteger(limit)?limit:3));
  const rows=(await env.DB.prepare(
-  "SELECT l.product_id,l.source_url FROM ml_monitor_links l LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
-  "WHERE l.status='available' AND (sp.product_id IS NULL "+
+  "SELECT l.product_id,l.source_url FROM ml_monitor_links l "+
+  "JOIN ml_monitor_groups g ON g.id=l.group_id "+
+  "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+  "WHERE l.status='available' AND g.enabled=1 AND g.authorized=1 AND (sp.product_id IS NULL "+
   "OR (sp.status='ok' AND sp.checked_at<=?) "+
-  "OR (sp.status='unavailable' AND sp.checked_at<=?-(CASE WHEN sp.tries<=1 THEN 900 WHEN sp.tries=2 THEN 3600 ELSE 21600 END))) "+
-  "ORDER BY (sp.product_id IS NULL) DESC,l.created_at DESC LIMIT ?"
- ).bind(now-21600,now,cap).all()).results;
+  "OR (sp.status='unavailable' AND (sp.checked_at<=?-(CASE WHEN sp.tries<=1 THEN 900 WHEN sp.tries=2 THEN 3600 ELSE 21600 END) "+
+  "OR (?=1 AND sp.checked_at<=?-90)))) "+
+  "ORDER BY (sp.product_id IS NULL) DESC,COALESCE(sp.checked_at,0) ASC,l.created_at DESC LIMIT ?"
+ ).bind(now-21600,now,Number(forceRetry===true),now,cap).all()).results;
  let checked=0,found=0;
  for(const item of rows){
   let site=null;
   try{site=await fetchMercadoLivrePrice(item.source_url,fetcher);}
-  catch{/* O site pode limitar o acesso; não altera o preço informado pelo grupo. */}
+  catch{/* Página bloqueada ou indisponível: tente a API pública oficial. */}
+  if(!(Number.isSafeInteger(site?.price_cents)&&site.price_cents>0)){
+    try{site=await fetchMercadoLivrePublicPrice(item.source_url,fetcher);}
+    catch{/* O ML pode exigir autenticação para alguns anúncios. Nunca inventar preço. */}
+  }
   const valid=Number.isSafeInteger(site?.price_cents)&&site.price_cents>0;
   await env.DB.prepare(
    "INSERT INTO ml_monitor_site_prices(product_id,price_cents,status,checked_at,tries,method) VALUES(?,?,?,?,?,?) "+

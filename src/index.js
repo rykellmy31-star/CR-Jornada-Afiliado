@@ -449,6 +449,7 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
   if(u.pathname==='/api/copy-groups/test'&&method==='POST')return json(await testGroupCopyImport(env));
   if(u.pathname==='/api/copy-groups/categorize'&&method==='POST')return json(await classifyMonitorMissingCategories(env,{limit:8}));
+  if(u.pathname==='/api/copy-groups/prices'&&method==='POST')return json(await refreshMonitorSitePrices(env,{limit:2,forceRetry:true}));
   if(u.pathname==='/api/monitor/state'&&method==='GET'){
     const [state,backgroundReview]=await Promise.all([monitorState(env),backgroundReviewState(env)]);
     return json({...state,background_review:backgroundReview});
