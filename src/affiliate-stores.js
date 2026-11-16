@@ -84,7 +84,7 @@ export function parseMercadoLivreProduct(value){
   const u=safeUrl(value);
   if(!ML_PRODUCT_HOSTS.has(u.hostname))throw error('Aceitamos somente URLs de produtos do Mercado Livre Brasil.');
   if(!productPath(u.pathname))
-    throw error('O endereço não identifica um anúncio: use /p/MLB..., /up/MLBU... ou /MLB-...-...-_JM.');
+    throw error('O endereço completo não identifica um anúncio: use /p/MLB..., /up/MLBU... ou /MLB-...-...-_JM.');
   // Preserve o host e o caminho oficiais: mudar produto.mercadolivre.com.br/MLB-...-_JM
   // para /p/MLB... poderia apontar para outro tipo de anúncio.
   // Sempre exclua rastreamento, etiquetas de terceiros, query e hash.
