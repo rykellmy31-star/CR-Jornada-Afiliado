@@ -22,6 +22,59 @@ export async function ensureGroupCopyAutomation(env){
  await env.DB.prepare(HISTORY).run();
  await env.DB.prepare("INSERT OR IGNORE INTO ml_group_copy_auto_settings(id) VALUES(1)").run();
 }
+// Inspeção sem efeitos: explica POR QUE um anúncio com preço recente
+// ainda não foi para a fila. Reutiliza os mesmos filtros do agendador.
+export async function groupCopyEligibility(env,{now=null}={}){
+ const at=Number.isSafeInteger(now)&&now>0?now:epoch();
+ await ensureMonitor(env);await ensureLinkBatches(env);await ensureGroupCopyAutomation(env);
+ const permitted=await getPrimaryCategory(env);
+ const items=(await env.DB.prepare(
+  "SELECT l.product_id,l.title,l.source_url,l.category,l.status, "+
+  "l.batch_id,i.id AS original_batch_item_id, "+
+  "sp.price_cents,sp.checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
+  "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
+  "JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+  "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
+  "LEFT JOIN ml_group_copy_auto_history h ON h.product_id=l.product_id "+
+  "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+  "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
+  "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
+  "AND g.enabled=1 AND g.authorized=1 AND sp.status='ok' AND sp.price_cents>0 "+
+  "AND sp.checked_at>=? AND sp.checked_at<=? AND h.product_id IS NULL "+
+  "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
+  "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
+  "ORDER BY l.id ASC LIMIT 40"
+ ).bind(at-6*3600,at).all()).results;
+ const blocked={};const examples=[];let ready=0;
+ for(const item of items){
+  let reason=null,description='';
+  if(!categoryMatches(item.category,permitted)){
+   reason='categoria_canal';description='O canal principal está restrito a "'+permitted+'"; o produto pertence à categoria "'+item.category+'".';
+  }else if(item.last_queued_at&&at-item.last_queued_at<7*24*3600){
+   reason='repetido_7_dias';description='Produto já utilizado nos últimos 7 dias.';
+  }else if(item.title.length<5||item.title.length>180){
+   reason='titulo_invalido';description='Título do produto fora do tamanho permitido.';
+  }else if(!Number.isSafeInteger(Number(item.price_cents))||Number(item.price_cents)<=0||Number(item.price_cents)>100_000_000){
+   reason='preco_invalido';description='Preço público fora do intervalo permitido.';
+  }else if(item.status==='batched'&&(!Number.isSafeInteger(Number(item.batch_id))||!Number.isSafeInteger(Number(item.original_batch_item_id)))){
+   reason='lote_incompleto';description='O lote antigo não possui um item correspondente.';
+  }else{
+   try{
+    const preview=await previewAffiliateLink(env,{product_url:item.source_url});
+    const duplicate=await env.DB.prepare('SELECT id FROM offers WHERE affiliate_url=? LIMIT 1').bind(preview.target_url).first();
+    if(duplicate){reason='duplicado';description='Este anúncio já consta da fila ou do histórico de ofertas.';}
+   }catch(error){
+    reason='link_incompativel';description='O link de origem não passou na validação: '+String(error?.message||error).slice(0,110);
+   }
+  }
+  if(reason){
+   blocked[reason]=(blocked[reason]||0)+1;
+   if(examples.length<4)examples.push({product_id:item.product_id,title:String(item.title).slice(0,90),reason,description});
+  }else ready++;
+ }
+ return {checked_with_price:items.length,ready,blocked,examples,primary_category:permitted,
+   sampled:items.length===40};
+}
 export async function groupCopyState(env){
  await ensureMonitor(env);await ensureGroupCopyAutomation(env);await ensureLinkBatches(env);
  const at=epoch();
@@ -74,6 +127,7 @@ export async function groupCopyState(env){
    price_lookup_failed:Number(readiness?.price_lookup_failed||0),
    with_price:Number(readiness?.with_price||0)},
   official_categories:{...official_categories,waiting:Number(readiness?.needs_category||0)},
+  eligibility:await groupCopyEligibility(env,{now:at}),
   recent:(recent?.results||[]),commission_verified:false};
 }
 export async function saveGroupCopySettings(env,body){
@@ -100,7 +154,8 @@ export async function testGroupCopyImport(env){
  if(!state.store_configured||!state.authorized_groups)
   throw fail('Cadastre sua loja e escolha pelo menos um grupo autorizado.');
  const result=await runGroupCopyScheduled(env);
- return {ok:!result.error,result,state:await groupCopyState(env)};
+ const stateAfter=await groupCopyState(env);
+ return {ok:!result.error,result,state:stateAfter,eligibility:stateAfter.eligibility};
 }
 function shortCode(){
  const bytes=crypto.getRandomValues(new Uint8Array(9));
