@@ -70,7 +70,7 @@ test('HTML de produto não escapa para Telegram, editor exige link e admite fras
  assert.match(tg,/Achadinho do dia/);
  assert.match(tg,/&lt;img/);
  assert.ok(!tg.includes('<img'));
- assert.throws(()=>validateMessageTemplateBody('Oferta sem {LINK} com detalhes suficientes para venda.'),/\{LINK\}/);
+ assert.throws(()=>validateMessageTemplateBody('Oferta sem endereço de compra com detalhes suficientes para venda.'),/\{LINK\}/);
  assert.throws(()=>validateMessageTemplateBody('Produto e preço {INVENTADO} + {LINK} estão aqui.'),/desconhecida/);
  assert.equal(renderMessageTemplate(p,body,{network:'whatsapp',now:at,maxLength:30}),null);
 });
