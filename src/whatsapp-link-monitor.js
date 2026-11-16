@@ -15,6 +15,7 @@ const SCHEMA=[
  "CREATE TABLE IF NOT EXISTS ml_monitor_links(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',product_id TEXT NOT NULL UNIQUE,source_url TEXT NOT NULL,title TEXT NOT NULL,category TEXT NOT NULL DEFAULT 'Geral',classification TEXT NOT NULL DEFAULT 'needs_review',status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','batched')),batch_id INTEGER,created_at INTEGER NOT NULL)",
  "CREATE INDEX IF NOT EXISTS idx_ml_monitor_links_queue ON ml_monitor_links(status,category,id)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_shortlinks(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),message_id TEXT NOT NULL DEFAULT '',short_url TEXT NOT NULL UNIQUE,message_hint TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','review','resolved')),tries INTEGER NOT NULL DEFAULT 0,reason TEXT,created_at INTEGER NOT NULL)",
+ "CREATE INDEX IF NOT EXISTS idx_ml_monitor_shortlinks_group_message_status ON ml_monitor_shortlinks(group_id,message_id,status)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),events_received INTEGER NOT NULL DEFAULT 0,events_while_off INTEGER NOT NULL DEFAULT 0,messages_with_links INTEGER NOT NULL DEFAULT 0,authorized_messages INTEGER NOT NULL DEFAULT 0,links_recognized INTEGER NOT NULL DEFAULT 0,last_event_at INTEGER,last_authorized_at INTEGER,last_link_at INTEGER)",
  "INSERT OR IGNORE INTO ml_monitor_diagnostics(id) VALUES(1)",
  "CREATE TABLE IF NOT EXISTS ml_monitor_url_observations(id INTEGER PRIMARY KEY AUTOINCREMENT,group_id INTEGER NOT NULL REFERENCES ml_monitor_groups(id),domain TEXT NOT NULL,reason TEXT NOT NULL,message_format TEXT NOT NULL,created_at INTEGER NOT NULL)",
@@ -207,7 +208,7 @@ export async function recoverMissingMonitorPrices(env,{allowEvolution=false,limi
    WHERE (l.status='available' OR
     (l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links'
      AND i.affiliate_url IS NULL AND i.offer_id IS NULL))
-    AND l.message_id<>'' AND g.enabled=1 AND g.authorized=1
+    AND l.message_id<>'' AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved'))
     AND (m.last_seen_price_cents IS NULL OR m.last_seen_price_cents<=0)
     AND (r.product_id IS NULL OR r.last_attempt_at <= ? -
       CASE WHEN r.attempts<=1 THEN 120 WHEN r.attempts<=3 THEN 900
@@ -315,7 +316,7 @@ export async function refreshMonitorSitePrices(env,{fetcher=fetch,limit=3,forceR
    "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id ":"")+
   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-  "WHERE g.enabled=1 AND g.authorized=1 AND "+
+  "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND "+
   "(l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
   "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) ";
  const where=deepScan?

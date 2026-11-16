@@ -81,7 +81,7 @@ export async function groupCopyEligibility(env,{now=null}={}){
   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
   "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
-  "AND g.enabled=1 AND g.authorized=1 AND h.product_id IS NULL "+
+  "AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND h.product_id IS NULL "+
   "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
   "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
   "ORDER BY l.id ASC LIMIT 120"
@@ -144,7 +144,7 @@ export async function groupCopyState(env){
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
     "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
     "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-    "WHERE g.enabled=1 AND g.authorized=1 AND (l.status='available' OR "+
+    "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND (l.status='available' OR "+
     "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))").first(),
   env.DB.prepare("SELECT "+
    "COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 1 ELSE 0 END),0) AS needs_category,"+
@@ -163,15 +163,15 @@ export async function groupCopyState(env){
    "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-   "WHERE g.enabled=1 AND g.authorized=1 AND (l.status='available' OR "+
+   "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND (l.status='available' OR "+
    "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))")
   .first(),
   officialCategoryStats(env),
-  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE g.enabled=1 AND g.authorized=1").first(),
+  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved'))").first(),
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
     "JOIN ml_link_batches b ON b.id=l.batch_id "+
     "JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-    "WHERE g.enabled=1 AND g.authorized=1 AND l.status='batched' AND b.status='awaiting_links' "+
+    "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND l.status='batched' AND b.status='awaiting_links' "+
     "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL").first()
  ]);
  const eligibility=await groupCopyEligibility(env,{now:at});
@@ -254,7 +254,7 @@ export async function runGroupCopyScheduled(env,{now=null,preferRecent=false}={}
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
    "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
-   "AND g.enabled=1 AND g.authorized=1 AND h.product_id IS NULL "+
+   "AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND h.product_id IS NULL "+
    "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
    "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
    "ORDER BY l.id "+(preferRecent?"DESC":"ASC")+" LIMIT 120"
@@ -375,7 +375,7 @@ export async function groupCopyLiveState(env){
    "COALESCE(SUM(CASE WHEN l.status='available' OR (l.status='batched' AND b.status='awaiting_links') THEN 1 ELSE 0 END),0) AS waiting,"+
    "COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS imported "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
-   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.enabled=1 AND g.authorized=1").first()
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved'))").first()
  ]);
  return {enabled:!!settings?.enabled,total_identified:Number(counts?.total||0),
   waiting:Number(counts?.waiting||0),imported:Number(counts?.imported||0),
