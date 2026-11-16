@@ -28,6 +28,9 @@ function checkedProductUrl(item){
  return source.href;
 }
 const SIX_HOURS=6*3600;
+// O preço informado pelo grupo pode ser aproveitado durante 24h após
+// a postagem original (sempre como valor anunciado, nunca verificado).
+const GROUP_PRICE_MAX_AGE=24*3600;
 // Preços de grupos são anúncios de terceiros, nunca verificação do Mercado Livre.
 // Abaixo de R$ 10,00 exigir revisão: evita importar parcelas, fretes ou cupons
 // de baixo valor como se fossem preço do produto.
@@ -42,7 +45,7 @@ export function selectGroupCopyPrice(item,at){
     installments_no_interest:false,card_price_cents:null,
     coupon_required:false,coupon_code:null}};
  const groupAt=Number(item?.group_checked_at||0),price=Number(item?.group_price_cents);
- if(groupAt<at-SIX_HOURS||groupAt>at||!positive(price)||
+ if(groupAt<at-GROUP_PRICE_MAX_AGE||groupAt>at||!positive(price)||
   price<MIN_GROUP_PRICE_CENTS||!item?.message_id)return null;
  const original=safePromotionTerms(item.group_deal_json);
  // A cifra tem de vir da mesma oferta do grupo, nunca de um preço
@@ -61,7 +64,7 @@ export async function ensureGroupCopyAutomation(env){
 }
 // Inspeção sem efeitos: explica POR QUE um anúncio com preço recente
 // ainda não foi para a fila. Reutiliza os mesmos filtros do agendador.
-export async function groupCopyEligibility(env,{now=null}={}){
+export async function groupCopyEligibility(env,{now=null,limit=120}={}){
  const at=Number.isSafeInteger(now)&&now>0?now:epoch();
  await ensureMonitor(env);await ensureLinkBatches(env);await ensureGroupCopyAutomation(env);
  const permitted=await getPrimaryCategory(env);
@@ -81,11 +84,11 @@ export async function groupCopyEligibility(env,{now=null}={}){
   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
   "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
-  "AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND h.product_id IS NULL "+
+  "AND g.authorized=1 AND h.product_id IS NULL "+
   "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
   "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
-  "ORDER BY l.id ASC LIMIT 120"
- ).all()).results.filter(item=>!!selectGroupCopyPrice(item,at));
+  "ORDER BY l.id ASC LIMIT ?"
+ ).bind(Math.min(120,Math.max(1,Number(limit)||120))).all()).results.filter(item=>!!selectGroupCopyPrice(item,at));
  const blocked={};const examples=[];let ready=0;
  for(const item of items){
   let reason=null,description='';
@@ -120,7 +123,7 @@ export async function groupCopyEligibility(env,{now=null}={}){
  }
  return {checked_with_price:items.length,with_group_price:items.filter(item=>
    selectGroupCopyPrice(item,at)?.source==='grupo').length,ready,blocked,examples,
-   primary_category:permitted,sampled:items.length===120};
+   primary_category:permitted,sampled:items.length>=limit};
 }
 export async function groupCopyState(env){
  await ensureMonitor(env);await ensureGroupCopyAutomation(env);await ensureLinkBatches(env);
@@ -131,7 +134,7 @@ export async function groupCopyState(env){
  const siteRecent="(COALESCE(sp.status,'')='ok' AND COALESCE(sp.price_cents,0)>0 "+
   "AND COALESCE(sp.checked_at,0) BETWEEN unixepoch()-21600 AND unixepoch())";
  const groupRecent="(COALESCE(m.last_seen_price_cents,0)>=1000 "+
-  "AND COALESCE(m.last_seen_at,0) BETWEEN unixepoch()-21600 AND unixepoch() "+
+  "AND COALESCE(m.last_seen_at,0) BETWEEN unixepoch()-86400 AND unixepoch() "+
   "AND l.message_id<>'' AND json_valid(COALESCE(m.last_seen_deal_json,'')) "+
   "AND CAST(json_extract(CASE WHEN json_valid(COALESCE(m.last_seen_deal_json,'')) "+
   "THEN m.last_seen_deal_json ELSE '{}' END,'$.price_cents') AS INTEGER)=m.last_seen_price_cents)";
@@ -144,7 +147,7 @@ export async function groupCopyState(env){
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
     "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
     "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-    "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND (l.status='available' OR "+
+    "WHERE g.authorized=1 AND (l.status='available' OR "+
     "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))").first(),
   env.DB.prepare("SELECT "+
    "COALESCE(SUM(CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 1 ELSE 0 END),0) AS needs_category,"+
@@ -171,18 +174,18 @@ export async function groupCopyState(env){
    "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-   "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND (l.status='available' OR "+
+   "WHERE g.authorized=1 AND (l.status='available' OR "+
    "(l.status='batched' AND b.status='awaiting_links' AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL))")
   .first(),
   officialCategoryStats(env),
-  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved'))").first(),
+  env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id WHERE g.authorized=1").first(),
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
     "JOIN ml_link_batches b ON b.id=l.batch_id "+
     "JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
-    "WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND l.status='batched' AND b.status='awaiting_links' "+
+    "WHERE g.authorized=1 AND l.status='batched' AND b.status='awaiting_links' "+
     "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL").first()
  ]);
- const eligibility=await groupCopyEligibility(env,{now:at});
+ const eligibility=await groupCopyEligibility(env,{now:at,limit:12});
  const price_search=await monitorPriceDeepScanStats(env);
 
  return {enabled:row?.enabled===1,experimental_acknowledged:row?.experimental_acknowledged===1,
@@ -211,7 +214,8 @@ export async function saveGroupCopySettings(env,body){
   const state=await groupCopyState(env);
   if(!state.store_configured)throw fail('Cadastre antes sua etiqueta em LOJAS.');
   if(!state.monitor_enabled)throw fail('Ative a captura de grupos na aba COPIAR DE GRUPOS.');
-  if(!state.authorized_groups)throw fail('Selecione ao menos um grupo autorizado para copiar produtos.');
+  if(!state.authorized_groups&&!state.waiting)
+   throw fail('Selecione ao menos um grupo autorizado ou mantenha uma fila já capturada para processar.');
  }
  await env.DB.prepare('UPDATE ml_group_copy_auto_settings SET enabled=?,experimental_acknowledged=?,updated_at=?,last_error=? WHERE id=1')
   .bind(Number(body.enabled),Number(body.enabled),epoch(),'').run();
@@ -223,7 +227,7 @@ export async function testGroupCopyImport(env){
  const state=await groupCopyState(env);
  if(!state.enabled)throw fail('Ative e salve a importação automática antes de testar.');
  if(!state.monitor_enabled)throw fail('Ative o monitor de grupos para continuar o teste.');
- if(!state.store_configured||!state.authorized_groups)
+ if(!state.store_configured||(!state.authorized_groups&&!state.waiting))
   throw fail('Cadastre sua loja e escolha pelo menos um grupo autorizado.');
  const result=await runGroupCopyScheduled(env);
  const stateAfter=await groupCopyState(env);
@@ -264,7 +268,7 @@ export async function runGroupCopyScheduled(env,{now=null,preferRecent=false}={}
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
    "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
-   "AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) AND h.product_id IS NULL "+
+   "AND g.authorized=1 AND h.product_id IS NULL "+
    "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
    "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
    "ORDER BY l.id "+(preferRecent?"DESC":"ASC")+" LIMIT 120"
@@ -378,16 +382,21 @@ export async function runGroupCopyBatch(env,{limit=4,now=null,preferRecent=false
  * classificações, conversões ou alterações de status. */
 export async function groupCopyLiveState(env){
  await ensureGroupCopyAutomation(env);
- const [settings,diagnostics,counts]=await Promise.all([
+ const [settings,diagnostics,counts,groups]=await Promise.all([
   env.DB.prepare('SELECT enabled,queued_count,last_run_at,last_error FROM ml_group_copy_auto_settings WHERE id=1').first(),
   env.DB.prepare('SELECT last_event_at FROM ml_monitor_diagnostics WHERE id=1').first(),
   env.DB.prepare("SELECT COUNT(*) AS total,"+
    "COALESCE(SUM(CASE WHEN l.status='available' OR (l.status='batched' AND b.status='awaiting_links') THEN 1 ELSE 0 END),0) AS waiting,"+
    "COALESCE(SUM(CASE WHEN l.status='batched' AND b.status='imported' THEN 1 ELSE 0 END),0) AS imported "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
-   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved'))").first()
+   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id WHERE g.authorized=1").first(),
+  env.DB.prepare("SELECT COUNT(*) AS total,"+
+   "COALESCE(SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END),0) AS active "+
+   "FROM ml_monitor_groups WHERE authorized=1").first()
  ]);
  return {enabled:!!settings?.enabled,total_identified:Number(counts?.total||0),
+  saved_groups:Number(groups?.total||0),active_groups:Number(groups?.active||0),
+  paused_groups:Math.max(0,Number(groups?.total||0)-Number(groups?.active||0)),
   waiting:Number(counts?.waiting||0),imported:Number(counts?.imported||0),
   queued_count:Number(settings?.queued_count||0),last_run_at:Number(settings?.last_run_at||0),
   last_event_at:Number(diagnostics?.last_event_at||0),

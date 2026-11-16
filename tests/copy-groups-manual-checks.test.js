@@ -28,9 +28,10 @@ async function seed(env,amount=1,{category='Geral',classification='needs_review'
   "VALUES('cr-jornada-afiliados','120363000111222333@g.us','Grupo autorizado',1,1,1000)").run();
  for(let i=0;i<amount;i++){
   const code='MLB'+(12345678+i);
-  env.DB.prepare("INSERT INTO ml_monitor_links(group_id,product_id,source_url,title,category,classification,status,created_at) VALUES(1,?,?,?,?,?,'available',1000)")
-   .bind(code,'https://www.mercadolivre.com.br/furadeira-de-impacto/p/'+code,
+  env.DB.prepare("INSERT INTO ml_monitor_links(group_id,message_id,product_id,source_url,title,category,classification,status,created_at) VALUES(1,?,?,?,?,?,?,'available',1000)")
+   .bind('msg-'+i,code,'https://www.mercadolivre.com.br/furadeira-de-impacto/p/'+code,
     'Furadeira de impacto profissional modelo '+i,category,classification).run();
+  env.DB.prepare('INSERT OR IGNORE INTO ml_monitor_product_meta(product_id,last_seen_at) VALUES(?,0)').bind(code).run();
  }
 }
 const fakeCategory=async()=>new Response(JSON.stringify([{
@@ -65,32 +66,39 @@ test('clique agenda TODOS os produtos sem categoria; job avança mesmo sem paine
   assert.equal(restarted.remaining,0);
  }finally{db.close();}
 });
-test('manual price lookup proceeds in Cron with one item per pulse and reports confirmed price',async()=>{
- const {env,db}=setup();
+test('verificação manual consulta diretamente as mensagens dos grupos pausados, sem ML',async()=>{
+ const {env,db}=setup(),old=globalThis.fetch;
  try{
   await seed(env,2,{category:'Ferramentas e Peças Automotivas',classification:'selected'});
+  env.EVOLUTION_API_URL='https://evo.example.com';
+  env.EVOLUTION_API_KEY='valid-test-key';
+  env.DB.prepare('UPDATE ml_monitor_groups SET enabled=0').run();
   const first=await requestManualGroupCheck(env,'prices');
   assert.equal(first.remaining,2);
-  const fetcher=async u=>{
-   const s=String(u);
-   if(s.startsWith('https://api.mercadolibre.com/items/')){
-    const id=s.split('/').pop();
-    return new Response(JSON.stringify({id,price:49.90,original_price:null,currency_id:'BRL'}),{
-     status:200,headers:{'content-type':'application/json'}});
-   }
-   return new Response('Bloqueado',{status:403});
+  let messages=0;
+  globalThis.fetch=async(url,options)=>{
+   const u=String(url);
+   assert.match(u,/\/chat\/findMessages\/cr-jornada-afiliados$/);
+   assert.ok(!u.includes('mercadolibre.com'),'não consultar o Mercado Livre');
+   const {where}=JSON.parse(options.body);
+   const num=Number(where.key.id.slice(4)),id='MLB'+(12345678+num);
+   messages++;
+   return Response.json({messages:{records:[{
+    key:{remoteJid:'120363000111222333@g.us',id:where.key.id,fromMe:false},
+    message:{conversation:'Furadeira de impacto Por: R$ 49,90 '+
+     'https://www.mercadolivre.com.br/furadeira-de-impacto/p/'+id}
+   }]}});
   };
-  const a=await executeManualGroupCheck(env,'prices',{fetcher});
-  assert.equal(a.status,'pending');
-  assert.equal(a.checked,1);
-  assert.equal(a.found,1);
-  assert.equal(a.remaining,1);
-  const b=await executeManualGroupCheck(env,'prices',{fetcher});
-  assert.equal(b.status,'completed');
-  assert.equal(b.checked,2);
-  assert.equal(b.found,2);
-  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_site_prices WHERE status='ok'").first().n,2);
- }finally{db.close();}
+  const result=await executeManualGroupCheck(env,'prices');
+  assert.equal(result.status,'completed');
+  assert.equal(result.checked,2);
+  assert.equal(result.found,2);
+  assert.equal(result.remaining,0);
+  assert.equal(messages,2);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_product_meta WHERE last_seen_price_cents=4990").first().n,2);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_site_prices WHERE status='ok'").first().n,0);
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
+ }finally{globalThis.fetch=old;db.close();}
 });
 test('failures are bounded and reattempted, invalid requests rejected',async()=>{
  const {env,db}=setup();

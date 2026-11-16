@@ -105,7 +105,7 @@ export async function officialCategoryStats(env){
   env.DB.prepare("SELECT COUNT(*) AS total FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "WHERE (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
-   "AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) "+
+   "AND g.authorized=1 "+
    "AND l.classification<>'selected' AND (l.classification='needs_review' OR l.category='Geral' OR trim(l.category)='')").first()
  ]);
  return {waiting:Number(pending?.total||0),last_run_at:Number(state?.last_run_at||0),
@@ -133,7 +133,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
    "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "WHERE (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
-   "AND g.authorized=1 AND (g.enabled=1 OR EXISTS(SELECT 1 FROM ml_monitor_shortlinks already WHERE already.group_id=l.group_id AND already.message_id=l.message_id AND already.status='resolved')) "+
+   "AND g.authorized=1 "+
    "AND l.classification<>'selected' AND (l.category='Geral' OR trim(l.category)='' OR l.classification<>'mercadolivre') "+
    "AND COALESCE(r.next_retry_at,0)<=? "+
    "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id "+(preferRecent?"DESC":"ASC")+" LIMIT ?"
