@@ -54,13 +54,13 @@ test('clique agenda TODOS os produtos sem categoria; job avança mesmo sem paine
   assert.equal(a.status,'pending');
   assert.equal(a.remaining,10);
   assert.equal(a.classified,12);
-  assert.equal(calls,12);
+  assert.equal(calls,0,'categorias locais específicas não precisam consultar API');
   const b=await executeManualGroupCheck(env,'categories',{fetcher});
   assert.equal(b.status,'completed');
   assert.equal(b.classified,22);
   assert.equal(b.remaining,0);
-  assert.equal(calls,22);
-  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_links WHERE classification='mercadolivre'").first().n,22);
+  assert.equal(calls,0,'não gastar 22 consultas de API para furadeiras já reconhecíveis');
+  assert.equal(env.DB.prepare("SELECT COUNT(*) n FROM ml_monitor_links WHERE classification='keywords'").first().n,22);
   const restarted=await requestManualGroupCheck(env,'categories');
   assert.equal(restarted.status,'completed');
   assert.equal(restarted.remaining,0);
@@ -104,17 +104,19 @@ test('failures are bounded and reattempted, invalid requests rejected',async()=>
  const {env,db}=setup();
  try{
   await seed(env,1);
+  env.DB.prepare("UPDATE ml_monitor_links SET title='Produto genérico sem categoria específica'").run();
   await assert.rejects(()=>requestManualGroupCheck(env,'invalid'),/desconhecido/);
   await assert.rejects(()=>readManualGroupCheck(env,'invalid'),/desconhecido/);
   await requestManualGroupCheck(env,'categories');
   const job=await executeManualGroupCheck(env,'categories',{fetcher:async()=>new Response('bloqueado',{status:403})});
-  assert.equal(job.status,'completed');
+  assert.equal(job.status,'pending','falha de API não vira conclusão sem categoria');
   assert.equal(job.failed,1);
-  assert.equal(job.remaining,0);
+  assert.equal(job.remaining,1);
   // Persisted status allows a browser to close and reopen without restarting.
   const current=await readManualGroupCheck(env,'categories');
   assert.equal(current.failed,1);
-  assert.equal(current.remaining,0);
+  assert.equal(current.remaining,1);
+  assert.match(current.last_error,/HTTP 403|limitou/i);
  }finally{db.close();}
 });
 test('UI starts asynchronously, polls short route, and no longer chains long refreshes to button responses',()=>{
@@ -137,5 +139,29 @@ test('only authenticated admins can create or inspect jobs',async()=>{
   }
   const get=await worker.fetch(new Request('https://bot.crjornada.com/api/copy-groups/check-status?kind=categories'),env);
   assert.equal(get.status,401);
+ }finally{db.close();}
+});
+
+
+test('tarefa sem avanço por cooldown continua pendente em vez de anunciar conclusão falsa',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env,1);
+  // Produto realmente não classificável por palavras-chave existentes.
+  env.DB.prepare("UPDATE ml_monitor_links SET title='Artigo sem palavra identificadora do produto'").run();
+  const at=Math.floor(Date.now()/1000);
+  env.DB.prepare(
+   "INSERT INTO ml_monitor_official_category_retry(product_id,attempts,next_retry_at,last_error) VALUES('MLB12345678',7,?,'HTTP 429')"
+  ).bind(at+3600).run();
+  const first=await requestManualGroupCheck(env,'categories');
+  assert.equal(first.status,'pending');
+  const result=await executeManualGroupCheck(env,'categories',{at,fetcher:async()=>{
+   throw Error('API não deve ser consultada durante cooldown');
+  }});
+  assert.equal(result.status,'pending');
+  assert.equal(result.remaining,1);
+  assert.equal(result.classified,0);
+  const later=await readManualGroupCheck(env,'categories');
+  assert.equal(later.status,'pending','não encerrar enquanto houver Geral sem classificação');
  }finally{db.close();}
 });

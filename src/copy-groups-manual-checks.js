@@ -95,7 +95,7 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   // Até doze itens por execução: o Cron suporta chamadas lentas à API,
   // e a resposta do botão jamais fica aguardando consultas externas.
   const result=kind==='categories'
-   ?await classifyMonitorMissingCategories(env,{fetcher,limit:12,at:now})
+   ?await classifyMonitorMissingCategories(env,{fetcher,limit:12,at:now,recoverLocally:true})
    :await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:8});
   if(result?.skipped){
    await env.DB.prepare("UPDATE ml_group_manual_check_jobs SET status='pending',lease_until=?,updated_at=? "+
@@ -104,17 +104,24 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   }
   const processed=kind==='categories'?Math.max(0,Number(result?.processed||0))
    :Math.max(0,Number(result?.inspected||0));
-  const remaining=Math.max(0,Number(row.remaining||0)-processed);
-  const final=remaining===0||processed===0?'completed':'pending';
-  const reason=String(result?.error||'').slice(0,180);
+  // "Processado" inclui tentativas que falharam. Para categorias, calcular
+  // pendência REAL no banco: falha de API não equivale a classificado.
+  const remaining=kind==='categories'?
+   (await officialCategoryStats(env)).waiting:
+   Math.max(0,Number(row.remaining||0)-processed);
+  const final=remaining===0?'completed':'pending';
+  const changed=kind==='categories'?Number(result?.classified||0):
+   Number(result?.recovered??result?.found??0);
+  const reason=String(result?.error||(changed===0?row.last_error:'')||'').slice(0,180);
   await env.DB.prepare(
    "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,processed=processed+?,"+
    "classified=classified+?,created=created+?,reused=reused+?,failed=failed+?,"+
-   "checked=checked+?,found=found+?,updated_at=?,lease_until=0,last_error=? "+
+   "checked=checked+?,found=found+?,updated_at=?,lease_until=?,last_error=? "+
    "WHERE kind=? AND status='running' AND lease_until=?"
   ).bind(final,remaining,processed,
    Number(result?.classified||0),Number(result?.created||0),Number(result?.reused||0),Number(result?.failed||0),
-   Number(result?.inspected??result?.checked??0),Number(result?.recovered??result?.found??0),now,reason,kind,lease).run();
+   Number(result?.inspected??result?.checked??0),Number(result?.recovered??result?.found??0),
+   now,changed===0&&remaining>0?now+120:0,reason,kind,lease).run();
   return await readManualGroupCheck(env,kind);
  }catch(error){
   const message=String(error?.message||error).slice(0,180);

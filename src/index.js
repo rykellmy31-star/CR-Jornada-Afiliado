@@ -590,7 +590,15 @@ async function router(request, env, ctx=null) {
   if(u.pathname==='/api/copy-groups/live'&&method==='GET')return json(await groupCopyLiveState(env));
   if(u.pathname==='/api/copy-groups'&&method==='POST')return json(await saveGroupCopySettings(env,await getBody(request)));
   if(u.pathname==='/api/copy-groups/test'&&method==='POST')return json(await testGroupCopyImport(env));
-  if(u.pathname==='/api/copy-groups/categorize'&&method==='POST')return json(await requestManualGroupCheck(env,'categories'),202);
+  if(u.pathname==='/api/copy-groups/categorize'&&method==='POST'){
+    const job=await requestManualGroupCheck(env,'categories');
+    // O clique NÃO deve depender do próximo Cron: iniciar a primeira leva
+    // no background, respeitando o lease que impede execuções duplicadas.
+    if(ctx?.waitUntil&&job.status==='pending')
+     ctx.waitUntil(executeManualGroupCheck(env,'categories').catch(error=>
+      console.error('Classificar categorias sob demanda:',String(error?.message||error).slice(0,140))));
+    return json(job,202);
+  }
   if(u.pathname==='/api/copy-groups/prices'&&method==='POST')return json(await requestManualGroupCheck(env,'prices'),202);
   if(u.pathname==='/api/copy-groups/check-status'&&method==='GET')return json(await readManualGroupCheck(env,u.searchParams.get('kind')));
   if(u.pathname==='/api/monitor/state'&&method==='GET'){

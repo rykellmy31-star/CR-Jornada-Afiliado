@@ -196,3 +196,76 @@ test('aba COPIAR DE GRUPOS expõe classificação automática e API requer login
   assert.equal(res.status,401);
  }finally{db.close();}
 });
+
+
+test('classificar todos prioriza Geral e nunca gasta lote com produtos que já têm categoria',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  for(let i=0;i<42;i++){
+   product(env,String(30000000+i),'Organizador de cozinha '+i,'keywords','Casa e Utilidades');
+  }
+  product(env,'40223366','Furadeira sem fio potente 20V');
+  product(env,'40223367','Furadeira 750W 220V');
+  let calls=0;
+  const result=await classifyMonitorMissingCategories(env,{
+   fetcher:async()=>{calls++;return response();},limit:3
+  });
+  assert.equal(result.classified,2);
+  assert.equal(calls,2,'nunca reconsultar 42 já classificados antes dos Gerais');
+  assert.equal((await officialCategoryStats(env)).waiting,0);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS n FROM ml_monitor_links WHERE category='Geral'").first().n,0);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS n FROM ml_monitor_links WHERE category='Casa e Utilidades'").first().n,42);
+ }finally{db.close();}
+});
+
+test('sem API, produto em Geral usa categoria local específica já existente',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  product(env,'40223368','Furadeira e parafusadeira a bateria 20V');
+  const old=env.DB.prepare('SELECT COUNT(*) AS n FROM affiliate_group_categories').first().n;
+  const r=await classifyMonitorMissingCategories(env,{
+   fetcher:async()=>new Response('limite',{status:429}),limit:4
+  });
+  assert.equal(r.classified,1);
+  assert.equal(r.failed,0);
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS n FROM affiliate_group_categories').first().n,old,
+   'nenhuma categoria nova sem confirmação oficial');
+  const row=env.DB.prepare("SELECT category,classification FROM ml_monitor_links WHERE product_id='MLB40223368'").first();
+  assert.equal(row.category,'Ferramentas e Peças Automotivas');
+  assert.equal(row.classification,'keywords','não mentir que a categoria é oficial');
+ }finally{db.close();}
+});
+
+test('botão corrige Geral mesmo com retries longos e grupo pausado, sem nova chamada API',async()=>{
+ const {env,db}=setup();
+ try{
+  await seed(env);
+  product(env,'40223369','Parafusadeira a bateria profissional');
+  const t=1700000000;
+  env.DB.prepare('UPDATE ml_monitor_groups SET enabled=0').run();
+  await ensureOfficialCategories(env);
+  env.DB.prepare(
+   "INSERT INTO ml_monitor_official_category_retry(product_id,attempts,next_retry_at,last_error) VALUES('MLB40223369',9,?,'HTTP 429')"
+  ).bind(t+21600).run();
+  let calls=0;
+  const result=await classifyMonitorMissingCategories(env,{
+   at:t+120,limit:3,recoverLocally:true,
+   fetcher:async()=>{calls++;throw Error('Não deveria consultar a API em cooldown');}
+  });
+  assert.equal(result.classified,1);
+  assert.equal(calls,0);
+  assert.equal(env.DB.prepare("SELECT category FROM ml_monitor_links WHERE product_id='MLB40223369'").first().category,
+   'Ferramentas e Peças Automotivas');
+  assert.equal(env.DB.prepare('SELECT enabled FROM ml_monitor_groups').first().enabled,0);
+ }finally{db.close();}
+});
+
+test('o painel mostra o progresso da classificação junto ao botão',()=>{
+ const page=renderPage();
+ assert.match(page,/ml-monitor-category-progress/);
+ assert.match(CLIENT_JS,/mlMonitorCategoryProgress/);
+ assert.match(CLIENT_JS,/Classificação automática em andamento/);
+ assert.match(CLIENT_JS,/copy-groups\/check-status\?kind=categories/);
+});

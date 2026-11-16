@@ -229,7 +229,7 @@ test('webhook processa link novo, classifica, capta preço e importa sem esperar
     message:{conversation:'Furadeira para oficina De: R$ ~149,90~ Por: R$ 79,90 '+PRODUCT}}});
   assert.equal(event.captured,1);
   const processed=await processCapturedGroupOffers(env,event);
-  assert.equal(categoryCalls,1);
+  assert.equal(categoryCalls,0,'produto já classificado na captura não deve gastar nova consulta API');
   assert.equal(processed.imported.queued,1,JSON.stringify(processed));
   const live=await groupCopyLiveState(env);
   assert.equal(live.queued_count,1);

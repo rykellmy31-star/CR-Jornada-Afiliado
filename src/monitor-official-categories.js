@@ -3,7 +3,7 @@
 // Não inventa categorias por IA, não usa tokens de afiliado e nunca altera
 // categorias escolhidas manualmente nem o encaminhamento dos destinos.
 import {ensureMonitor} from './whatsapp-link-monitor.js';
-import {ensureAutomationCenter} from './automation-center.js';
+import {ensureAutomationCenter,classifyProduct} from './automation-center.js';
 
 const TABLE_MAP="CREATE TABLE IF NOT EXISTS ml_monitor_official_category_map ("+
  "ml_category_id TEXT PRIMARY KEY,domain_id TEXT NOT NULL,official_label TEXT NOT NULL,"+
@@ -114,7 +114,7 @@ export async function officialCategoryStats(env){
 }
 // Enriquecimento por lote: executa mesmo com painel fechado. Nunca enfileira
 // ou envia mensagens; somente atualiza categorias de produtos disponíveis.
-export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=12,at=null,preferRecent=false}={}){
+export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=12,at=null,preferRecent=false,recoverLocally=false}={}){
  if(!env?.DB)return {skipped:'database'};
  await ensureOfficialCategories(env);
  const stamp=Number.isSafeInteger(at)&&at>0?at:now();
@@ -127,17 +127,60 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
  let classified=0,created=0,reused=0,failed=0;
  const errors=[];
  try{
-  const rows=(await env.DB.prepare(
+  // Primeiro corrigir produtos que já têm correspondência CLARA em uma
+  // categoria existente mas aguardam retry da API. Somente no botão manual:
+  // não ultrapassar cotas nem forçar consultas em estado de rate limit.
+  if(recoverLocally){
+   const existing=(await env.DB.prepare(
+    "SELECT l.id,l.product_id,l.title FROM ml_monitor_links l "+
+    "JOIN ml_monitor_groups g ON g.id=l.group_id "+
+    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
+    "WHERE g.authorized=1 AND l.classification<>'selected' "+
+    "AND (l.category='Geral' OR trim(l.category)='' OR l.classification='needs_review') "+
+    "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
+    "ORDER BY l.id LIMIT 120"
+   ).all()).results;
+   const available=(await env.DB.prepare(
+    'SELECT id,name,keywords,enabled FROM affiliate_group_categories WHERE enabled=1'
+   ).all()).results;
+   for(const row of existing){
+    if(classified>=cap)break;
+    const match=classifyProduct(row.title,'Geral',available);
+    if(match.classification!=='keywords'||match.category?.enabled!==1)continue;
+    const update=await env.DB.prepare(
+     "UPDATE ml_monitor_links SET category=?,classification='keywords' "+
+     "WHERE id=? AND classification<>'selected' "+
+     "AND (category='Geral' OR trim(category)='' OR classification='needs_review')"
+    ).bind(match.category.name,row.id).run();
+    if(update.meta?.changes){
+     classified++;
+     await env.DB.prepare(
+      'DELETE FROM ml_monitor_official_category_retry WHERE product_id=?'
+     ).bind(row.product_id).run();
+    }
+   }
+  }
+  const networkBudget=Math.max(0,cap-classified);
+  const rows=networkBudget?(await env.DB.prepare(
    "SELECT l.id,l.product_id,l.title,l.category,l.classification "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
    "LEFT JOIN ml_monitor_official_category_retry r ON r.product_id=l.product_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "WHERE (l.status='available' OR (l.status='batched' AND b.status='awaiting_links')) "+
    "AND g.authorized=1 "+
-   "AND l.classification<>'selected' AND (l.category='Geral' OR trim(l.category)='' OR l.classification<>'mercadolivre') "+
-   "AND COALESCE(r.next_retry_at,0)<=? "+
+   // Não consumir o orçamento com produtos já corretamente classificados
+   // por palavras-chave ou pela API. O botão é somente para os pendentes.
+   "AND l.classification<>'selected' AND (l.category='Geral' OR trim(l.category)='' OR l.classification='needs_review') "+
+   "AND (COALESCE(r.next_retry_at,0)<=? OR EXISTS("+
+   "SELECT 1 FROM ml_monitor_official_category_items oc WHERE oc.product_id=l.product_id)) "+
    "ORDER BY CASE WHEN l.category='Geral' OR l.classification='needs_review' THEN 0 ELSE 1 END,l.id "+(preferRecent?"DESC":"ASC")+" LIMIT ?"
-  ).bind(stamp,cap).all()).results;
+  ).bind(stamp,networkBudget).all()).results:[];
+  // Categorias já cadastradas são consultadas uma só vez por execução.
+  // Se a API pública ficar indisponível, uma regra local com correspondência
+  // específica pode atribuir uma categoria existente, sem criar nomes falsos.
+  const localCategories=(await env.DB.prepare(
+   'SELECT id,name,keywords,enabled FROM affiliate_group_categories WHERE enabled=1'
+  ).all()).results;
   // Busca em paralelo, mas a escrita no banco segue serial para não duplicar categorias.
   const predictions=[];
   for(let i=0;i<rows.length;i+=4){
@@ -156,6 +199,20 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
   for(let i=0;i<rows.length;i++){
    const row=rows[i],prediction=predictions[i];
    if(!prediction||prediction.error){
+    const inferred=classifyProduct(row.title,'Geral',localCategories);
+    if(inferred.classification==='keywords'&&inferred.category?.enabled===1){
+     // Esta classificação é explicitamente LOCAL, não falsamente oficial.
+     const updated=await env.DB.prepare(
+      "UPDATE ml_monitor_links SET category=?,classification='keywords' "+
+      "WHERE id=? AND classification<>'selected' "+
+      "AND (category='Geral' OR trim(category)='' OR classification='needs_review')"
+     ).bind(inferred.category.name,row.id).run();
+     classified+=Number(updated.meta?.changes||0);
+     await env.DB.prepare(
+      'DELETE FROM ml_monitor_official_category_retry WHERE product_id=?'
+     ).bind(row.product_id).run();
+     continue;
+    }
     failed++;
     const message=String(prediction?.error||'Título do produto insuficiente para a categorização oficial').slice(0,150);
     errors.push(message);
@@ -201,7 +258,7 @@ export async function classifyMonitorMissingCategories(env,{fetcher=fetch,limit=
     "WHERE id=? AND (status='available' OR "+
     "(status='batched' AND EXISTS(SELECT 1 FROM ml_link_batches b "+
     "WHERE b.id=ml_monitor_links.batch_id AND b.status='awaiting_links'))) "+
-    "AND classification<>'selected' AND (category='Geral' OR trim(category)='' OR classification<>'mercadolivre')"
+    "AND classification<>'selected' AND (category='Geral' OR trim(category)='' OR classification='needs_review')"
    ).bind(cat.name,row.id).run();
    classified+=Number(updated.meta?.changes||0);
    await env.DB.prepare('DELETE FROM ml_monitor_official_category_retry WHERE product_id=?').bind(row.product_id).run();
