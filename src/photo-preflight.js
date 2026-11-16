@@ -14,8 +14,18 @@ export async function prewarmTelegramQueue(env){
  if(!cfg?.automation_enabled||!cfg.telegram_enabled||!cfg.channel_registered)return {skipped:'disabled'};
  await env.DB.prepare(TABLE).run();
  const category=await getPrimaryCategory(env);
- const rows=await env.DB.prepare("SELECT id,affiliate_url,status FROM offers WHERE (status='ready' OR (status='needs_review' AND last_error=?)) AND (lower(?)='geral' OR lower(category)=lower(?)) ORDER BY created_at,id LIMIT 12")
-  .bind(REVIEW,category,category).all();
+ // O Cron seguinte não deve ficar ocupado lendo 12 fotos lentas, nem
+ // reconsiderar ofertas cujo próprio preflight marcou para tentar depois.
+ // Preaquecer só as 2 próximas ofertas vencidas, de forma rotativa.
+ const due=Math.floor(Date.now()/1000);
+ const rows=await env.DB.prepare(
+  "SELECT o.id,o.affiliate_url,o.status FROM offers o "+
+  "LEFT JOIN affiliate_photo_preflight p ON p.affiliate_url=o.affiliate_url "+
+  "WHERE (o.status='ready' OR (o.status='needs_review' AND o.last_error=?)) "+
+  "AND (lower(?)='geral' OR lower(o.category)=lower(?)) "+
+  "AND COALESCE(p.next_attempt_at,0)<=? "+
+  "ORDER BY o.created_at,o.id LIMIT 2"
+ ).bind(REVIEW,category,category,due).all();
  for(const item of rows.results||[]){
   try{
    // Impede buscas repetitivas de preço e imagem no mesmo anúncio a cada minuto.
