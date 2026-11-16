@@ -422,16 +422,35 @@ async function runScheduled(env){
   // A espera de FOTO não deve bloquear um horário válido: o botão
   // manual nunca usa telegram_photo_retries para selecionar uma oferta.
   // Ignorar esse filtro apenas na seleção, mantendo os intervalos em shouldSend.
+  // Rotacionar a fila: até cinco anúncios antigos sem foto não podem
+  // bloquear indefinidamente outros anúncios que já tenham imagem válida.
+  // O cursor registra tentativas, nunca um envio confirmado.
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS affiliate_telegram_schedule_cursor ("+
+   "id INTEGER PRIMARY KEY CHECK(id=1),last_offer_id INTEGER NOT NULL DEFAULT 0)").run();
+  await env.DB.prepare(
+   "INSERT OR IGNORE INTO affiliate_telegram_schedule_cursor(id,last_offer_id) VALUES(1,0)"
+  ).run();
+  let cursor=Number((await env.DB.prepare(
+   "SELECT last_offer_id FROM affiliate_telegram_schedule_cursor WHERE id=1"
+  ).first())?.last_offer_id||0);
   const checkedOffers=[];
   for(let checked=0;checked<5;checked++){
    const exclude=checkedOffers.length?
     ' AND o.id NOT IN ('+checkedOffers.map(()=>'?').join(',')+')':'';
-   const offer=await env.DB.prepare(OFFER_WITH_COUPON+
-     " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+
-     exclude+" ORDER BY o.created_at ASC,o.id ASC LIMIT 1"
-   ).bind(settings.category,settings.category,...checkedOffers).first();
+   const base=OFFER_WITH_COUPON+
+    " WHERE o.status='ready' AND (?='Geral' OR lower(o.category)=lower(?)) "+exclude;
+   // Continua da última tentativa, volta ao começo ao final da fila
+   // e jamais repete a mesma oferta durante a execução corrente.
+   let offer=await env.DB.prepare(base+" AND o.id>? ORDER BY o.id ASC LIMIT 1")
+    .bind(settings.category,settings.category,...checkedOffers,cursor).first();
+   if(!offer)offer=await env.DB.prepare(base+" ORDER BY o.id ASC LIMIT 1")
+    .bind(settings.category,settings.category,...checkedOffers).first();
    if(!offer)return {skipped:checkedOffers.length?'awaiting_photo':'empty'};
    checkedOffers.push(offer.id);
+   cursor=offer.id;
+   await env.DB.prepare(
+    "UPDATE affiliate_telegram_schedule_cursor SET last_offer_id=? WHERE id=1"
+   ).bind(cursor).run();
    // Mesma operação acionada pelo botão Publicar, relendo a oferta em D1.
    const result=await publishUsingManualButton(env,offer.id,{origin:'automático'});
    if(result?.status==='awaiting_photo'){
