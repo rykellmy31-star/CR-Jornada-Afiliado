@@ -2,7 +2,7 @@
 // O navegador apenas agenda e acompanha: as buscas externas rodam no Cron.
 // Isso impede que uma busca longa expire a requisição HTTP do painel.
 import {classifyMonitorMissingCategories,officialCategoryStats} from './monitor-official-categories.js';
-import {refreshMonitorSitePrices} from './whatsapp-link-monitor.js';
+import {recoverMissingMonitorPrices,ensureMonitor} from './whatsapp-link-monitor.js';
 
 const CREATE="CREATE TABLE IF NOT EXISTS ml_group_manual_check_jobs ("+
  "kind TEXT PRIMARY KEY CHECK(kind IN ('categories','prices')),"+
@@ -59,7 +59,20 @@ export async function requestManualGroupCheck(env,kind){
   return {ok:true,already_queued:true,...current};
  // O clique agenda todos os produtos pendentes, mesmo com o painel fechado. O Cron regular continuará
  // procurando os demais produtos automaticamente com o painel fechado.
- const remaining=kind==='categories'?(await officialCategoryStats(env)).waiting:2;
+ let remaining;
+ if(kind==='categories')remaining=(await officialCategoryStats(env)).waiting;
+ else{
+  await ensureMonitor(env);
+  const row=await env.DB.prepare(
+   "SELECT COUNT(DISTINCT l.product_id) AS total FROM ml_monitor_links l "+
+   "JOIN ml_monitor_groups g ON g.id=l.group_id "+
+   "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
+   "WHERE g.authorized=1 AND l.message_id<>'' "+
+   "AND l.status IN ('available','batched') "+
+   "AND (m.last_seen_price_cents IS NULL OR m.last_seen_price_cents<=0)"
+  ).first();
+  remaining=Number(row?.total||0);
+ }
  await env.DB.prepare(
   "UPDATE ml_group_manual_check_jobs SET status=?,remaining=?,attempts=0,"+
   "processed=0,classified=0,created=0,reused=0,failed=0,checked=0,found=0,"+
@@ -83,14 +96,14 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
   // e a resposta do botão jamais fica aguardando consultas externas.
   const result=kind==='categories'
    ?await classifyMonitorMissingCategories(env,{fetcher,limit:12,at:now})
-   :await refreshMonitorSitePrices(env,{fetcher,limit:1,forceRetry:true});
+   :await recoverMissingMonitorPrices(env,{allowEvolution:true,limit:8});
   if(result?.skipped){
    await env.DB.prepare("UPDATE ml_group_manual_check_jobs SET status='pending',lease_until=?,updated_at=? "+
     "WHERE kind=? AND status='running' AND lease_until=?").bind(now+15,now,kind,lease).run();
    return {skipped:result.skipped,...await readManualGroupCheck(env,kind)};
   }
   const processed=kind==='categories'?Math.max(0,Number(result?.processed||0))
-   :Math.max(0,Number(result?.checked||0));
+   :Math.max(0,Number(result?.inspected||0));
   const remaining=Math.max(0,Number(row.remaining||0)-processed);
   const final=remaining===0||processed===0?'completed':'pending';
   const reason=String(result?.error||'').slice(0,180);
@@ -101,7 +114,7 @@ export async function executeManualGroupCheck(env,kind,{fetcher=fetch,at=null}={
    "WHERE kind=? AND status='running' AND lease_until=?"
   ).bind(final,remaining,processed,
    Number(result?.classified||0),Number(result?.created||0),Number(result?.reused||0),Number(result?.failed||0),
-   Number(result?.checked||0),Number(result?.found||0),now,reason,kind,lease).run();
+   Number(result?.inspected??result?.checked??0),Number(result?.recovered??result?.found??0),now,reason,kind,lease).run();
   return await readManualGroupCheck(env,kind);
  }catch(error){
   const message=String(error?.message||error).slice(0,180);
