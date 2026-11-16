@@ -6,6 +6,7 @@ import {affiliateStoreState,previewAffiliateLink} from './affiliate-stores.js';
 import {getPrimaryCategory,categoryMatches} from './multichannel.js';
 import {ensureLinkBatches,productId} from './link-batches.js';
 import {officialCategoryStats} from './monitor-official-categories.js';
+import {safePromotionTerms} from './promotion-terms.js';
 
 const SETTINGS="CREATE TABLE IF NOT EXISTS ml_group_copy_auto_settings ("+
  "id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,"+
@@ -26,6 +27,33 @@ function checkedProductUrl(item){
    throw fail('O identificador do anúncio não corresponde ao produto reconhecido.');
  return source.href;
 }
+const SIX_HOURS=6*3600;
+// Preços de grupos são anúncios de terceiros, nunca verificação do Mercado Livre.
+// Abaixo de R$ 10,00 exigir revisão: evita importar parcelas, fretes ou cupons
+// de baixo valor como se fossem preço do produto.
+const MIN_GROUP_PRICE_CENTS=1000;
+function positive(value){const n=Number(value);return Number.isSafeInteger(n)&&n>0&&n<=100_000_000;}
+export function selectGroupCopyPrice(item,at){
+ const siteAt=Number(item?.checked_at||0),site=Number(item?.price_cents);
+ if(item?.site_status==='ok'&&positive(site)&&siteAt>=at-SIX_HOURS&&siteAt<=at)
+  return {price:site,capturedAt:siteAt,source:'mercadolivre',
+   terms:{price_cents:site,old_price_cents:null,price_source:'mercadolivre',
+    payment_mode:'unspecified',installments:null,installment_cents:null,
+    installments_no_interest:false,card_price_cents:null,
+    coupon_required:false,coupon_code:null}};
+ const groupAt=Number(item?.group_checked_at||0),price=Number(item?.group_price_cents);
+ if(groupAt<at-SIX_HOURS||groupAt>at||!positive(price)||
+  price<MIN_GROUP_PRICE_CENTS||!item?.message_id)return null;
+ const original=safePromotionTerms(item.group_deal_json);
+ // A cifra tem de vir da mesma oferta do grupo, nunca de um preço
+ // inferido ou preço de parcela de outro produto.
+ if(!original||Number(original.price_cents)!==price)return null;
+ const old=positive(original.old_price_cents)&&original.old_price_cents>price?
+  original.old_price_cents:null;
+ return {price,capturedAt:groupAt,source:'grupo',
+  terms:{...original,old_price_cents:old,price_source:'grupo'}};
+}
+
 export async function ensureGroupCopyAutomation(env){
  await env.DB.prepare(SETTINGS).run();
  await env.DB.prepare(HISTORY).run();
@@ -38,32 +66,34 @@ export async function groupCopyEligibility(env,{now=null}={}){
  await ensureMonitor(env);await ensureLinkBatches(env);await ensureGroupCopyAutomation(env);
  const permitted=await getPrimaryCategory(env);
  const items=(await env.DB.prepare(
-  "SELECT l.product_id,l.title,l.source_url,l.category,l.status, "+
+  "SELECT l.product_id,l.message_id,l.title,l.source_url,l.category,l.status, "+
   "l.batch_id,i.id AS original_batch_item_id, "+
-  "sp.price_cents,sp.checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
+  "sp.price_cents,sp.checked_at,sp.status AS site_status, "+
+  "m.last_seen_price_cents AS group_price_cents,m.last_seen_deal_json AS group_deal_json, "+
+  "m.last_seen_at AS group_checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
   "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
-  "JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+  "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
   "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
   "LEFT JOIN ml_group_copy_auto_history h ON h.product_id=l.product_id "+
   "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
   "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
   "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
-  "AND g.enabled=1 AND g.authorized=1 AND sp.status='ok' AND sp.price_cents>0 "+
-  "AND sp.checked_at>=? AND sp.checked_at<=? AND h.product_id IS NULL "+
+  "AND g.enabled=1 AND g.authorized=1 AND h.product_id IS NULL "+
   "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
   "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
-  "ORDER BY l.id ASC LIMIT 40"
- ).bind(at-6*3600,at).all()).results;
+  "ORDER BY l.id ASC LIMIT 120"
+ ).all()).results.filter(item=>!!selectGroupCopyPrice(item,at));
  const blocked={};const examples=[];let ready=0;
  for(const item of items){
   let reason=null,description='';
+  item.copyPrice=selectGroupCopyPrice(item,at);
   if(!categoryMatches(item.category,permitted)){
    reason='categoria_canal';description='O canal principal está restrito a "'+permitted+'"; o produto pertence à categoria "'+item.category+'".';
   }else if(item.last_queued_at&&at-item.last_queued_at<7*24*3600){
    reason='repetido_7_dias';description='Produto já utilizado nos últimos 7 dias.';
   }else if(item.title.length<5||item.title.length>180){
    reason='titulo_invalido';description='Título do produto fora do tamanho permitido.';
-  }else if(!Number.isSafeInteger(Number(item.price_cents))||Number(item.price_cents)<=0||Number(item.price_cents)>100_000_000){
+  }else if(!item.copyPrice){
    reason='preco_invalido';description='Preço público fora do intervalo permitido.';
   }else if(item.status==='batched'&&(!Number.isSafeInteger(Number(item.batch_id))||!Number.isSafeInteger(Number(item.original_batch_item_id)))){
    reason='lote_incompleto';description='O lote antigo não possui um item correspondente.';
@@ -189,22 +219,23 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
   await ensureLinkBatches(env);
   const permitted=await getPrimaryCategory(env);
   const rows=(await env.DB.prepare(
-   "SELECT l.id,l.group_id,l.product_id,l.title,l.category,l.source_url, "+
+   "SELECT l.id,l.group_id,l.message_id,l.product_id,l.title,l.category,l.source_url, "+
    "l.status AS source_status,l.batch_id AS source_batch_id,i.id AS original_batch_item_id, "+
-   "sp.price_cents,sp.checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
+   "sp.price_cents,sp.checked_at,sp.status AS site_status, "+
+   "m.last_seen_price_cents AS group_price_cents,m.last_seen_deal_json AS group_deal_json, "+
+   "m.last_seen_at AS group_checked_at,COALESCE(m.last_queued_at,0) AS last_queued_at "+
    "FROM ml_monitor_links l JOIN ml_monitor_groups g ON g.id=l.group_id "+
-   "JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
+   "LEFT JOIN ml_monitor_site_prices sp ON sp.product_id=l.product_id "+
    "LEFT JOIN ml_monitor_product_meta m ON m.product_id=l.product_id "+
    "LEFT JOIN ml_group_copy_auto_history h ON h.product_id=l.product_id "+
    "LEFT JOIN ml_link_batches b ON b.id=l.batch_id "+
    "LEFT JOIN ml_link_batch_items i ON i.batch_id=b.id AND i.source_url=l.source_url "+
    "WHERE l.category<>'Geral' AND l.classification<>'needs_review' "+
-   "AND g.enabled=1 AND g.authorized=1 AND sp.status='ok' AND sp.price_cents>0 "+
-   "AND sp.checked_at>=? AND sp.checked_at<=? AND h.product_id IS NULL "+
+   "AND g.enabled=1 AND g.authorized=1 AND h.product_id IS NULL "+
    "AND (l.status='available' OR (l.status='batched' AND b.status='awaiting_links' "+
    "AND i.status='awaiting_links' AND i.affiliate_url IS NULL AND i.offer_id IS NULL)) "+
-   "ORDER BY l.id LIMIT 12"
-  ).bind(at-6*3600,at).all()).results;
+   "ORDER BY l.id LIMIT 120"
+  ).all()).results;
   for(const item of rows){
    if(!categoryMatches(item.category,permitted))continue;
    if(item.last_queued_at&&at-item.last_queued_at<7*24*3600)continue;
@@ -212,8 +243,9 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
    try{preview=await previewAffiliateLink(env,{product_url:checkedProductUrl(item)});}
    catch{continue;} // URLs não canônicas aguardam normalização/revisão, não inventamos IDs.
    if(item.title.length<5||item.title.length>180)continue;
-   const price=Number(item.price_cents);
-   if(!Number.isSafeInteger(price)||price<=0||price>100_000_000)continue;
+   const priceInfo=selectGroupCopyPrice(item,at);
+   if(!priceInfo)continue;
+   const price=priceInfo.price;
    // Se o mesmo destino já entrou manualmente na fila, não republicar.
    const duplicate=await env.DB.prepare("SELECT id FROM offers WHERE affiliate_url=? LIMIT 1").bind(preview.target_url).first();
    if(duplicate)continue;
@@ -228,9 +260,9 @@ export async function runGroupCopyScheduled(env,{now=null}={}){
     // O log único bloqueia a mesma oferta no próximo ciclo.
     await env.DB.prepare("INSERT INTO ml_group_copy_auto_history(product_id,group_id,offer_id,short_url,source_url,target_url,queued_at) VALUES(?,?,0,?,?,?,?)")
      .bind(item.product_id,item.group_id,shortUrl,item.source_url,preview.target_url,at).run();
-    const created=await env.DB.prepare("INSERT INTO offers(title,affiliate_url,category,price_cents,old_price_cents,promo_terms_json,promo_captured_at,created_at,status) VALUES(?,?,?,?,NULL,?,?,?,'ready')")
-     .bind(item.title,preview.target_url,item.category,price,
-      JSON.stringify({price_cents:price,old_price_cents:null,price_source:'mercadolivre',payment_mode:'unspecified',installments:null,installment_cents:null,installments_no_interest:false,card_price_cents:null,coupon_required:false,coupon_code:null}),Number(item.checked_at),at).run();
+    const created=await env.DB.prepare("INSERT INTO offers(title,affiliate_url,category,price_cents,old_price_cents,promo_terms_json,promo_captured_at,created_at,status) VALUES(?,?,?,?,?,?,?,?,'ready')")
+     .bind(item.title,preview.target_url,item.category,price,priceInfo.terms.old_price_cents,
+      JSON.stringify(priceInfo.terms),priceInfo.capturedAt,at).run();
     offerId=Number(created.meta?.last_row_id);
     if(!Number.isSafeInteger(offerId)||offerId<1)throw fail('O banco não retornou a oferta criada.');
     if(fromManualBatch){
