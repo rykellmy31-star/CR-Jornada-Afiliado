@@ -265,3 +265,46 @@ test('agendador não possui barreira de foto extra antes do publicador manual',(
  assert.ok(!cron.includes('prepareScheduledPhoto(env,offer)'),'Cron não deve exigir segundo pré-validador');
  assert.ok(!cron.includes('deferScheduledPhoto(env,offer)'),'Cron nunca adia a foto antes de tentar o publicador');
 });
+
+
+test('Cron deixa o envio principal terminar antes de preparar fotos das outras filas',async()=>{
+ const {DB,env,close}=setup(),original=globalThis.fetch;
+ const counter={reads:0,photos:0};
+ const mock=mockImageFetch(counter);
+ const prepare=DB.prepare.bind(DB);
+ let finished=false,prewarmTooEarly=false,unblockSend;
+ const sendBlocked=new Promise(resolve=>{unblockSend=resolve;});
+ let notifySending;
+ const sending=new Promise(resolve=>{notifySending=resolve;});
+ DB.prepare=(sql)=>{
+  if(String(sql).includes('affiliate_photo_preflight')&&!finished)prewarmTooEarly=true;
+  return prepare(sql);
+ };
+ try{
+  globalThis.fetch=async(url,opts={})=>{
+   if(String(url).endsWith('/sendPhoto')){
+    notifySending();
+    await sendBlocked;
+    const response=await mock(url,opts);
+    finished=true;
+    return response;
+   }
+   return mock(url,opts);
+  };
+  const tasks=[];
+  await worker.scheduled({},env,{waitUntil:p=>tasks.push(p)});
+  await Promise.race([sending,new Promise((_,reject)=>setTimeout(
+   ()=>reject(Error('O cron não chegou ao publicador de foto')),3000))]);
+  assert.equal(prewarmTooEarly,false,
+   'pré-carregamento não pode disputar rede/D1 com envio de foto automático');
+  unblockSend();
+  await Promise.all(tasks);
+  assert.equal(counter.photos,1);
+  assert.equal(prewarmTooEarly,false);
+  assert.equal(DB.prepare("SELECT status FROM offers WHERE id=1").first().status,'published');
+ }finally{
+  unblockSend();
+  globalThis.fetch=original;
+  close();
+ }
+});
